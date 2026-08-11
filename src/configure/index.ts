@@ -7,4 +7,11 @@ export {
   skillSiteKey,
 } from "./inventory.js";
 export { planUninstallPlugin, planDeleteOwnedFile, planDeleteStrayPath } from "./mutations.js";
+export {
+  HARNESS_CATALOGS,
+  getHarnessCatalog,
+  allHarnessCatalogs,
+  readCatalogSettings,
+} from "./catalogs/index.js";
 export type * from "./model.js";
+export type { HarnessCatalog } from "./catalogs/types.js";

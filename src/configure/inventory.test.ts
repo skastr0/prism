@@ -162,14 +162,15 @@ describe("loadConfigureInventory", () => {
       env: { ...process.env, HOME: root, PRISM_HOME: prismHome },
     });
 
-    expect(inv.harnesses).toHaveLength(1);
-    expect(inv.harnesses[0]!.harness).toBe("claude-code");
-    expect(inv.artifacts.some((a) => a.plugin === "demo" && a.ownership === "prism-owned")).toBe(
+    expect(inv.harnesses.length).toBeGreaterThanOrEqual(1);
+    const claude = inv.byHarness["claude-code"] ?? inv.harnesses.find((h) => h.harness === "claude-code");
+    expect(claude).toBeDefined();
+    const detail = inv.byHarness["claude-code"];
+    expect(detail?.artifacts.some((a) => a.plugin === "demo" && a.ownership === "prism-owned")).toBe(
       true,
     );
-    expect(inv.harnesses[0]!.plugins.some((p) => p.name === "demo")).toBe(true);
-    // At least one owned + one region counted for demo
-    const demo = inv.harnesses[0]!.plugins.find((p) => p.name === "demo");
+    expect(detail?.summary.plugins.some((p) => p.name === "demo")).toBe(true);
+    const demo = detail?.summary.plugins.find((p) => p.name === "demo");
     expect(demo?.ownedFiles).toBe(1);
     expect(demo?.regions).toBe(1);
   });

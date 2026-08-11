@@ -1,6 +1,6 @@
 /**
- * Configure inventory — detect + list Prism / disk state for supported harnesses.
- * POC supports claude-code only. Snapshot-first; disk scan fills strays + foreign.
+ * Configure inventory — multi-harness detect + Prism/disk inventory + settings catalogues.
+ * Snapshot-first; disk scan fills strays + foreign; catalogues drive scan dirs + config overview.
  */
 
 import { basename, join, relative, resolve } from "node:path";
@@ -14,23 +14,26 @@ import {
 } from "../state/snapshot.js";
 import { snapshotDir } from "../state/store.js";
 import { prismToolsRuntimeDir } from "../tools-cli/paths.js";
+import type { HarnessId } from "../types.js";
 import { workflowBunRuntime } from "../workflow-bun-runtime.js";
+import { allHarnessCatalogs, getHarnessCatalog, readCatalogSettings } from "./catalogs/index.js";
+import type { HarnessCatalog } from "./catalogs/types.js";
 import type {
   ArtifactEntry,
   ArtifactGroup,
   ArtifactNoun,
+  ConfigFileEntry,
+  ConfigOverview,
   ConfigureHarnessId,
   ConfigureInventory,
+  HarnessInventory,
   HarnessPresence,
   HarnessSummary,
   OwnershipKind,
   PluginSummary,
   SectionId,
+  SettingsKeySummary,
 } from "./model.js";
-
-const POC_HARNESS: ConfigureHarnessId = "claude-code";
-const CLAUDE_BINARY = "claude";
-const CLAUDE_BIN_ENV = "PRISM_WORKFLOW_CLAUDE_BIN";
 
 const emptyCounts = (): Record<ArtifactNoun, number> => ({
   skill: 0,
@@ -71,10 +74,96 @@ const listSnapshotManifests = async (
   return out;
 };
 
-const resolveClaudeBinary = (env: NodeJS.ProcessEnv = process.env): string | undefined => {
-  const override = env[CLAUDE_BIN_ENV]?.trim();
-  if (override) return override;
-  return workflowBunRuntime("configure harness detect").which(CLAUDE_BINARY) ?? undefined;
+const resolveHarnessBinary = (
+  catalog: HarnessCatalog,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined => {
+  for (const envVar of catalog.binaryEnvVars ?? []) {
+    const override = env[envVar]?.trim();
+    if (override) return override;
+  }
+  const runtime = workflowBunRuntime("configure harness detect");
+  for (const name of catalog.binaryNames) {
+    const found = runtime.which(name);
+    if (found) return found;
+  }
+  return undefined;
+};
+
+const buildConfigOverview = async (
+  catalog: HarnessCatalog,
+  root: string,
+): Promise<ConfigOverview> => {
+  const files: ConfigFileEntry[] = [];
+  for (const sf of catalog.settingsFiles) {
+    const abs = sf.path.startsWith("~") || sf.path.startsWith("/")
+      ? expandPath(sf.path)
+      : join(root, sf.path);
+    const fileExists = await exists(abs);
+    let sizeBytes: number | undefined;
+    if (fileExists) {
+      try {
+        const text = await readFile(abs);
+        sizeBytes = text.length;
+      } catch {
+        sizeBytes = undefined;
+      }
+    }
+    const kind =
+      sf.path.includes("credential") || sf.path.includes("auth")
+        ? "credentials" as const
+        : sf.format === "md" || sf.format === "mdc"
+          ? "rules" as const
+          : sf.primary
+            ? "settings" as const
+            : "other" as const;
+    const prismTouch =
+      kind === "rules"
+        ? "regions" as const
+        : catalog.fields.some((f) => f.file === sf.path && f.prismTouch === "region")
+          ? "regions" as const
+          : "none" as const;
+    files.push({
+      id: sf.path,
+      kind,
+      label: basename(sf.path) || sf.path,
+      path: abs,
+      exists: fileExists,
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+      prismTouch,
+      ...(sf.note ? { note: sf.note } : {}),
+    });
+  }
+
+  const resolved = await readCatalogSettings({ catalog, root });
+  const settingsKeys: SettingsKeySummary[] = catalog.fields.map((field) => {
+    const hit = resolved.find((r) => r.key === field.key);
+    if (!hit || !hit.present) {
+      return { key: field.key, shape: "absent" };
+    }
+    return {
+      key: field.key,
+      shape: hit.redacted ? "redacted" : (hit.valuePreview ?? "set"),
+      ...(hit.valuePreview !== undefined ? { preview: hit.valuePreview } : {}),
+    };
+  });
+
+  const primary = catalog.settingsFiles.find((s) => s.primary) ?? catalog.settingsFiles[0];
+  const settingsPath = primary
+    ? primary.path.startsWith("~") || primary.path.startsWith("/")
+      ? expandPath(primary.path)
+      : join(root, primary.path)
+    : undefined;
+
+  return {
+    files,
+    ...(settingsPath !== undefined ? { settingsPath } : {}),
+    settingsKeys,
+    notes: [
+      ...(catalog.notes ?? []),
+      `Refresh catalogue: see refresh.procedure in catalogs/${catalog.harness}.ts`,
+    ],
+  };
 };
 
 const GENERATED_PLUGIN_RE = /(?:^|\/)prism-generated-([^/]+)/;
@@ -286,7 +375,7 @@ const artifactId = (entry: {
   return `${entry.ownership}:${entry.targetPath}${region}`;
 };
 
-const CLAUDE_SCAN_DIRS = ["skills", "commands", "agents"] as const;
+
 
 const buildPluginSummaries = (
   entries: ReadonlyArray<SnapshotEntry>,
@@ -330,39 +419,30 @@ const listToolRuntimePlugins = async (prismHome: string): Promise<Set<string>> =
   return new Set(names);
 };
 
-/**
- * Load full configure inventory for the POC (claude-code).
- */
-export const loadConfigureInventory = async (options: {
-  readonly prismHome?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  /** Optional project path for future project-scope roots (ignored for POC global). */
-  readonly projectPath?: string;
-} = {}): Promise<ConfigureInventory> => {
-  const prismHome = options.prismHome ?? resolvePrismHome();
-  const env = options.env ?? process.env;
-  const harnessConfig = getHarness(POC_HARNESS);
-  // Global scope always resolves; project scope can be null (not used in POC).
+const loadOneHarnessInventory = async (options: {
+  readonly catalog: HarnessCatalog;
+  readonly prismHome: string;
+  readonly manifests: ReadonlyArray<SnapshotManifest>;
+  readonly toolRuntimePlugins: ReadonlySet<string>;
+  readonly env: NodeJS.ProcessEnv;
+  /** Attach shared tool-runtime rows only to the first present harness (avoid N× duplicates). */
+  readonly attachToolRuntime: boolean;
+}): Promise<HarnessInventory> => {
+  const { catalog, prismHome, env } = options;
+  const harnessId = catalog.harness as ConfigureHarnessId;
+  const harnessConfig = getHarness(harnessId);
   const globalRoot =
-    resolveHarnessRoot(harnessConfig, "global") ?? expandPath(harnessConfig.globalConfigPath);
+    resolveHarnessRoot(harnessConfig, "global") ?? expandPath(catalog.globalRoot);
   const rootExists = await exists(globalRoot);
-  const binaryPath = resolveClaudeBinary(env);
+  const binaryPath = resolveHarnessBinary(catalog, env);
 
-  const manifests = await listSnapshotManifests(prismHome);
-  const claudeManifests = manifests.filter(
-    (m) => m.harness === POC_HARNESS && resolve(m.root) === resolve(globalRoot),
-  );
-  // Also include any claude-code snapshot even if root path differs (custom roots)
-  const allClaude = manifests.filter((m) => m.harness === POC_HARNESS);
-  const primaryManifests = claudeManifests.length > 0 ? claudeManifests : allClaude;
-
+  const matching = options.manifests.filter((m) => m.harness === harnessId);
+  const rooted = matching.filter((m) => resolve(m.root) === resolve(globalRoot));
+  const primaryManifests = rooted.length > 0 ? rooted : matching;
   const snapshotEntries: SnapshotEntry[] = primaryManifests.flatMap((m) => [...m.entries]);
   const snapshotPaths = new Set(snapshotEntries.map((e) => resolve(e.targetPath)));
 
-  const toolRuntimePlugins = await listToolRuntimePlugins(prismHome);
-
   const artifacts: ArtifactEntry[] = [];
-
   const pushClassified = (
     relativePath: string,
     mode: SnapshotEntry["mode"],
@@ -400,9 +480,10 @@ export const loadConfigureInventory = async (options: {
   };
 
   for (const entry of snapshotEntries) {
-    const root = primaryManifests.find((m) =>
-      m.entries.some((e) => e.targetPath === entry.targetPath && e.plugin === entry.plugin),
-    )?.root ?? globalRoot;
+    const root =
+      primaryManifests.find((m) =>
+        m.entries.some((e) => e.targetPath === entry.targetPath && e.plugin === entry.plugin),
+      )?.root ?? globalRoot;
     let rel: string;
     try {
       rel = relative(root, entry.targetPath);
@@ -418,9 +499,11 @@ export const loadConfigureInventory = async (options: {
     });
   }
 
-  // Disk scan: strays + foreign under known dirs
+  const markers = catalog.prismNamespaceMarkers;
+  const isPrismNs = (p: string): boolean => markers.some((m) => p.includes(m));
+
   if (rootExists) {
-    for (const dir of CLAUDE_SCAN_DIRS) {
+    for (const dir of catalog.scanDirs) {
       const base = join(globalRoot, dir);
       if (!(await exists(base))) continue;
       for (const rel of await listDirRecursive(base)) {
@@ -429,19 +512,15 @@ export const loadConfigureInventory = async (options: {
         const relativePath = join(dir, rel);
         const generated = extractGeneratedPlugin(relativePath);
         const ownership: OwnershipKind =
-          generated !== undefined || relativePath.includes("prism-generated-")
-            ? "prism-namespace"
-            : "foreign";
-        // Index SKILL.md + agent/command markdown + top-level generated plugin dirs
+          generated !== undefined || isPrismNs(relativePath) ? "prism-namespace" : "foreign";
         const isSkillMd = rel.endsWith("SKILL.md");
         const isAgentOrCommand =
           /(^|\/)agents\/[^/]+\.md$/u.test(relativePath) ||
-          /(^|\/)commands\/[^/]+\.md$/u.test(relativePath);
+          /(^|\/)commands\/[^/]+\.md$/u.test(relativePath) ||
+          /(^|\/)droids\/[^/]+\.md$/u.test(relativePath) ||
+          /(^|\/)prompts\/[^/]+\.md$/u.test(relativePath);
         const isTopPluginDir =
-          dir === "skills" &&
-          !rel.includes("/") &&
-          relativePath.includes("prism-generated-");
-        // Also index skill package support files that are markdown (grouped later)
+          !rel.includes("/") && isPrismNs(relativePath);
         const isSkillSupportMd =
           /(^|\/)skills\//.test(relativePath) &&
           rel.endsWith(".md") &&
@@ -449,44 +528,39 @@ export const loadConfigureInventory = async (options: {
         if (!isSkillMd && !isAgentOrCommand && !isTopPluginDir && !isSkillSupportMd) continue;
         pushClassified(relativePath, "owned", ownership, absolute, {
           ...(generated ? { plugin: generated } : {}),
-          ...(isTopPluginDir
-            ? { forceNoun: "bundle", forceLabel: rel }
-            : {}),
+          ...(isTopPluginDir ? { forceNoun: "bundle", forceLabel: rel } : {}),
           detail: ownership === "prism-namespace" ? "unledgered" : "not owned by Prism",
         });
       }
     }
   }
 
-  // Tool runtime as synthetic artifacts under plugins
-  for (const name of toolRuntimePlugins) {
-    artifacts.push({
-      id: `tool-runtime:${name}`,
-      noun: "tool-runtime",
-      ownership: "prism-owned",
-      targetPath: join(prismToolsRuntimeDir(prismHome), name),
-      relativePath: `runtime/tools/${name}`,
-      plugin: name,
-      label: name,
-      detail: "PRISM_HOME runtime/tools",
-      logicalKey: name,
-      siteKey: `tools:${name}`,
-      role: "primary",
-    });
+  if (options.attachToolRuntime) {
+    for (const name of options.toolRuntimePlugins) {
+      artifacts.push({
+        id: `tool-runtime:${name}`,
+        noun: "tool-runtime",
+        ownership: "prism-owned",
+        targetPath: join(prismToolsRuntimeDir(prismHome), name),
+        relativePath: `runtime/tools/${name}`,
+        plugin: name,
+        label: name,
+        detail: "PRISM_HOME runtime/tools",
+        logicalKey: name,
+        siteKey: `tools:${name}`,
+        role: "primary",
+      });
+    }
   }
 
   artifacts.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
   const groups = groupArtifacts(artifacts);
-
-  // Nav counts = unique logical groups (deduped), not raw file rows.
   const counts = emptyCounts();
-  for (const group of groups) {
-    counts[group.noun] += 1;
-  }
+  for (const group of groups) counts[group.noun] += 1;
 
   const plugins = buildPluginSummaries(
     snapshotEntries,
-    toolRuntimePlugins,
+    options.attachToolRuntime ? options.toolRuntimePlugins : new Set(),
     globalRoot,
   );
 
@@ -498,9 +572,11 @@ export const loadConfigureInventory = async (options: {
         : "present";
   }
 
+  const config = await buildConfigOverview(catalog, globalRoot);
+
   const summary: HarnessSummary = {
-    harness: POC_HARNESS,
-    displayName: harnessConfig.name,
+    harness: harnessId,
+    displayName: catalog.displayName,
     presence,
     globalRoot,
     rootExists,
@@ -508,13 +584,71 @@ export const loadConfigureInventory = async (options: {
     snapshotEntryCount: snapshotEntries.length,
     plugins,
     counts,
+    config,
   };
+
+  return { summary, artifacts, groups };
+};
+
+/**
+ * Load configure inventory for all catalogue harnesses (global roots).
+ */
+export const loadConfigureInventory = async (options: {
+  readonly prismHome?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly projectPath?: string;
+  /** Limit to one harness id (faster). */
+  readonly harness?: HarnessId;
+} = {}): Promise<ConfigureInventory> => {
+  const prismHome = options.prismHome ?? resolvePrismHome();
+  const env = options.env ?? process.env;
+  const manifests = await listSnapshotManifests(prismHome);
+  const toolRuntimePlugins = await listToolRuntimePlugins(prismHome);
+
+  const catalogs = options.harness
+    ? [getHarnessCatalog(options.harness)]
+    : allHarnessCatalogs();
+
+  const byHarness: Partial<Record<ConfigureHarnessId, HarnessInventory>> = {};
+  const summaries: HarnessSummary[] = [];
+
+  let attachedTools = false;
+  for (const catalog of catalogs) {
+    const attachToolRuntime = !attachedTools;
+    const inv = await loadOneHarnessInventory({
+      catalog,
+      prismHome,
+      manifests,
+      toolRuntimePlugins,
+      env,
+      attachToolRuntime,
+    });
+    if (attachToolRuntime) attachedTools = true;
+    byHarness[catalog.harness as ConfigureHarnessId] = inv;
+    summaries.push(inv.summary);
+  }
+
+  summaries.sort((a, b) => {
+    const rank = (p: HarnessPresence): number =>
+      p === "present" ? 0 : p === "snapshot-only" ? 1 : 2;
+    const d = rank(a.presence) - rank(b.presence);
+    return d !== 0 ? d : a.displayName.localeCompare(b.displayName);
+  });
+
+  const focused =
+    (options.harness as ConfigureHarnessId | undefined) ??
+    summaries.find((s) => s.presence === "present")?.harness ??
+    summaries[0]?.harness ??
+    ("claude-code" as ConfigureHarnessId);
+  const focusedInv = byHarness[focused];
 
   return {
     prismHome,
-    harnesses: [summary],
-    artifacts,
-    groups,
+    harnesses: summaries,
+    byHarness,
+    artifacts: focusedInv?.artifacts ?? [],
+    groups: focusedInv?.groups ?? [],
+    focusedHarness: focused,
   };
 };
 
@@ -540,6 +674,7 @@ export const artifactsForSection = (
     case "other":
       return artifacts.filter((a) => a.noun === "other" || a.noun === "tool-runtime");
     case "summary":
+    case "config":
       return artifacts;
   }
 };
@@ -565,6 +700,7 @@ export const groupsForSection = (
       return groups.filter((g) => g.noun === "other" || g.noun === "tool-runtime");
     case "plugins":
     case "summary":
+    case "config":
       return groups;
   }
 };

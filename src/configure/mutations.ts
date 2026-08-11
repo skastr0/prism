@@ -1,5 +1,5 @@
 /**
- * Configure mutations — uninstall plugins / delete Prism-owned files for claude-code.
+ * Configure mutations — uninstall plugins / delete Prism-owned files per harness.
  * All writes go through syncDesiredRoot (sole harness-root writer).
  */
 
@@ -19,10 +19,9 @@ import { prismToolPluginDir } from "../tools-cli/paths.js";
 import { barePluginName, pluginScopeNames } from "./inventory.js";
 import type { MutationPlan, MutationPlanOp, MutationResult } from "./model.js";
 
-const HARNESS = "claude-code" as const;
-
-const listClaudeManifests = async (
+const listHarnessManifests = async (
   prismHome: string,
+  harness: string,
 ): Promise<ReadonlyArray<SnapshotManifest>> => {
   const dir = snapshotDir(prismHome);
   if (!(await exists(dir))) return [];
@@ -31,7 +30,7 @@ const listClaudeManifests = async (
     if (!name.endsWith(".json") || name.includes(".corrupt-")) continue;
     try {
       const decoded = decodeSnapshotManifest(await readFile(join(dir, name)));
-      if (decoded._tag === "Right" && decoded.right.harness === HARNESS) {
+      if (decoded._tag === "Right" && decoded.right.harness === harness) {
         out.push(decoded.right);
       }
     } catch {
@@ -147,14 +146,16 @@ const removeToolRuntime = async (
  */
 export const planUninstallPlugin = async (options: {
   readonly pluginName: string;
+  readonly harness?: string;
   readonly prismHome?: string;
   readonly dryRun?: boolean;
 }): Promise<MutationResult> => {
   const prismHome = options.prismHome ?? resolvePrismHome();
   const dryRun = options.dryRun ?? true;
+  const harness = options.harness ?? "claude-code";
   const bare = barePluginName(options.pluginName);
   const scope = pluginScopeNames(bare);
-  const manifests = await listClaudeManifests(prismHome);
+  const manifests = await listHarnessManifests(prismHome, harness);
 
   const rootsWithPlugin = manifests.filter((m) =>
     m.entries.some((e) => scope.has(e.plugin)),
@@ -166,12 +167,12 @@ export const planUninstallPlugin = async (options: {
   const notes: string[] = [];
 
   if (rootsWithPlugin.length === 0) {
-    notes.push(`No claude-code snapshot entries for plugin '${bare}'.`);
+    notes.push(`No ${harness} snapshot entries for plugin '${bare}'.`);
   }
 
   for (const manifest of rootsWithPlugin) {
     const desired: DesiredRoot = {
-      harness: HARNESS,
+      harness,
       root: manifest.root,
       files: [],
       regions: [],
@@ -216,7 +217,7 @@ export const planUninstallPlugin = async (options: {
 
   return {
     plan: {
-      title: `Uninstall plugin '${bare}' from claude-code`,
+      title: `Uninstall plugin '${bare}' from ${harness}`,
       dryRun,
       ops: allOps,
       blocked,
@@ -233,13 +234,15 @@ export const planUninstallPlugin = async (options: {
  */
 export const planDeleteOwnedFile = async (options: {
   readonly targetPath: string;
+  readonly harness?: string;
   readonly prismHome?: string;
   readonly dryRun?: boolean;
 }): Promise<MutationResult> => {
   const prismHome = options.prismHome ?? resolvePrismHome();
   const dryRun = options.dryRun ?? true;
+  const harness = options.harness ?? "claude-code";
   const target = resolve(options.targetPath);
-  const manifests = await listClaudeManifests(prismHome);
+  const manifests = await listHarnessManifests(prismHome, harness);
 
   let hit: { manifest: SnapshotManifest; entry: SnapshotEntry } | undefined;
   for (const manifest of manifests) {
@@ -258,7 +261,7 @@ export const planDeleteOwnedFile = async (options: {
         title: `Delete ${basename(target)}`,
         dryRun,
         ops: [],
-        blocked: [`Not a Prism-owned whole file on claude-code: ${target}`],
+        blocked: [`Not a Prism-owned whole file on ${harness}: ${target}`],
         notes: ["Only snapshot mode=owned files can be deleted here. Regions require plugin uninstall or a region-aware delete."],
       },
       applied: false,
@@ -291,7 +294,7 @@ export const planDeleteOwnedFile = async (options: {
   }
 
   const desired: DesiredRoot = {
-    harness: HARNESS,
+    harness,
     root: manifest.root,
     files,
     regions,
@@ -339,19 +342,21 @@ export const planDeleteOwnedFile = async (options: {
  */
 export const planDeleteStrayPath = async (options: {
   readonly targetPath: string;
-  readonly claudeRoot: string;
+  readonly harnessRoot?: string;
+  /** @deprecated use harnessRoot */
+  readonly claudeRoot?: string;
   readonly dryRun?: boolean;
 }): Promise<MutationResult> => {
   const dryRun = options.dryRun ?? true;
   const target = resolve(options.targetPath);
-  const root = resolve(options.claudeRoot);
+  const root = resolve(options.harnessRoot ?? options.claudeRoot ?? "");
   if (!target.startsWith(`${root}/`) && target !== root) {
     return {
       plan: {
         title: "Delete stray",
         dryRun,
         ops: [],
-        blocked: ["Path is outside the claude-code root."],
+        blocked: ["Path is outside the harness root."],
         notes: [],
       },
       applied: false,

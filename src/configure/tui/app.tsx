@@ -73,6 +73,7 @@ const SEL_BG = PALETTE.selBg;
 
 const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
   { id: "summary", label: "Summary" },
+  { id: "config", label: "Config" },
   { id: "plugins", label: "Plugins" },
   { id: "skills", label: "Skills" },
   { id: "commands", label: "Commands" },
@@ -129,6 +130,7 @@ const ownershipGlyph = (o: OwnershipKind): { glyph: string; color: string } => {
 
 const sectionCount = (summary: HarnessSummary, section: SectionId): number => {
   if (section === "summary") return 0;
+  if (section === "config") return summary.config?.settingsKeys.length ?? 0;
   if (section === "plugins") return summary.plugins.length;
   if (section === "skills") return summary.counts.skill;
   if (section === "commands") return summary.counts.command;
@@ -218,6 +220,69 @@ function NavList({
 }
 
 // ── Detail panes ──────────────────────────────────────────────────────────────
+
+function ConfigDetail({ summary }: { readonly summary: HarnessSummary }) {
+  const cfg = summary.config;
+  if (!cfg) {
+    return <text content="No catalogue config for this harness." style={{ fg: PALETTE.fgDim }} />;
+  }
+  return (
+    <box style={{ flexDirection: "column" }}>
+      <text>
+        <span fg={PALETTE.fgBright} attributes={ATTR.bold}>
+          {"Settings catalogue"}
+        </span>
+        <span fg={PALETTE.fgDim}>{"  read-only · no ConfigSpaces yet"}</span>
+      </text>
+      {cfg.settingsPath ? (
+        <text>
+          <span fg={PALETTE.fgMuted}>{"primary "}</span>
+          <span fg={PALETTE.fg}>{truncate(cfg.settingsPath, 70)}</span>
+        </text>
+      ) : null}
+      <box style={{ height: 1 }} />
+      <text>
+        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
+          {"FILES"}
+        </span>
+      </text>
+      {cfg.files.map((f) => (
+        <text key={f.id}>
+          <span fg={f.exists ? PALETTE.ok : PALETTE.fgDim}>{f.exists ? "● " : "○ "}</span>
+          <span fg={PALETTE.fg}>{truncate(f.label, 22)}</span>
+          <span fg={PALETTE.fgDim}>{`  ${f.kind} · ${f.prismTouch}`}</span>
+          {f.sizeBytes !== undefined ? (
+            <span fg={PALETTE.fgDim}>{`  ${f.sizeBytes}b`}</span>
+          ) : null}
+        </text>
+      ))}
+      <box style={{ height: 1 }} />
+      <text>
+        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
+          {`KEYS (${cfg.settingsKeys.length})`}
+        </span>
+      </text>
+      {cfg.settingsKeys.length === 0 ? (
+        <text content="  (no catalogue fields)" style={{ fg: PALETTE.fgDim }} />
+      ) : (
+        cfg.settingsKeys.slice(0, 40).map((k) => (
+          <text key={k.key}>
+            <span fg={PALETTE.fg}>{`  ${truncate(k.key, 28)}`}</span>
+            <span fg={PALETTE.fgDim}>{`  ${k.shape}`}</span>
+            {k.preview ? <span fg={PALETTE.cyan}>{`  ${truncate(k.preview, 28)}`}</span> : null}
+          </text>
+        ))
+      )}
+      {cfg.settingsKeys.length > 40 ? (
+        <text content={`  +${cfg.settingsKeys.length - 40} more keys`} style={{ fg: PALETTE.fgDim }} />
+      ) : null}
+      <box style={{ height: 1 }} />
+      {cfg.notes.slice(0, 6).map((n, i) => (
+        <text key={i} content={`· ${truncate(n, 78)}`} style={{ fg: PALETTE.fgDim }} />
+      ))}
+    </box>
+  );
+}
 
 function SummaryDetail({
   summary,
@@ -699,11 +764,12 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   const [reloadKey, setReloadKey] = useState(0);
 
   const [focus, setFocus] = useState<Focus>("nav");
-  const [navCursor, setNavCursor] = useState(1); // default Summary under harness
+  const [navCursor, setNavCursor] = useState(0);
   const [detailCursor, setDetailCursor] = useState(0);
   const [view, setView] = useState<View>({ kind: "summary" });
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [pluginsExpanded, setPluginsExpanded] = useState(false);
+  const [focusedHarness, setFocusedHarness] = useState<string | null>(null);
 
   const [tick, setTick] = useState(0);
   const animating = loading || busy;
@@ -720,6 +786,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     void loadConfigureInventory(projectPath ? { projectPath } : {})
       .then((inv) => {
         setInventory(inv);
+        setFocusedHarness((prev) => prev ?? inv.focusedHarness);
         setLoading(false);
       })
       .catch((cause: unknown) => {
@@ -732,48 +799,53 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     load();
   }, [load, reloadKey]);
 
-  const summary = inventory?.harnesses[0] ?? null;
-  const artifacts = inventory?.artifacts ?? [];
-  const groups = inventory?.groups ?? [];
+  const activeHarnessId = focusedHarness ?? inventory?.focusedHarness ?? "claude-code";
+  const harnessDetail = inventory?.byHarness[activeHarnessId as keyof typeof inventory.byHarness];
+  const summary = harnessDetail?.summary ?? inventory?.harnesses.find((h) => h.harness === activeHarnessId) ?? null;
+  const artifacts = harnessDetail?.artifacts ?? [];
+  const groups = harnessDetail?.groups ?? [];
   const duplicateCount = useMemo(
     () => groups.filter((g) => g.isDuplicate).length,
     [groups],
   );
 
   const navItems = useMemo<ReadonlyArray<NavItem>>(() => {
-    if (!summary) {
-      return [{ id: "harness", kind: "harness", label: "Claude Code …" }];
+    if (!inventory) {
+      return [{ id: "loading", kind: "harness", label: "Loading harnesses…" }];
     }
-    const mark = harnessMark(summary.harness);
-    const items: NavItem[] = [
-      {
-        id: "harness",
-        kind: "harness",
-        label: `${mark.glyph} ${summary.displayName}  [${summary.presence}]`,
-      },
-    ];
-    for (const s of SECTIONS) {
-      const count = sectionCount(summary, s.id);
+    const items: NavItem[] = [];
+    for (const h of inventory.harnesses) {
+      const mark = harnessMark(h.harness);
+      const selected = h.harness === activeHarnessId;
       items.push({
-        id: `section:${s.id}`,
-        kind: "section",
-        section: s.id,
-        label: s.id === "summary" ? s.label : `${s.label} (${count})`,
-        ...(s.id !== "summary" ? { count } : {}),
+        id: `harness:${h.harness}`,
+        kind: "harness",
+        label: `${mark.glyph} ${h.displayName}  [${h.presence}]`,
       });
-      if (s.id === "plugins" && pluginsExpanded) {
-        for (const p of summary.plugins) {
-          items.push({
-            id: `plugin:${p.name}`,
-            kind: "plugin",
-            plugin: p.name,
-            label: p.name,
-          });
+      if (!selected || !summary || summary.harness !== h.harness) continue;
+      for (const s of SECTIONS) {
+        const count = sectionCount(summary, s.id);
+        items.push({
+          id: `section:${h.harness}:${s.id}`,
+          kind: "section",
+          section: s.id,
+          label: s.id === "summary" ? s.label : `${s.label} (${count})`,
+          ...(s.id !== "summary" && s.id !== "config" ? { count } : {}),
+        });
+        if (s.id === "plugins" && pluginsExpanded) {
+          for (const p of summary.plugins) {
+            items.push({
+              id: `plugin:${h.harness}:${p.name}`,
+              kind: "plugin",
+              plugin: p.name,
+              label: p.name,
+            });
+          }
         }
       }
     }
     return items;
-  }, [summary, pluginsExpanded]);
+  }, [inventory, activeHarnessId, summary, pluginsExpanded]);
 
   // Keep nav cursor in range when items change
   useEffect(() => {
@@ -782,10 +854,16 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
 
   const selectedNav = navItems[navCursor];
 
-  // Sync view from nav when focus is nav (and not mid-confirm / deep artifact from detail)
+  // Sync view + focused harness from nav when focus is nav
   useEffect(() => {
     if (focus !== "nav" || !selectedNav) return;
-    if (selectedNav.kind === "harness" || (selectedNav.kind === "section" && selectedNav.section === "summary")) {
+    if (selectedNav.kind === "harness") {
+      const id = selectedNav.id.replace(/^harness:/, "");
+      setFocusedHarness(id);
+      setView({ kind: "summary" });
+      setDetailCursor(0);
+      setPluginsExpanded(false);
+    } else if (selectedNav.kind === "section" && selectedNav.section === "summary") {
       setView({ kind: "summary" });
       setDetailCursor(0);
     } else if (selectedNav.kind === "section") {
@@ -895,7 +973,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     setBusy(true);
     setError(null);
     setStatus(null);
-    void planUninstallPlugin({ pluginName: name, dryRun: true })
+    void planUninstallPlugin({ pluginName: name, harness: activeHarnessId, dryRun: true })
       .then((result) => {
         setBusy(false);
         if (result.plan.blocked.length > 0 && result.plan.ops.length === 0) {
@@ -937,10 +1015,10 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     setStatus(null);
     const run =
       art.ownership === "prism-owned"
-        ? planDeleteOwnedFile({ targetPath: art.targetPath, dryRun: true })
+        ? planDeleteOwnedFile({ targetPath: art.targetPath, harness: activeHarnessId, dryRun: true })
         : planDeleteStrayPath({
             targetPath: art.targetPath,
-            claudeRoot: summary?.globalRoot ?? "",
+            harnessRoot: summary?.globalRoot ?? "",
             dryRun: true,
           });
     void run
@@ -971,12 +1049,16 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     setError(null);
     const run =
       action.kind === "uninstall"
-        ? planUninstallPlugin({ pluginName: action.plugin, dryRun: false })
+        ? planUninstallPlugin({ pluginName: action.plugin, harness: activeHarnessId, dryRun: false })
         : action.ownership === "prism-owned"
-          ? planDeleteOwnedFile({ targetPath: action.targetPath, dryRun: false })
+          ? planDeleteOwnedFile({
+              targetPath: action.targetPath,
+              harness: activeHarnessId,
+              dryRun: false,
+            })
           : planDeleteStrayPath({
               targetPath: action.targetPath,
-              claudeRoot: summary?.globalRoot ?? "",
+              harnessRoot: summary?.globalRoot ?? "",
               dryRun: false,
             });
     void run
@@ -1005,9 +1087,22 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   const drillIn = (): void => {
     if (focus === "nav") {
       if (!selectedNav) return;
+      if (selectedNav.kind === "harness") {
+        const id = selectedNav.id.replace(/^harness:/, "");
+        setFocusedHarness(id);
+        setView({ kind: "summary" });
+        setFocus("detail");
+        return;
+      }
       if (selectedNav.kind === "section" && selectedNav.section === "plugins") {
         setPluginsExpanded(true);
         setView({ kind: "section", section: "plugins" });
+        setFocus("detail");
+        setDetailCursor(0);
+        return;
+      }
+      if (selectedNav.kind === "section" && selectedNav.section === "config") {
+        setView({ kind: "section", section: "config" });
         setFocus("detail");
         setDetailCursor(0);
         return;
@@ -1024,7 +1119,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         setDetailCursor(0);
         return;
       }
-      if (selectedNav.kind === "harness" || (selectedNav.kind === "section" && selectedNav.section === "summary")) {
+      if (selectedNav.kind === "section" && selectedNav.section === "summary") {
         setView({ kind: "summary" });
         setFocus("detail");
       }
@@ -1196,6 +1291,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
             </box>
           ) : view.kind === "summary" ? (
             <SummaryDetail summary={summary} duplicateCount={duplicateCount} />
+          ) : view.kind === "section" && view.section === "config" ? (
+            <ConfigDetail summary={summary} />
           ) : view.kind === "artifact" ? (
             (() => {
               const art = findArtifact(artifacts, view.artifactId);

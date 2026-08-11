@@ -1,9 +1,12 @@
 /**
- * Configure TUI domain model (POC: claude-code first).
+ * Configure TUI domain model — multi-harness inventory + settings catalogues.
  * Pure types — no I/O. Inventory + mutations + TUI all bind to these.
  */
 
-export type ConfigureHarnessId = "claude-code";
+import type { HarnessId } from "../types.js";
+
+/** All Prism harnesses are configure targets. */
+export type ConfigureHarnessId = HarnessId;
 
 /** How present a harness is on this machine. */
 export type HarnessPresence =
@@ -79,6 +82,39 @@ export interface PluginSummary {
   readonly roots: ReadonlyArray<string>;
 }
 
+/** Known harness config surface (read-only overview for the TUI). */
+export type ConfigFileKind =
+  | "settings" // e.g. settings.json — harness-native prefs
+  | "rules" // CLAUDE.md / AGENTS.md
+  | "credentials" // never open content in TUI
+  | "runtime" // history, sessions, cache
+  | "other";
+
+export interface ConfigFileEntry {
+  readonly id: string;
+  readonly kind: ConfigFileKind;
+  readonly label: string;
+  readonly path: string;
+  readonly exists: boolean;
+  readonly sizeBytes?: number;
+  /** Prism may own fences/regions inside; never whole-file for settings. */
+  readonly prismTouch: "none" | "regions" | "owned-tree";
+  readonly note?: string;
+}
+
+export interface SettingsKeySummary {
+  readonly key: string;
+  readonly shape: string; // "string" | "bool" | "number" | "list/N" | "dict/a,b" | "redacted"
+  readonly preview?: string; // short non-secret preview
+}
+
+export interface ConfigOverview {
+  readonly files: ReadonlyArray<ConfigFileEntry>;
+  readonly settingsPath?: string;
+  readonly settingsKeys: ReadonlyArray<SettingsKeySummary>;
+  readonly notes: ReadonlyArray<string>;
+}
+
 export interface HarnessSummary {
   readonly harness: ConfigureHarnessId;
   readonly displayName: string;
@@ -89,21 +125,35 @@ export interface HarnessSummary {
   readonly snapshotEntryCount: number;
   readonly plugins: ReadonlyArray<PluginSummary>;
   readonly counts: Readonly<Record<ArtifactNoun, number>>;
+  /** Harness-native settings/config overview (read-only). */
+  readonly config?: ConfigOverview;
+}
+
+export interface HarnessInventory {
+  readonly summary: HarnessSummary;
+  readonly artifacts: ReadonlyArray<ArtifactEntry>;
+  readonly groups: ReadonlyArray<ArtifactGroup>;
 }
 
 export interface ConfigureInventory {
   readonly prismHome: string;
   readonly harnesses: ReadonlyArray<HarnessSummary>;
-  /** Flat artifact list for the primary (claude-code) harness roots. */
+  /** Per-harness detail (artifacts + groups). Key = harness id. */
+  readonly byHarness: Readonly<Partial<Record<ConfigureHarnessId, HarnessInventory>>>;
+  /**
+   * Convenience: artifacts for the focused/default harness (first present, else first).
+   * Prefer `byHarness[id]` in multi-harness UI.
+   */
   readonly artifacts: ReadonlyArray<ArtifactEntry>;
-  /** Deduped groups (same logical skill/agent/… across install sites). */
   readonly groups: ReadonlyArray<ArtifactGroup>;
+  readonly focusedHarness: ConfigureHarnessId;
 }
 
 export type NavKind = "harness" | "section" | "plugin" | "artifact";
 
 export type SectionId =
   | "summary"
+  | "config"
   | "plugins"
   | "skills"
   | "commands"

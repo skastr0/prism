@@ -947,6 +947,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       // Preview only — do not expand, do not steal section cursor into a long list
       return;
     }
+    // Drop sticky footer notices when leaving config key help / prior actions
+    setStatus(null);
     if (selectedNav.kind === "section" && selectedNav.section === "summary") {
       setView({ kind: "summary" });
       setDetailCursor(0);
@@ -1284,15 +1286,10 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setFocus("detail");
       return;
     }
+    // Stay in config-key detail (description lives in the pane — never sticky footer)
+    setStatus(null);
     setView({ kind: "config-key", key });
     setFocus("detail");
-    setStatus(
-      field.description
-        ? truncate(field.description, 100)
-        : field.type === "object" || field.type === "array"
-          ? "Complex type — edit file manually (not yet supported)"
-          : "No enum options — edit file manually",
-    );
   };
 
   const drillIn = (): void => {
@@ -1364,20 +1361,15 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setDetailCursor(0);
       return;
     }
+    // Skills list → group page (file list). Never skip straight to SKILL.md.
     if (detailList.mode === "groups" && detailList.groups[detailCursor]) {
       const g = detailList.groups[detailCursor]!;
-      // Skill/agent/command with a single primary text file → open reader
-      const primary =
-        g.primaryLocations.find((l) => l.relativePath.endsWith("SKILL.md") || l.relativePath.endsWith(".md")) ??
-        g.primaryLocations[0];
-      if (primary && (primary.noun === "skill" || primary.noun === "agent" || primary.noun === "command" || primary.noun === "rules")) {
-        openReader(primary.targetPath, g.label);
-        return;
-      }
+      setStatus(null);
       setView({ kind: "group", groupId: g.id });
       setDetailCursor(0);
       return;
     }
+    // Group locations → open file reader for text artifacts
     if (detailList.mode === "locations" && detailList.locations[detailCursor]) {
       const loc = detailList.locations[detailCursor]!;
       if (
@@ -1386,12 +1378,14 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         loc.relativePath.endsWith(".json") ||
         loc.relativePath.endsWith(".toml") ||
         loc.relativePath.endsWith(".yaml") ||
-        loc.relativePath.endsWith(".yml")
+        loc.relativePath.endsWith(".yml") ||
+        loc.relativePath.endsWith("SKILL.md")
       ) {
         openReader(loc.targetPath, loc.label);
         return;
       }
       setView({ kind: "artifact", artifactId: loc.id });
+      return;
     }
     if (view.kind === "artifact") {
       const art = findArtifact(artifacts, view.artifactId);
@@ -1404,7 +1398,9 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setConfirm(null);
       return;
     }
+    setStatus(null);
     if (view.kind === "reader") {
+      // Prefer return to the group file list if we can recover it from path
       setView({ kind: "section", section: "skills" });
       setFocus("detail");
       return;

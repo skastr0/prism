@@ -133,11 +133,14 @@ export const classifyRelativePath = (
   }
   if (/(^|\/)hooks\//.test(norm) || norm.endsWith("hooks.json") || norm.endsWith("hooks.v1.json")) {
     const base = basename(norm);
+    const gen = extractGeneratedPlugin(norm);
+    // Each plugin's hooks.json is its own item — do not collapse all hooks.json together.
+    const logicalKey = gen ? `${gen}:${base}` : norm;
     return {
       noun: "hook",
-      label: base,
-      logicalKey: base,
-      siteKey: norm,
+      label: gen ? `${gen}/${base}` : base,
+      logicalKey,
+      siteKey: gen ? `bundle:${gen}:${base}` : `path:${norm}`,
       role: "primary",
     };
   }

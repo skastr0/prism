@@ -44,7 +44,7 @@ import {
   type ConfigureNavItem,
   type ConfigureView,
 } from "./nav.js";
-import { TextReader, clampReaderScroll } from "./text-reader.js";
+import { TextReader, clampReaderScroll, wrapReaderLines } from "./text-reader.js";
 
 export interface ConfigureTuiOptions {
   readonly projectPath?: string;
@@ -1823,20 +1823,22 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
               onSelect={(i) => setDetailCursor(i)}
             />
           ) : view.kind === "reader" ? (
-            <TextReader
-              title={view.title}
-              path={view.path}
-              text={view.text}
-              truncated={view.truncated}
-              scroll={clampReaderScroll(
-                view.scroll,
-                view.text.split("\n").length,
-                listWindow,
-              )}
-              height={listWindow}
-              width={Math.max(20, termWidth - navWidth - 6)}
-              focused={focus === "detail"}
-            />
+            (() => {
+              const readerW = Math.max(20, termWidth - navWidth - 6);
+              const visualCount = wrapReaderLines(view.text, Math.max(8, readerW - 2)).length;
+              return (
+                <TextReader
+                  title={view.title}
+                  path={view.path}
+                  text={view.text}
+                  truncated={view.truncated}
+                  scroll={clampReaderScroll(view.scroll, visualCount, listWindow)}
+                  height={listWindow}
+                  width={readerW}
+                  focused={focus === "detail"}
+                />
+              );
+            })()
           ) : view.kind === "config-key" ? (
             (() => {
               const cat = getHarnessCatalog(activeHarnessId as never);

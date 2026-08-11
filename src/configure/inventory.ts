@@ -203,9 +203,47 @@ export const skillSiteKey = (relativePath: string): string | undefined => {
   return `direct:${name}`;
 };
 
+/** Prism / harness region keys that register hooks (not feature flags like features.hooks). */
+export const isHookRegionKey = (regionKey: string): boolean => {
+  if (/features\.hooks/i.test(regionKey)) return false;
+  return /\.hooks(?:\.|$)/i.test(regionKey) || /^hooks(?:\.|$)/i.test(regionKey);
+};
+
+/**
+ * Disk paths that are hook artifacts worth listing.
+ * Avoids node_modules noise and plugin-cache wrapper spam (prefer hooks.json primary).
+ */
+export const isHookArtifactPath = (relativePath: string): boolean => {
+  const norm = relativePath.replaceAll("\\", "/");
+  if (norm.includes("/node_modules/") || norm.includes("/.git/")) return false;
+  // Codex plugin-cache backups are not active install surfaces
+  if (norm.includes("/plugin-backup-")) return false;
+  if (/(^|\/)hooks\.json$/u.test(norm) || /(^|\/)hooks\.v1\.json$/u.test(norm)) return true;
+  // Root hooks/ wrappers (Prism Codex) + prism-generated bundle wrappers
+  if (/^hooks\/[^/]+\.(mjs|js|cjs|sh|cmd)$/u.test(norm)) return true;
+  if (/prism-generated-[^/]+\/hooks\/[^/]+\.(mjs|js|cjs|json|sh|cmd)$/u.test(norm)) return true;
+  return false;
+};
+
+const hookPackageLabel = (norm: string): string | undefined => {
+  // Prefer .../<plugin>/<version>/hooks/hooks.json (handles marketplace + plugin-backup/*).
+  const versioned =
+    /(?:^|\/)([^/]+)\/\d+\.\d+[^/]*\/hooks\/(?:hooks(?:\.v1)?\.json|[^/]+\.(?:mjs|js|cjs|sh|cmd))$/u.exec(
+      norm,
+    );
+  if (versioned?.[1] && versioned[1] !== "cache" && !versioned[1].startsWith("plugin-backup-")) {
+    return versioned[1];
+  }
+  // plugins/<plugin>/hooks/... (non-cache install)
+  const direct = /(?:^|\/)plugins\/([^/]+)\/hooks\//u.exec(norm);
+  if (direct?.[1] && direct[1] !== "cache") return direct[1];
+  return extractGeneratedPlugin(norm);
+};
+
 export const classifyRelativePath = (
   relativePath: string,
   mode: SnapshotEntry["mode"],
+  options: { readonly regionKey?: string } = {},
 ): {
   readonly noun: ArtifactNoun;
   readonly label: string;
@@ -215,25 +253,50 @@ export const classifyRelativePath = (
 } => {
   const norm = relativePath.replaceAll("\\", "/");
   if (mode === "region") {
+    if (options.regionKey && isHookRegionKey(options.regionKey)) {
+      const key = options.regionKey;
+      return {
+        noun: "hook",
+        label: key,
+        logicalKey: `region:${key}`,
+        siteKey: `region:${key}`,
+        role: "primary",
+      };
+    }
     return {
       noun: "rules",
       label: basename(norm) || "rules region",
-      logicalKey: `region:${norm}`,
+      logicalKey: `region:${options.regionKey ?? norm}`,
       siteKey: `file:${norm}`,
       role: "primary",
     };
   }
-  if (/(^|\/)hooks\//.test(norm) || norm.endsWith("hooks.json") || norm.endsWith("hooks.v1.json")) {
+  if (isHookArtifactPath(norm) || /(^|\/)hooks\//.test(norm)) {
+    // Only treat as hook noun when path is a known hook artifact OR under hooks/
+    // with a hooks.json / wrapper name — keep isHookArtifactPath gate for disk scan.
     const base = basename(norm);
+    const pkg = hookPackageLabel(norm);
     const gen = extractGeneratedPlugin(norm);
-    // Each plugin's hooks.json is its own item — do not collapse all hooks.json together.
-    const logicalKey = gen ? `${gen}:${base}` : norm;
+    const isPrimary =
+      base === "hooks.json" ||
+      base === "hooks.v1.json" ||
+      /^hooks\/[^/]+\.(mjs|js|cjs)$/u.test(norm);
+    const isSupport = !isPrimary && /(^|\/)hooks\//.test(norm);
+    // Collapse plugin package hooks under one logical key; root hooks.json stays unique.
+    const logicalKey = pkg
+      ? `plugin:${pkg}`
+      : gen
+        ? `${gen}:${base}`
+        : base === "hooks.json" || base === "hooks.v1.json"
+          ? base
+          : norm;
+    const label = pkg ? `${pkg}${base === "hooks.json" ? "" : `/${base}`}` : gen ? `${gen}/${base}` : base;
     return {
       noun: "hook",
-      label: gen ? `${gen}/${base}` : base,
+      label,
       logicalKey,
-      siteKey: gen ? `bundle:${gen}:${base}` : `path:${norm}`,
-      role: "primary",
+      siteKey: pkg ? `plugin:${pkg}` : gen ? `bundle:${gen}:${base}` : `path:${norm}`,
+      role: isSupport ? "support" : "primary",
     };
   }
   // Agents / commands before skills — they often live under prism-generated bundles.
@@ -459,7 +522,9 @@ const loadOneHarnessInventory = async (options: {
       readonly forceLabel?: string;
     } = {},
   ): void => {
-    const classified = classifyRelativePath(relativePath, mode);
+    const classified = classifyRelativePath(relativePath, mode, {
+      ...(extras.regionKey ? { regionKey: extras.regionKey } : {}),
+    });
     const noun = extras.forceNoun ?? classified.noun;
     const label = extras.forceLabel ?? classified.label;
     artifacts.push({
@@ -472,7 +537,7 @@ const loadOneHarnessInventory = async (options: {
       ownership,
       targetPath,
       relativePath,
-      label: extras.regionKey ? `${label} · ${extras.regionKey}` : label,
+      label: extras.regionKey && noun !== "hook" ? `${label} · ${extras.regionKey}` : label,
       ...(extras.plugin !== undefined ? { plugin: extras.plugin } : {}),
       ...(extras.regionKey !== undefined ? { regionKey: extras.regionKey } : {}),
       ...(extras.detail !== undefined ? { detail: extras.detail } : {}),
@@ -512,7 +577,7 @@ const loadOneHarnessInventory = async (options: {
       for (const rel of await listDirRecursive(base)) {
         const absolute = resolve(join(base, rel));
         if (snapshotPaths.has(absolute)) continue;
-        const relativePath = join(dir, rel);
+        const relativePath = join(dir, rel).replaceAll("\\", "/");
         const generated = extractGeneratedPlugin(relativePath);
         const ownership: OwnershipKind =
           generated !== undefined || isPrismNs(relativePath) ? "prism-namespace" : "foreign";
@@ -528,13 +593,35 @@ const loadOneHarnessInventory = async (options: {
           /(^|\/)skills\//.test(relativePath) &&
           rel.endsWith(".md") &&
           !rel.endsWith("SKILL.md");
-        if (!isSkillMd && !isAgentOrCommand && !isTopPluginDir && !isSkillSupportMd) continue;
+        const isHook = isHookArtifactPath(relativePath);
+        if (!isSkillMd && !isAgentOrCommand && !isTopPluginDir && !isSkillSupportMd && !isHook) {
+          continue;
+        }
+        const hookPkg = isHook ? hookPackageLabel(relativePath) : undefined;
         pushClassified(relativePath, "owned", ownership, absolute, {
-          ...(generated ? { plugin: generated } : {}),
+          ...(generated
+            ? { plugin: generated }
+            : hookPkg
+              ? { plugin: hookPkg }
+              : {}),
           ...(isTopPluginDir ? { forceNoun: "bundle", forceLabel: rel } : {}),
           detail: ownership === "prism-namespace" ? "unledgered" : "not owned by Prism",
         });
       }
+    }
+
+    // Root-level hook files (e.g. ~/.codex/hooks.json) live outside scanDirs.
+    for (const sf of catalog.settingsFiles) {
+      if (sf.path.includes("..")) continue;
+      const rel = sf.path.replaceAll("\\", "/").replace(/^\.\//u, "");
+      if (!isHookArtifactPath(rel) && rel !== "hooks.json" && rel !== "hooks.v1.json") continue;
+      const absolute = resolve(join(globalRoot, rel));
+      if (snapshotPaths.has(absolute)) continue;
+      if (!(await exists(absolute))) continue;
+      if (artifacts.some((a) => resolve(a.targetPath) === absolute)) continue;
+      pushClassified(rel, "owned", "foreign", absolute, {
+        detail: "not owned by Prism",
+      });
     }
   }
 

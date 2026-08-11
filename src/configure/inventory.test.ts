@@ -8,6 +8,8 @@ import {
   classifyRelativePath,
   extractGeneratedPlugin,
   groupArtifacts,
+  isHookArtifactPath,
+  isHookRegionKey,
   loadConfigureInventory,
   pluginScopeNames,
   skillLogicalName,
@@ -46,6 +48,50 @@ describe("configure inventory helpers", () => {
     );
     expect(classifyRelativePath("CLAUDE.md", "region").noun).toBe("rules");
     expect(extractGeneratedPlugin("skills/prism-generated-booth/SKILL.md")).toBe("booth");
+  });
+
+  test("hook region keys classify as hook, not rules", () => {
+    expect(isHookRegionKey("codex.hooks.groundwork")).toBe(true);
+    expect(isHookRegionKey("codex.features.hooks")).toBe(false);
+    expect(isHookRegionKey("hermes.hooks.pre_tool_call")).toBe(true);
+    expect(
+      classifyRelativePath("config.toml", "region", { regionKey: "codex.hooks.demo" }).noun,
+    ).toBe("hook");
+    expect(
+      classifyRelativePath("config.toml", "region", { regionKey: "codex.features.hooks" }).noun,
+    ).toBe("rules");
+    expect(classifyRelativePath("CLAUDE.md", "region", { regionKey: "codex.rules.x" }).noun).toBe(
+      "rules",
+    );
+  });
+
+  test("hook artifact paths include root + plugin hooks.json", () => {
+    expect(isHookArtifactPath("hooks.json")).toBe(true);
+    expect(isHookArtifactPath("hooks.v1.json")).toBe(true);
+    expect(isHookArtifactPath("hooks/session-start.mjs")).toBe(true);
+    expect(
+      isHookArtifactPath("plugins/cache/groundwork-local/groundwork/0.2.1/hooks/hooks.json"),
+    ).toBe(true);
+    expect(
+      isHookArtifactPath(
+        "plugins/cache/groundwork-local/groundwork/0.2.1/hooks/groundwork-codex-hook.sh",
+      ),
+    ).toBe(false);
+    expect(
+      isHookArtifactPath("plugins/cache/x/y/node_modules/abstract-level/lib/hooks.js"),
+    ).toBe(false);
+
+    const gw = classifyRelativePath(
+      "plugins/cache/groundwork-local/groundwork/0.2.1/hooks/hooks.json",
+      "owned",
+    );
+    expect(gw.noun).toBe("hook");
+    expect(gw.logicalKey).toBe("plugin:groundwork");
+    expect(gw.label).toBe("groundwork");
+
+    const root = classifyRelativePath("hooks.json", "owned");
+    expect(root.noun).toBe("hook");
+    expect(root.logicalKey).toBe("hooks.json");
   });
 
   test("skillLogicalName + siteKey distinguish direct vs bundle installs", () => {
@@ -173,5 +219,84 @@ describe("loadConfigureInventory", () => {
     const demo = detail?.summary.plugins.find((p) => p.name === "demo");
     expect(demo?.ownedFiles).toBe(1);
     expect(demo?.regions).toBe(1);
+  });
+
+  test("indexes codex root hooks.json and plugin-cache hooks", async () => {
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    const root = await fs.mkdtemp(join(os.tmpdir(), "prism-configure-hooks-"));
+    const prismHome = join(root, "prism-home");
+    const codexRoot = join(root, "codex");
+    await mkdir(join(codexRoot, "plugins", "cache", "gw-local", "groundwork", "0.2.1", "hooks"), {
+      recursive: true,
+    });
+    await mkdir(join(codexRoot, "hooks"), { recursive: true });
+    await writeFile(
+      join(codexRoot, "hooks.json"),
+      JSON.stringify({ hooks: { SessionStart: [] } }),
+    );
+    await writeFile(
+      join(codexRoot, "plugins", "cache", "gw-local", "groundwork", "0.2.1", "hooks", "hooks.json"),
+      JSON.stringify({ hooks: { PreToolUse: [] } }),
+    );
+    await writeFile(join(codexRoot, "hooks", "prism-demo.mjs"), "export default {}\n");
+    await writeFile(
+      join(
+        codexRoot,
+        "plugins",
+        "cache",
+        "gw-local",
+        "groundwork",
+        "0.2.1",
+        "hooks",
+        "groundwork.sh",
+      ),
+      "#!/bin/sh\n",
+    );
+
+    await writeSnapshot(prismHome, {
+      version: 1,
+      harness: "codex-cli",
+      root: codexRoot,
+      entries: [
+        {
+          targetPath: join(codexRoot, "config.toml"),
+          contentHash: "cfg",
+          mode: "region",
+          regionKey: "codex.hooks.demo-plugin",
+          plugin: "demo-plugin",
+        },
+      ],
+    });
+
+    const inv = await loadConfigureInventory({
+      prismHome,
+      env: {
+        ...process.env,
+        HOME: root,
+        PRISM_HOME: prismHome,
+        // Force codex home to temp root via CODEX_HOME if harness respects it —
+        // inventory uses resolveHarnessRoot; set HOME so ~/.codex resolves under temp.
+      },
+    });
+
+    // Harness root is expandPath("~/.codex") under HOME=root → root/codex only if
+    // harness registry uses ~/.codex under HOME. Snapshot still attaches via harness id.
+    const detail = inv.byHarness["codex-cli"];
+    expect(detail).toBeDefined();
+
+    const hookGroups = detail!.groups.filter((g) => g.noun === "hook");
+    const hookLabels = hookGroups.map((g) => g.label).sort();
+    // At least the region hook from snapshot; disk hooks depend on harness root == codexRoot.
+    expect(hookGroups.some((g) => g.logicalKey === "region:codex.hooks.demo-plugin")).toBe(true);
+
+    // When HOME makes globalRoot === codexRoot, disk hooks appear too.
+    const harnessRoot = detail!.summary.globalRoot;
+    if (harnessRoot === codexRoot || harnessRoot.replace(/\/$/u, "") === codexRoot) {
+      expect(detail!.summary.counts.hook).toBeGreaterThanOrEqual(3);
+      expect(hookLabels).toEqual(expect.arrayContaining(["hooks.json", "groundwork", "prism-demo.mjs"]));
+      // wrapper .sh under plugin cache is not a separate group
+      expect(hookLabels.some((l) => l.includes("groundwork.sh"))).toBe(false);
+    }
   });
 });

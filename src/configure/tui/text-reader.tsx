@@ -17,6 +17,8 @@ export type TextReaderProps = {
   height: number; // visible rows
   width: number;
   focused?: boolean;
+  /** Enter edit mode (e key / mouse). */
+  readonly onEdit?: () => void;
 };
 
 /** Expand file text into display lines that fit `width` columns. */
@@ -55,13 +57,24 @@ function Line({ content, fg }: { readonly content: string; readonly fg?: string 
 }
 
 export function TextReader(props: TextReaderProps) {
-  const { title, path, text, truncated = false, scroll, height, width, focused = false } = props;
+  const {
+    title,
+    path,
+    text,
+    truncated = false,
+    scroll,
+    height,
+    width,
+    focused = false,
+    onEdit,
+  } = props;
 
   const lineBudget = Math.max(8, width - 2);
   const visualLines = wrapReaderLines(text, lineBudget);
   const headerRows = 1;
   const warnRows = truncated ? 1 : 0;
-  const bodyRows = Math.max(0, height - headerRows - warnRows);
+  const footerRows = onEdit ? 1 : 0;
+  const bodyRows = Math.max(0, height - headerRows - warnRows - footerRows);
   const start = clampReaderScroll(scroll, visualLines.length, bodyRows);
   const visible = visualLines.slice(start, start + bodyRows);
 
@@ -85,6 +98,10 @@ export function TextReader(props: TextReaderProps) {
         width: "100%",
         backgroundColor: PALETTE.bg,
       }}
+      onMouseDown={() => {
+        // Click body → enter editor (small patches, not full IDE)
+        onEdit?.();
+      }}
     >
       <box style={{ height: 1, flexDirection: "row", width: "100%" }}>
         <text style={{ wrapMode: "none" }}>
@@ -103,6 +120,9 @@ export function TextReader(props: TextReaderProps) {
       {visible.map((line, i) => (
         <Line key={start + i} content={line} fg={PALETTE.fg} />
       ))}
+      {onEdit ? (
+        <Line content="e or click · edit  ·  j/k scroll  ·  esc back" fg={PALETTE.fgDim} />
+      ) : null}
     </box>
   );
 }

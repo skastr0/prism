@@ -26,6 +26,8 @@ export type ConfigureView =
       readonly text: string;
       readonly truncated: boolean;
       readonly scroll: number;
+      /** Inline OpenTUI textarea editor (not vim). */
+      readonly editing?: boolean;
     };
 
 export type NavItemKind = "harness" | "section" | "profile" | "plugin";

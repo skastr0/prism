@@ -36,6 +36,7 @@ import {
 import { planSetSetting } from "../settings-apply.js";
 import { loadTextForReader } from "../metadata.js";
 import { getHarnessCatalog } from "../catalogs/index.js";
+import { exists, readFile, writeFile } from "../../fs.js";
 import {
   findNavIndex,
   navBackFromNavFocus,
@@ -44,7 +45,11 @@ import {
   type ConfigureNavItem,
   type ConfigureView,
 } from "./nav.js";
+import { TextFileEditor } from "./text-editor.js";
 import { TextReader, clampReaderScroll, wrapReaderLines } from "./text-reader.js";
+
+/** Soft cap for inline edits — huge files belong in a real editor. */
+const EDIT_MAX_BYTES = 2 * 1024 * 1024;
 
 export interface ConfigureTuiOptions {
   readonly projectPath?: string;
@@ -878,7 +883,9 @@ function Footer({
   const hints: ReadonlyArray<readonly [string, string]> =
     focus === "detail"
       ? view.kind === "reader"
-        ? [["j/k", "scroll"], ["esc/h", "up"], ["q", "quit"]]
+        ? view.editing
+          ? [["^s", "save"], ["esc", "cancel"], ["mouse", "cursor"]]
+          : [["j/k", "scroll"], ["e/click", "edit"], ["esc/h", "up"], ["q", "quit"]]
         : view.kind === "config-pick"
           ? [["j/k", "option"], ["enter", "set"], ["esc/h", "up"], ["q", "quit"]]
           : view.kind === "section" && view.section === "config"
@@ -1477,12 +1484,84 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           text: doc.text,
           truncated: doc.truncated,
           scroll: 0,
+          editing: false,
         });
       })
       .catch((cause: unknown) => {
         setBusy(false);
         setError(errMsg(cause));
       });
+  };
+
+  const beginEditReader = (): void => {
+    if (view.kind !== "reader") return;
+    const { path, title } = view;
+    setBusy(true);
+    setError(null);
+    void (async () => {
+      try {
+        if (!(await exists(path))) {
+          setBusy(false);
+          setError(`Missing file: ${path}`);
+          return;
+        }
+        const raw = await readFile(path);
+        const bytes = Buffer.byteLength(raw, "utf8");
+        if (bytes > EDIT_MAX_BYTES) {
+          setBusy(false);
+          setError(
+            `File too large to edit inline (${bytes} bytes; max ${EDIT_MAX_BYTES}). Use an external editor.`,
+          );
+          return;
+        }
+        setBusy(false);
+        setView({
+          kind: "reader",
+          path,
+          title,
+          text: raw,
+          truncated: false,
+          scroll: view.scroll,
+          editing: true,
+        });
+        setFocus("detail");
+        setStatus(null);
+      } catch (cause: unknown) {
+        setBusy(false);
+        setError(errMsg(cause));
+      }
+    })();
+  };
+
+  const saveEditor = (next: string): void => {
+    if (view.kind !== "reader" || !view.editing) return;
+    const { path, title } = view;
+    setBusy(true);
+    setError(null);
+    void writeFile(path, next)
+      .then(() => {
+        setBusy(false);
+        setView({
+          kind: "reader",
+          path,
+          title,
+          text: next,
+          truncated: false,
+          scroll: 0,
+          editing: false,
+        });
+        setStatus(`saved · ${path}`);
+      })
+      .catch((cause: unknown) => {
+        setBusy(false);
+        setError(errMsg(cause));
+      });
+  };
+
+  const cancelEditor = (): void => {
+    if (view.kind !== "reader" || !view.editing) return;
+    setView({ ...view, editing: false });
+    setStatus("edit cancelled");
   };
 
   const openConfigKey = (key: string): void => {
@@ -1614,6 +1693,11 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setConfirm(null);
       return;
     }
+    // Editor first: esc exits edit, not the reader
+    if (view.kind === "reader" && view.editing) {
+      cancelEditor();
+      return;
+    }
     setStatus(null);
 
     // 1) Pop detail trail first (reader → group → section, never a hard-coded section)
@@ -1664,6 +1748,16 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   };
 
   useKeyboard((key) => {
+    // While editing, textarea owns keys (save/cancel via its onKeyDown).
+    // Only allow quit / force-cancel if textarea missed esc.
+    if (view.kind === "reader" && view.editing) {
+      if (key.name === "q" && (key.ctrl || key.meta)) {
+        renderer?.destroy();
+        exitWith(0);
+      }
+      return;
+    }
+
     if (confirm !== null) {
       if (key.name === "escape") setConfirm(null);
       if (key.name === "return") applyConfirm();
@@ -1686,6 +1780,18 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       beginDelete();
       return;
     }
+    // Reader: e → edit
+    if (
+      key.name === "e" &&
+      !key.ctrl &&
+      !key.meta &&
+      view.kind === "reader" &&
+      !view.editing &&
+      focus === "detail"
+    ) {
+      beginEditReader();
+      return;
+    }
     if (key.name === "tab") {
       setFocus((f) => (f === "nav" ? "detail" : "nav"));
       return;
@@ -1703,7 +1809,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     }
 
     if (move !== 0) {
-      if (view.kind === "reader") {
+      if (view.kind === "reader" && !view.editing) {
         setView((v) =>
           v.kind === "reader"
             ? { ...v, scroll: Math.max(0, v.scroll + move * 3) }
@@ -1738,7 +1844,9 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
               : view.kind === "config-key"
                 ? `Key · ${view.key}`
                 : view.kind === "reader"
-                  ? `Read · ${view.title}`
+                  ? view.editing
+                    ? `Edit · ${view.title}`
+                    : `Read · ${view.title}`
                   : "Artifact";
 
   // Explicit column budget so status/paths always wrap (never ellipsis).
@@ -1825,6 +1933,21 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           ) : view.kind === "reader" ? (
             (() => {
               const readerW = Math.max(20, termWidth - navWidth - 6);
+              if (view.editing) {
+                return (
+                  <TextFileEditor
+                    title={view.title}
+                    path={view.path}
+                    text={view.text}
+                    height={listWindow}
+                    width={readerW}
+                    focused={focus === "detail"}
+                    saving={busy}
+                    onSave={saveEditor}
+                    onCancel={cancelEditor}
+                  />
+                );
+              }
               const visualCount = wrapReaderLines(view.text, Math.max(8, readerW - 2)).length;
               return (
                 <TextReader
@@ -1836,6 +1959,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
                   height={listWindow}
                   width={readerW}
                   focused={focus === "detail"}
+                  onEdit={beginEditReader}
                 />
               );
             })()

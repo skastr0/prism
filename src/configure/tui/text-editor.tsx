@@ -67,6 +67,7 @@ export function TextFileEditor(props: TextFileEditorProps) {
 
   const renderer = useRenderer() as CliRenderer | null;
   const ref = useRef<TextareaRenderable | null>(null);
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dirty, setDirty] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const editorKey = `${path}:${text.length}:${text.slice(0, 32)}`;
@@ -74,11 +75,21 @@ export function TextFileEditor(props: TextFileEditorProps) {
   useEffect(() => {
     setDirty(false);
     setHint(null);
+    if (hintTimerRef.current) {
+      clearTimeout(hintTimerRef.current);
+      hintTimerRef.current = null;
+    }
   }, [path, text]);
 
   useEffect(() => {
     if (focused) ref.current?.focus();
   }, [focused, editorKey]);
+
+  useEffect(() => {
+    return () => {
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+    };
+  }, []);
 
   const titleShown = truncate(title, Math.max(8, Math.min(28, width)));
   const pathBudget = Math.max(8, width - Bun.stringWidth(titleShown) - 28);
@@ -90,8 +101,15 @@ export function TextFileEditor(props: TextFileEditorProps) {
     onSave(next);
   };
 
+  /** Transient status (copied/pasted/…) — auto-clears so the help line returns. */
+  const HINT_MS = 1_500;
   const flash = (msg: string): void => {
     setHint(msg);
+    if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = setTimeout(() => {
+      setHint(null);
+      hintTimerRef.current = null;
+    }, HINT_MS);
   };
 
   const withTa = (fn: (ta: TextareaRenderable) => void): void => {

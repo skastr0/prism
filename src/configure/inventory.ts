@@ -3,7 +3,7 @@
  * Snapshot-first; disk scan fills strays + foreign; catalogues drive scan dirs + config overview.
  */
 
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { getHarness, resolveHarnessRoot } from "../harnesses.js";
 import { exists, expandPath, listDir, listDirRecursive, readFile } from "../fs.js";
 import { resolvePrismHome } from "../prism-home.js";
@@ -33,6 +33,7 @@ import type {
   PluginSummary,
   ProfileInventory,
   ProfileSummary,
+  ProjectInventory,
   SectionId,
   SettingsKeySummary,
 } from "./model.js";
@@ -238,6 +239,122 @@ export const isHookArtifactPath = (relativePath: string): boolean => {
   return false;
 };
 
+/** Session dumps, sqlite, memtrace — never memory artifacts. */
+const isExcludedMemoryPath = (norm: string): boolean => {
+  if (/\.jsonl$/iu.test(norm)) return true;
+  if (/\.(?:sqlite|sqlite3|db)$/iu.test(norm)) return true;
+  if (/(^|\/)(?:sessions?|memtrace)(?:\/|$)/iu.test(norm)) return true;
+  if (/(?:^|\/)\.git(?:\/|$)/u.test(norm)) return true;
+  return false;
+};
+
+/**
+ * Generated memory markdown (Hermes memories/, Claude/Grok/OpenClaw memory/,
+ * bare MEMORY.md / USER.md). Not repo-root CLAUDE.md / AGENTS.md.
+ */
+export const isMemoryRelativePath = (relativePath: string): boolean => {
+  const norm = relativePath.replaceAll("\\", "/");
+  if (isExcludedMemoryPath(norm)) return false;
+  if (!/\.md$/iu.test(norm) || norm.endsWith(".lock")) return false;
+  if (/(^|\/)memories\//u.test(norm) || /(^|\/)memory\//u.test(norm)) return true;
+  const base = basename(norm);
+  if (base !== "MEMORY.md" && base !== "USER.md") return false;
+  // Bare memory files, or those names under a memory/workspace bucket.
+  if (!norm.includes("/")) return true;
+  const parent = dirname(norm);
+  return (
+    parent === "memory" ||
+    parent === "memories" ||
+    parent === "workspace" ||
+    parent.endsWith("/memory") ||
+    parent.endsWith("/memories") ||
+    parent.endsWith("/workspace")
+  );
+};
+
+/** Claude/OMP path slug: `/` and `.` → `-` (`/Users/a.b` → `-Users-a-b`). */
+export const encodeDashPath = (absPath: string): string =>
+  resolve(absPath).replace(/[/\\.]/g, "-");
+
+const dirExists = async (path: string): Promise<boolean> => {
+  if (!(await exists(path))) return false;
+  try {
+    await listDir(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Nearest git root for Claude memory encoding. Worktree `.git` files resolve
+ * to the main worktree root (worktrees share that memory bucket).
+ */
+const resolveGitRoot = async (start: string): Promise<string | undefined> => {
+  let dir = resolve(start);
+  for (;;) {
+    const gitPath = join(dir, ".git");
+    if (await exists(gitPath)) {
+      try {
+        const text = await readFile(gitPath);
+        const match = /^gitdir:\s*(.+)$/m.exec(text);
+        if (match?.[1]) {
+          const gitdir = resolve(dir, match[1].trim());
+          const unix = gitdir.replaceAll("\\", "/");
+          const idx = unix.indexOf("/.git/");
+          if (idx !== -1) return unix.slice(0, idx);
+        }
+      } catch {
+        // `.git` is a directory — this is the repository root.
+      }
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+};
+
+const listMemoryMarkdown = async (dir: string): Promise<string[]> => {
+  if (!(await dirExists(dir))) return [];
+  const out: string[] = [];
+  try {
+    for (const rel of await listDirRecursive(dir)) {
+      const norm = rel.replaceAll("\\", "/");
+      if (isExcludedMemoryPath(norm)) continue;
+      if (!/\.md$/iu.test(norm)) continue;
+      out.push(norm);
+    }
+  } catch {
+    return [];
+  }
+  return out;
+};
+
+const memoryConfigEntry = async (
+  rel: string,
+  abs: string,
+  existsOnDisk: boolean,
+): Promise<ConfigFileEntry> => {
+  let sizeBytes: number | undefined;
+  if (existsOnDisk) {
+    try {
+      sizeBytes = (await readFile(abs)).length;
+    } catch {
+      sizeBytes = undefined;
+    }
+  }
+  return {
+    id: rel,
+    kind: "other",
+    label: basename(rel),
+    path: abs,
+    exists: existsOnDisk,
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    prismTouch: "none",
+  };
+};
+
 const hookPackageLabel = (norm: string): string | undefined => {
   // Prefer .../<plugin>/<version>/hooks/hooks.json (handles marketplace + plugin-backup/*).
   const versioned =
@@ -389,7 +506,7 @@ export const classifyRelativePath = (
       role: "primary",
     };
   }
-  if (/(^|\/)memories\//u.test(norm) && /\.md$/iu.test(norm) && !norm.endsWith(".lock")) {
+  if (isMemoryRelativePath(norm)) {
     const base = basename(norm);
     return {
       noun: "memory",
@@ -423,23 +540,22 @@ export const classifyRelativePath = (
   };
 };
 
-/** Hermes-specific identity paths to always surface when present. */
+/** Hermes identity surfaces — SOUL / brief / profile. Memory is separate. */
 const HERMES_IDENTITY_RELS = [
   "SOUL.md",
   "identity-brief.md",
   "profile.yaml",
   "profile.yml",
   "profile.vouch",
-  "memories/MEMORY.md",
-  "memories/USER.md",
 ] as const;
+
+const HERMES_MEMORY_RELS = ["memories/MEMORY.md", "memories/USER.md"] as const;
 
 const isHermesIdentityPath = (relativePath: string): boolean => {
   const norm = relativePath.replaceAll("\\", "/");
   if (/(^|\/)SOUL\.md$/iu.test(norm)) return true;
   if (/(^|\/)identity-brief\.md$/iu.test(norm)) return true;
   if (/(^|\/)profile\.(yaml|yml|vouch)$/iu.test(norm)) return true;
-  if (/(^|\/)memories\/[^/]+\.md$/iu.test(norm) && !norm.endsWith(".lock")) return true;
   return false;
 };
 
@@ -559,10 +675,11 @@ const loadOneHarnessInventory = async (options: {
   readonly manifests: ReadonlyArray<SnapshotManifest>;
   readonly toolRuntimePlugins: ReadonlySet<string>;
   readonly env: NodeJS.ProcessEnv;
+  readonly projectPath: string;
   /** Attach shared tool-runtime rows only to the first present harness (avoid N× duplicates). */
   readonly attachToolRuntime: boolean;
 }): Promise<HarnessInventory> => {
-  const { catalog, prismHome, env } = options;
+  const { catalog, prismHome, env, projectPath } = options;
   const harnessId = catalog.harness as ConfigureHarnessId;
   const harnessConfig = getHarness(harnessId);
   // Prefer env.HOME when tests/callers override it (expandPath alone uses process.env).
@@ -650,8 +767,13 @@ const loadOneHarnessInventory = async (options: {
       }
       return true;
     });
+    if (harnessId === "hermes" && !scanDirs.includes("memories")) {
+      scanDirs.push("memories");
+    }
 
     for (const dir of scanDirs) {
+      // Never dump ~/.claude/projects (session jsonl). Memory attaches separately.
+      if (dir === "projects" || dir.startsWith("projects/")) continue;
       const base = join(globalRoot, dir);
       if (!(await exists(base))) continue;
       for (const rel of await listDirRecursive(base)) {
@@ -677,13 +799,15 @@ const loadOneHarnessInventory = async (options: {
           !rel.endsWith("SKILL.md");
         const isHook = isHookArtifactPath(relativePath);
         const isIdentity = isHermesIdentityPath(relativePath);
+        const isMemory = isMemoryRelativePath(relativePath);
         if (
           !isSkillMd &&
           !isAgentOrCommand &&
           !isTopPluginDir &&
           !isSkillSupportMd &&
           !isHook &&
-          !isIdentity
+          !isIdentity &&
+          !isMemory
         ) {
           continue;
         }
@@ -714,7 +838,7 @@ const loadOneHarnessInventory = async (options: {
       });
     }
 
-    // Hermes shared-root identity files (SOUL, memories) outside scanDirs.
+    // Hermes shared-root identity + memory files outside scanDirs.
     if (harnessId === "hermes") {
       for (const rel of HERMES_IDENTITY_RELS) {
         const absolute = resolve(join(globalRoot, rel));
@@ -724,7 +848,24 @@ const loadOneHarnessInventory = async (options: {
           detail: "hermes shared identity",
         });
       }
+      for (const rel of HERMES_MEMORY_RELS) {
+        const absolute = resolve(join(globalRoot, rel));
+        if (!(await exists(absolute))) continue;
+        if (artifacts.some((a) => resolve(a.targetPath) === absolute)) continue;
+        pushClassified(rel, "owned", "foreign", absolute, {
+          detail: "hermes shared memory",
+        });
+      }
     }
+
+    await attachHarnessMemories({
+      harnessId,
+      globalRoot,
+      env,
+      projectPath,
+      artifacts,
+      pushClassified,
+    });
   }
 
   if (options.attachToolRuntime) {
@@ -776,6 +917,20 @@ const loadOneHarnessInventory = async (options: {
     });
   }
 
+  let projects: ReadonlyArray<ProjectInventory> | undefined;
+  if (catalog.projectRoot) {
+    const loaded = await loadProjectScope({
+      catalog,
+      projectPath,
+      globalRoot,
+      env,
+      prismHome,
+      manifests: primaryManifests,
+      markers,
+    });
+    if (loaded) projects = [loaded];
+  }
+
   const summary: HarnessSummary = {
     harness: harnessId,
     displayName: catalog.displayName,
@@ -788,6 +943,8 @@ const loadOneHarnessInventory = async (options: {
     counts,
     config,
     ...(profiles !== undefined ? { profileCount: profiles.length } : {}),
+    ...(projects !== undefined ? { projectCount: projects.length } : {}),
+    projectPath,
   };
 
   return {
@@ -795,6 +952,7 @@ const loadOneHarnessInventory = async (options: {
     artifacts,
     groups,
     ...(profiles !== undefined ? { profiles } : {}),
+    ...(projects !== undefined ? { projects } : {}),
   };
 };
 
@@ -890,7 +1048,8 @@ const loadOneHermesProfile = async (options: {
         relativePath.startsWith("skills/") && rel.endsWith(".md") && !rel.endsWith("SKILL.md");
       const isHook = isHookArtifactPath(relativePath);
       const isIdentity = isHermesIdentityPath(relativePath);
-      if (!isSkillMd && !isSkillSupportMd && !isHook && !isIdentity) continue;
+      const isMemory = isMemoryRelativePath(relativePath);
+      if (!isSkillMd && !isSkillSupportMd && !isHook && !isIdentity && !isMemory) continue;
       push(relativePath, ownership, absolute, {
         ...(generated ? { plugin: generated } : {}),
         detail: ownership === "prism-namespace" ? "unledgered" : "profile-local",
@@ -903,6 +1062,12 @@ const loadOneHermesProfile = async (options: {
     if (!(await exists(absolute))) continue;
     if (artifacts.some((a) => resolve(a.targetPath) === absolute)) continue;
     push(rel, "foreign", absolute, { detail: "profile identity" });
+  }
+  for (const rel of HERMES_MEMORY_RELS) {
+    const absolute = resolve(join(profileRoot, rel));
+    if (!(await exists(absolute))) continue;
+    if (artifacts.some((a) => resolve(a.targetPath) === absolute)) continue;
+    push(rel, "foreign", absolute, { detail: "profile memory" });
   }
 
   // Profile config.yaml (settings surface; also as artifact for identity/config browse)
@@ -920,24 +1085,27 @@ const loadOneHermesProfile = async (options: {
   for (const rel of HERMES_IDENTITY_RELS) {
     const abs = join(profileRoot, rel);
     const fileExists = await exists(abs);
-    let sizeBytes: number | undefined;
-    if (fileExists) {
-      try {
-        sizeBytes = (await readFile(abs)).length;
-      } catch {
-        sizeBytes = undefined;
-      }
-    }
-    identityFiles.push({
-      id: rel,
-      kind: "other",
-      label: basename(rel),
-      path: abs,
-      exists: fileExists,
-      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
-      prismTouch: "none",
-    });
+    identityFiles.push(await memoryConfigEntry(rel, abs, fileExists));
   }
+
+  const memoryFiles: ConfigFileEntry[] = [];
+  const seenMemory = new Set<string>();
+  for (const rel of HERMES_MEMORY_RELS) {
+    const abs = join(profileRoot, rel);
+    const fileExists = await exists(abs);
+    if (fileExists) seenMemory.add(resolve(abs));
+    memoryFiles.push(await memoryConfigEntry(rel, abs, fileExists));
+  }
+  for (const entry of artifacts) {
+    if (entry.noun !== "memory") continue;
+    const abs = resolve(entry.targetPath);
+    if (seenMemory.has(abs)) continue;
+    seenMemory.add(abs);
+    memoryFiles.push(await memoryConfigEntry(entry.relativePath, entry.targetPath, true));
+  }
+
+  const memoriesDir = join(profileRoot, "memories");
+  const memoryRoot = (await dirExists(memoriesDir)) ? memoriesDir : undefined;
 
   const profileCatalog: HarnessCatalog = {
     harness: "hermes",
@@ -967,6 +1135,9 @@ const loadOneHermesProfile = async (options: {
     counts,
     config,
     identityFiles,
+    kind: "profile",
+    memoryFiles,
+    ...(memoryRoot !== undefined ? { memoryRoot } : {}),
   };
 
   return { summary, artifacts, groups };
@@ -1015,6 +1186,327 @@ export const loadHermesProfiles = async (options: {
   return out;
 };
 
+type PushClassified = (
+  relativePath: string,
+  mode: SnapshotEntry["mode"],
+  ownership: OwnershipKind,
+  targetPath: string,
+  extras?: {
+    readonly plugin?: string;
+    readonly regionKey?: string;
+    readonly detail?: string;
+    readonly forceNoun?: ArtifactNoun;
+    readonly forceLabel?: string;
+  },
+) => void;
+
+const alreadyHasPath = (
+  artifacts: ReadonlyArray<ArtifactEntry>,
+  abs: string,
+): boolean => artifacts.some((a) => resolve(a.targetPath) === resolve(abs));
+
+const grokWorkspaceSlug = (dirName: string): string =>
+  dirName.replace(/-[0-9a-f]{8}$/iu, "");
+
+/**
+ * Memories that live on the shared harness root (not a project scope).
+ * Claude project buckets attach on the project entry instead.
+ */
+const attachHarnessMemories = async (options: {
+  readonly harnessId: ConfigureHarnessId;
+  readonly globalRoot: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly projectPath: string;
+  readonly artifacts: ArtifactEntry[];
+  readonly pushClassified: PushClassified;
+}): Promise<void> => {
+  const { harnessId, globalRoot, artifacts, pushClassified } = options;
+
+  const pushMemory = async (rel: string, abs: string, detail: string): Promise<void> => {
+    if (!(await exists(abs))) return;
+    if (alreadyHasPath(artifacts, abs)) return;
+    pushClassified(rel, "owned", "foreign", abs, { detail });
+  };
+
+  if (harnessId === "grok") {
+    const memoryRoot = join(globalRoot, "memory");
+    await pushMemory("memory/MEMORY.md", join(memoryRoot, "MEMORY.md"), "grok global memory");
+    await pushMemory("memory/USER.md", join(memoryRoot, "USER.md"), "grok global memory");
+  }
+
+  if (harnessId === "codex-cli") {
+    const memoriesRoot = join(globalRoot, "memories");
+    for (const rel of await listMemoryMarkdown(memoriesRoot)) {
+      await pushMemory(`memories/${rel}`, join(memoriesRoot, rel), "codex memories");
+    }
+  }
+
+  if (harnessId === "openclaw") {
+    const workspace = join(globalRoot, "workspace");
+    if (await dirExists(workspace)) {
+      await pushMemory("MEMORY.md", join(workspace, "MEMORY.md"), "openclaw workspace memory");
+      await pushMemory("USER.md", join(workspace, "USER.md"), "openclaw workspace memory");
+      const memDir = join(workspace, "memory");
+      for (const rel of await listMemoryMarkdown(memDir)) {
+        await pushMemory(`memory/${rel}`, join(memDir, rel), "openclaw workspace memory");
+      }
+    }
+  }
+
+  if (harnessId === "omp") {
+    const encoded = encodeDashPath(options.projectPath);
+    const memDir = join(globalRoot, "memories", encoded);
+    for (const rel of await listMemoryMarkdown(memDir)) {
+      await pushMemory(`memories/${encoded}/${rel}`, join(memDir, rel), "omp cwd memory");
+    }
+  }
+};
+
+const collectProjectMemories = async (options: {
+  readonly catalog: HarnessCatalog;
+  readonly projectPath: string;
+  readonly globalRoot: string;
+  readonly env: NodeJS.ProcessEnv;
+}): Promise<{
+  readonly files: ReadonlyArray<{ readonly abs: string; readonly rel: string }>;
+  readonly memoryRoot?: string;
+}> => {
+  const { catalog, projectPath, globalRoot } = options;
+  const files: Array<{ abs: string; rel: string }> = [];
+  let memoryRoot: string | undefined;
+
+  if (catalog.harness === "claude-code") {
+    const gitRoot = await resolveGitRoot(projectPath);
+    const encoded = encodeDashPath(gitRoot ?? projectPath);
+    const dir = join(globalRoot, "projects", encoded, "memory");
+    if (await dirExists(dir)) {
+      memoryRoot = dir;
+      for (const rel of await listMemoryMarkdown(dir)) {
+        files.push({ abs: join(dir, rel), rel: `memory/${rel}` });
+      }
+    }
+  }
+
+  if (catalog.harness === "grok") {
+    const grokMem = join(globalRoot, "memory");
+    if (await dirExists(grokMem)) {
+      const repoName = basename(projectPath).toLowerCase();
+      const names = await listDir(grokMem);
+      const workspaces: string[] = [];
+      for (const name of names) {
+        if (name.startsWith(".")) continue;
+        const abs = join(grokMem, name);
+        if (!(await dirExists(abs))) continue;
+        workspaces.push(name);
+      }
+      const matched = workspaces.filter((name) => {
+        const slug = grokWorkspaceSlug(name).toLowerCase();
+        return slug.includes(repoName) || name.toLowerCase().includes(repoName);
+      });
+      const chosen =
+        matched.length > 0 ? matched : workspaces.length === 1 ? workspaces : [];
+      if (chosen.length === 1) {
+        const dir = join(grokMem, chosen[0]!);
+        memoryRoot = dir;
+      }
+      for (const name of chosen) {
+        const dir = join(grokMem, name);
+        for (const rel of await listMemoryMarkdown(dir)) {
+          files.push({ abs: join(dir, rel), rel: `memory/${name}/${rel}` });
+        }
+      }
+    }
+  }
+
+  if (catalog.harness === "omp") {
+    const encoded = encodeDashPath(projectPath);
+    const dir = join(globalRoot, "memories", encoded);
+    if (await dirExists(dir)) {
+      memoryRoot = dir;
+      for (const rel of await listMemoryMarkdown(dir)) {
+        files.push({ abs: join(dir, rel), rel: `memories/${rel}` });
+      }
+    }
+  }
+
+  return { files, ...(memoryRoot !== undefined ? { memoryRoot } : {}) };
+};
+
+const PROJECT_SCAN_DIRS = [
+  "skills",
+  "hooks",
+  "plugins",
+  "commands",
+  "agents",
+  "memories",
+  "memory",
+] as const;
+
+const loadProjectScope = async (options: {
+  readonly catalog: HarnessCatalog;
+  readonly projectPath: string;
+  readonly globalRoot: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly prismHome: string;
+  readonly manifests: ReadonlyArray<SnapshotManifest>;
+  readonly markers: ReadonlyArray<string>;
+}): Promise<ProjectInventory | undefined> => {
+  const projectRootRel = options.catalog.projectRoot;
+  if (!projectRootRel) return undefined;
+  const projectRoot = resolve(options.projectPath, projectRootRel);
+  if (!(await dirExists(projectRoot))) return undefined;
+
+  const extra = await collectProjectMemories({
+    catalog: options.catalog,
+    projectPath: options.projectPath,
+    globalRoot: options.globalRoot,
+    env: options.env,
+  });
+
+  const isPrismNs = (p: string): boolean => options.markers.some((m) => p.includes(m));
+  const artifacts: ArtifactEntry[] = [];
+
+  const push = (
+    relativePath: string,
+    ownership: OwnershipKind,
+    targetPath: string,
+    extras: {
+      readonly plugin?: string;
+      readonly regionKey?: string;
+      readonly detail?: string;
+    } = {},
+  ): void => {
+    const classified = classifyRelativePath(relativePath, "owned", {
+      ...(extras.regionKey ? { regionKey: extras.regionKey } : {}),
+    });
+    artifacts.push({
+      id: artifactId({
+        targetPath,
+        ownership,
+        ...(extras.regionKey ? { regionKey: extras.regionKey } : {}),
+      }),
+      noun: classified.noun,
+      ownership,
+      targetPath,
+      relativePath,
+      label: classified.label,
+      ...(extras.plugin !== undefined ? { plugin: extras.plugin } : {}),
+      ...(extras.regionKey !== undefined ? { regionKey: extras.regionKey } : {}),
+      ...(extras.detail !== undefined ? { detail: extras.detail } : {}),
+      ...(classified.logicalKey !== undefined ? { logicalKey: classified.logicalKey } : {}),
+      ...(classified.siteKey !== undefined ? { siteKey: classified.siteKey } : {}),
+      ...(classified.role !== undefined ? { role: classified.role } : {}),
+    });
+  };
+
+  for (const manifest of options.manifests) {
+    for (const entry of manifest.entries) {
+      const abs = resolve(entry.targetPath);
+      if (!abs.startsWith(resolve(projectRoot) + "/") && abs !== resolve(projectRoot)) continue;
+      let rel: string;
+      try {
+        rel = relative(projectRoot, entry.targetPath).replaceAll("\\", "/");
+      } catch {
+        continue;
+      }
+      if (rel.startsWith("..")) continue;
+      const ownership: OwnershipKind = entry.mode === "owned" ? "prism-owned" : "prism-region";
+      push(rel, ownership, entry.targetPath, {
+        plugin: barePluginName(entry.plugin),
+        ...(entry.regionKey ? { regionKey: entry.regionKey } : {}),
+        detail: entry.mode === "region" ? "region" : undefined,
+      });
+    }
+  }
+
+  const snapshotPaths = new Set(artifacts.map((a) => resolve(a.targetPath)));
+
+  for (const dir of PROJECT_SCAN_DIRS) {
+    const base = join(projectRoot, dir);
+    if (!(await exists(base))) continue;
+    for (const rel of await listDirRecursive(base)) {
+      const absolute = resolve(join(base, rel));
+      if (snapshotPaths.has(absolute)) continue;
+      const relativePath = `${dir}/${rel}`.replaceAll("\\", "/");
+      const generated = extractGeneratedPlugin(relativePath);
+      const ownership: OwnershipKind =
+        generated !== undefined || isPrismNs(relativePath) ? "prism-namespace" : "foreign";
+      const isSkillMd = rel.endsWith("SKILL.md");
+      const isSkillSupportMd =
+        relativePath.startsWith("skills/") && rel.endsWith(".md") && !rel.endsWith("SKILL.md");
+      const isHook = isHookArtifactPath(relativePath);
+      const isRulesMd =
+        /(^|\/)(?:CLAUDE|AGENTS)\.md$/u.test(relativePath);
+      const isMemory = isMemoryRelativePath(relativePath);
+      if (!isSkillMd && !isSkillSupportMd && !isHook && !isRulesMd && !isMemory) continue;
+      push(relativePath, ownership, absolute, {
+        ...(generated ? { plugin: generated } : {}),
+        detail: ownership === "prism-namespace" ? "unledgered" : "project-local",
+      });
+    }
+  }
+
+  for (const sf of options.catalog.settingsFiles) {
+    if (sf.path.includes("..") || sf.path.includes("*")) continue;
+    if (sf.path.startsWith("~") || sf.path.startsWith("/")) continue;
+    const rel = sf.path.replaceAll("\\", "/").replace(/^\.\//u, "");
+    const absolute = resolve(join(projectRoot, rel));
+    if (!(await exists(absolute))) continue;
+    if (artifacts.some((a) => resolve(a.targetPath) === absolute)) continue;
+    push(rel, "foreign", absolute, { detail: "project settings" });
+  }
+
+  for (const extraFile of extra.files) {
+    if (artifacts.some((a) => resolve(a.targetPath) === resolve(extraFile.abs))) continue;
+    push(extraFile.rel, "foreign", extraFile.abs, { detail: "generated memory" });
+  }
+
+  artifacts.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  const groups = groupArtifacts(artifacts);
+  const counts = emptyCounts();
+  for (const group of groups) counts[group.noun] += 1;
+
+  const identityFiles: ConfigFileEntry[] = [];
+  const memoryFiles: ConfigFileEntry[] = [];
+  const seenMemory = new Set<string>();
+  for (const extraFile of extra.files) {
+    seenMemory.add(resolve(extraFile.abs));
+    memoryFiles.push(await memoryConfigEntry(extraFile.rel, extraFile.abs, true));
+  }
+  for (const entry of artifacts) {
+    if (entry.noun !== "memory") continue;
+    const abs = resolve(entry.targetPath);
+    if (seenMemory.has(abs)) continue;
+    seenMemory.add(abs);
+    memoryFiles.push(await memoryConfigEntry(entry.relativePath, entry.targetPath, true));
+  }
+
+  const projectCatalog: HarnessCatalog = {
+    ...options.catalog,
+    displayName: `${options.catalog.displayName} · project`,
+    globalRoot: projectRoot,
+    projectRoot: null,
+    scanDirs: [...PROJECT_SCAN_DIRS],
+  };
+  const config = await buildConfigOverview(projectCatalog, projectRoot);
+
+  const rootName = basename(projectRootRel.replace(/\/$/u, "")) || options.catalog.harness;
+  const summary: ProfileSummary = {
+    id: options.catalog.harness,
+    displayName: rootName,
+    root: projectRoot,
+    rootExists: true,
+    counts,
+    config,
+    identityFiles,
+    kind: "project",
+    memoryFiles,
+    ...(extra.memoryRoot !== undefined ? { memoryRoot: extra.memoryRoot } : {}),
+  };
+
+  return { summary, artifacts, groups };
+};
+
 /**
  * Load configure inventory for all catalogue harnesses (global roots).
  */
@@ -1027,6 +1519,7 @@ export const loadConfigureInventory = async (options: {
 } = {}): Promise<ConfigureInventory> => {
   const prismHome = options.prismHome ?? resolvePrismHome();
   const env = options.env ?? process.env;
+  const projectPath = resolve(options.projectPath ?? process.cwd());
   const manifests = await listSnapshotManifests(prismHome);
   const toolRuntimePlugins = await listToolRuntimePlugins(prismHome);
 
@@ -1046,6 +1539,7 @@ export const loadConfigureInventory = async (options: {
       manifests,
       toolRuntimePlugins,
       env,
+      projectPath,
       attachToolRuntime,
     });
     if (attachToolRuntime) attachedTools = true;

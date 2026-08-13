@@ -3,9 +3,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { encodeSnapshotManifest, type SnapshotManifest } from "../state/snapshot.js";
 import { snapshotPath } from "../state/store.js";
+import { resolve } from "node:path";
 import {
   barePluginName,
   classifyRelativePath,
+  encodeDashPath,
   extractGeneratedPlugin,
   groupArtifacts,
   isHookArtifactPath,
@@ -273,6 +275,9 @@ describe("loadConfigureInventory", () => {
     expect(nova.summary.counts.soul).toBe(1);
     expect(nova.summary.counts.memory).toBeGreaterThanOrEqual(1);
     expect(nova.summary.counts.identity).toBeGreaterThanOrEqual(1);
+    expect(nova.summary.kind).toBe("profile");
+    expect(nova.summary.identityFiles.some((f) => f.label === "MEMORY.md")).toBe(false);
+    expect(nova.summary.memoryFiles?.some((f) => f.label === "MEMORY.md")).toBe(true);
     // Profile paths relative to profile root
     expect(nova.artifacts.every((a) => !a.relativePath.startsWith("profiles/"))).toBe(true);
     expect(nova.artifacts.some((a) => a.relativePath === "SOUL.md")).toBe(true);
@@ -362,5 +367,99 @@ describe("loadConfigureInventory", () => {
       // wrapper .sh under plugin cache is not a separate group
       expect(hookLabels.some((l) => l.includes("groundwork.sh"))).toBe(false);
     }
+  });
+
+  test("classifies memory/ and memories/ markdown, not session jsonl", () => {
+    expect(classifyRelativePath("memory/foo.md", "owned").noun).toBe("memory");
+    expect(classifyRelativePath("memories/MEMORY.md", "owned").noun).toBe("memory");
+    expect(classifyRelativePath("projects/x/memory/MEMORY.md", "owned").noun).toBe("memory");
+    expect(classifyRelativePath("MEMORY.md", "owned").noun).toBe("memory");
+    expect(classifyRelativePath("workspace/USER.md", "owned").noun).toBe("memory");
+    expect(classifyRelativePath("session.jsonl", "owned").noun).not.toBe("memory");
+    expect(classifyRelativePath("projects/x/abc.jsonl", "owned").noun).not.toBe("memory");
+    expect(classifyRelativePath("memories/foo.jsonl", "owned").noun).not.toBe("memory");
+    expect(classifyRelativePath("CLAUDE.md", "owned").noun).toBe("rules");
+    expect(classifyRelativePath("AGENTS.md", "owned").noun).not.toBe("memory");
+  });
+
+  test("projectPath loads empty .claude/ as a project scope", async () => {
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    const root = await fs.mkdtemp(join(os.tmpdir(), "prism-configure-proj-"));
+    const prismHome = join(root, "prism-home");
+    const projectPath = join(root, "repo");
+    await mkdir(join(projectPath, ".claude"), { recursive: true });
+
+    const inv = await loadConfigureInventory({
+      prismHome,
+      harness: "claude-code",
+      projectPath,
+      env: { ...process.env, HOME: root, PRISM_HOME: prismHome },
+    });
+    const claude = inv.byHarness["claude-code"];
+    expect(claude).toBeDefined();
+    expect(claude!.projects?.length).toBe(1);
+    const project = claude!.projects![0]!;
+    expect(project.summary.kind).toBe("project");
+    expect(project.summary.id).toBe("claude-code");
+    expect(project.summary.root).toBe(resolve(join(projectPath, ".claude")));
+    expect(claude!.summary.projectPath).toBe(resolve(projectPath));
+    expect(claude!.summary.projectCount).toBe(1);
+  });
+
+  test("attaches Claude projects/<encoded>/memory and skips session jsonl", async () => {
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    const root = await fs.mkdtemp(join(os.tmpdir(), "prism-configure-cmem-"));
+    const prismHome = join(root, "prism-home");
+    const projectPath = join(root, "work", "prism-app");
+    await mkdir(join(projectPath, ".claude"), { recursive: true });
+    const encoded = encodeDashPath(projectPath);
+    const memDir = join(root, ".claude", "projects", encoded, "memory");
+    await mkdir(memDir, { recursive: true });
+    await writeFile(join(memDir, "MEMORY.md"), "# claude mem\n");
+    await writeFile(join(root, ".claude", "projects", encoded, "session.jsonl"), "{}\n");
+
+    const inv = await loadConfigureInventory({
+      prismHome,
+      harness: "claude-code",
+      projectPath,
+      env: { ...process.env, HOME: root, PRISM_HOME: prismHome },
+    });
+    const claude = inv.byHarness["claude-code"]!;
+    const project = claude.projects![0]!;
+    expect(project.artifacts.some((a) => a.noun === "memory" && a.label === "MEMORY.md")).toBe(
+      true,
+    );
+    expect(project.summary.counts.memory).toBeGreaterThanOrEqual(1);
+    expect(project.summary.memoryFiles?.some((f) => f.path.endsWith("MEMORY.md"))).toBe(true);
+    expect(project.summary.memoryRoot).toBe(memDir);
+    expect(project.artifacts.some((a) => a.relativePath.endsWith(".jsonl"))).toBe(false);
+    expect(claude.artifacts.some((a) => a.relativePath.endsWith(".jsonl"))).toBe(false);
+    expect(classifyRelativePath(`projects/${encoded}/memory/MEMORY.md`, "owned").noun).toBe(
+      "memory",
+    );
+  });
+
+  test("projectPath is unused-safe when harness projectRoot is null", async () => {
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    const root = await fs.mkdtemp(join(os.tmpdir(), "prism-configure-nproj-"));
+    const prismHome = join(root, "prism-home");
+    const projectPath = join(root, "repo");
+    await mkdir(projectPath, { recursive: true });
+    await mkdir(join(root, ".hermes"), { recursive: true });
+
+    const inv = await loadConfigureInventory({
+      prismHome,
+      harness: "hermes",
+      projectPath,
+      env: { ...process.env, HOME: root, PRISM_HOME: prismHome },
+    });
+    const hermes = inv.byHarness["hermes"];
+    expect(hermes).toBeDefined();
+    expect(hermes!.projects ?? []).toEqual([]);
+    expect(hermes!.summary.projectCount).toBeUndefined();
+    expect(hermes!.summary.projectPath).toBe(resolve(projectPath));
   });
 });

@@ -18,6 +18,14 @@ describe("viewFromNavItem", () => {
     expect(
       viewFromNavItem({ id: "profile:hermes:ada", kind: "profile", profileId: "ada", label: "ada" }),
     ).toEqual({ kind: "summary" });
+    expect(
+      viewFromNavItem({
+        id: "project:claude-code:app",
+        kind: "project",
+        projectId: "app",
+        label: "app",
+      }),
+    ).toEqual({ kind: "summary" });
   });
 
   test("section summary vs other", () => {
@@ -37,6 +45,14 @@ describe("viewFromNavItem", () => {
         label: "Skills",
       }),
     ).toEqual({ kind: "section", section: "skills" });
+    expect(
+      viewFromNavItem({
+        id: "s",
+        kind: "section",
+        section: "memories",
+        label: "Memories",
+      }),
+    ).toEqual({ kind: "section", section: "memories" });
   });
 });
 
@@ -73,6 +89,30 @@ describe("parentNavId", () => {
       ),
     ).toBe("section:claude-code:plugins");
   });
+
+  test("project section → project row", () => {
+    expect(
+      parentNavId(
+        {
+          id: "section:claude-code:project:app:memories",
+          kind: "section",
+          section: "memories",
+          projectId: "app",
+          label: "Memories",
+        },
+        { expandedHarness: "claude-code" },
+      ),
+    ).toBe("project:claude-code:app");
+  });
+
+  test("project row → harness", () => {
+    expect(
+      parentNavId(
+        { id: "project:claude-code:app", kind: "project", projectId: "app", label: "app" },
+        { expandedHarness: "claude-code" },
+      ),
+    ).toBe("harness:claude-code");
+  });
 });
 
 describe("navBackFromNavFocus", () => {
@@ -100,12 +140,26 @@ describe("navBackFromNavFocus", () => {
     section: "skills",
     label: "Skills",
   };
+  const project: ConfigureNavItem = {
+    id: "project:claude-code:app",
+    kind: "project",
+    projectId: "app",
+    label: "app",
+  };
+  const projectMemories: ConfigureNavItem = {
+    id: "section:claude-code:project:app:memories",
+    kind: "section",
+    section: "memories",
+    projectId: "app",
+    label: "Memories",
+  };
 
   test("profile section → move to profile", () => {
     expect(
       navBackFromNavFocus(profileSkills, {
         expandedHarness: "hermes",
         expandedProfile: "ada07",
+        expandedProject: null,
         pluginsExpanded: false,
       }),
     ).toEqual({ action: "move", navId: "profile:hermes:ada07" });
@@ -116,6 +170,7 @@ describe("navBackFromNavFocus", () => {
       navBackFromNavFocus(profile, {
         expandedHarness: "hermes",
         expandedProfile: "ada07",
+        expandedProject: null,
         pluginsExpanded: false,
       }),
     ).toEqual({ action: "collapse-profile" });
@@ -126,6 +181,7 @@ describe("navBackFromNavFocus", () => {
       navBackFromNavFocus(sharedSkills, {
         expandedHarness: "hermes",
         expandedProfile: null,
+        expandedProject: null,
         pluginsExpanded: false,
       }),
     ).toEqual({ action: "move", navId: "harness:hermes" });
@@ -136,9 +192,43 @@ describe("navBackFromNavFocus", () => {
       navBackFromNavFocus(harness, {
         expandedHarness: "hermes",
         expandedProfile: null,
+        expandedProject: null,
         pluginsExpanded: false,
       }),
     ).toEqual({ action: "collapse-harness" });
+  });
+
+  test("project section → move to project", () => {
+    expect(
+      navBackFromNavFocus(projectMemories, {
+        expandedHarness: "claude-code",
+        expandedProfile: null,
+        expandedProject: "app",
+        pluginsExpanded: false,
+      }),
+    ).toEqual({ action: "move", navId: "project:claude-code:app" });
+  });
+
+  test("expanded project row → collapse project", () => {
+    expect(
+      navBackFromNavFocus(project, {
+        expandedHarness: "claude-code",
+        expandedProfile: null,
+        expandedProject: "app",
+        pluginsExpanded: false,
+      }),
+    ).toEqual({ action: "collapse-project" });
+  });
+
+  test("collapsed project row → harness", () => {
+    expect(
+      navBackFromNavFocus(project, {
+        expandedHarness: "claude-code",
+        expandedProfile: null,
+        expandedProject: null,
+        pluginsExpanded: false,
+      }),
+    ).toEqual({ action: "move", navId: "harness:claude-code" });
   });
 });
 

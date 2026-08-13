@@ -1,6 +1,6 @@
 /**
- * Configure TUI (POC: claude-code) — inspect Prism-managed harness inventory
- * and uninstall plugins / delete owned or stray paths.
+ * Configure TUI — inspect Prism-managed harness inventory, project/profile
+ * scopes, memories, and uninstall plugins / delete owned or stray paths.
  */
 
 import { createCliRenderer } from "@opentui/core";
@@ -18,6 +18,7 @@ import {
 import type {
   ArtifactEntry,
   ArtifactGroup,
+  ConfigFileEntry,
   ConfigureInventory,
   HarnessPresence,
   HarnessSummary,
@@ -26,6 +27,7 @@ import type {
   PluginSummary,
   ProfileInventory,
   ProfileSummary,
+  ProjectInventory,
   SectionId,
 } from "../model.js";
 import {
@@ -92,6 +94,7 @@ const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
   { id: "rules", label: "Rules" },
   { id: "bundles", label: "Bundles" },
   { id: "identity", label: "Identity" },
+  { id: "memories", label: "Memories" },
   { id: "other", label: "Other" },
 ];
 
@@ -102,8 +105,30 @@ const PROFILE_SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
   { id: "skills", label: "Skills" },
   { id: "hooks", label: "Hooks" },
   { id: "identity", label: "Identity" },
+  { id: "memories", label: "Memories" },
   { id: "other", label: "Other" },
 ];
+
+/** Sections shown under a project-local harness root. */
+const PROJECT_SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
+  { id: "summary", label: "Summary" },
+  { id: "config", label: "Config" },
+  { id: "skills", label: "Skills" },
+  { id: "memories", label: "Memories" },
+  { id: "rules", label: "Rules" },
+  { id: "identity", label: "Identity" },
+  { id: "other", label: "Other" },
+];
+
+/** Always offer Memories on these harnesses, even when the count is still 0. */
+const MEMORY_NAV_HARNESSES: ReadonlySet<string> = new Set([
+  "hermes",
+  "claude-code",
+  "grok",
+  "codex-cli",
+  "openclaw",
+  "omp",
+]);
 
 type ScrollEvt = { readonly scroll?: { readonly direction?: string } };
 const scrollDelta = (event: ScrollEvt): number =>
@@ -149,6 +174,24 @@ const ownershipGlyph = (o: OwnershipKind): { glyph: string; color: string } => {
   }
 };
 
+const identitySectionCount = (
+  counts: Pick<HarnessSummary["counts"], "soul" | "identity">,
+): number => (counts.soul ?? 0) + (counts.identity ?? 0);
+
+const memoriesSectionCount = (
+  summary: Pick<HarnessSummary, "counts"> | ProfileSummary,
+): number => {
+  const fromCounts = summary.counts.memory ?? 0;
+  const fromFiles =
+    "memoryFiles" in summary && Array.isArray(summary.memoryFiles)
+      ? summary.memoryFiles.length
+      : 0;
+  return Math.max(fromCounts, fromFiles);
+};
+
+const showMemoriesSection = (harness: string, count: number): boolean =>
+  count > 0 || MEMORY_NAV_HARNESSES.has(harness);
+
 const sectionCount = (
   summary: Pick<HarnessSummary, "counts" | "plugins" | "config"> | ProfileSummary,
   section: SectionId,
@@ -165,14 +208,14 @@ const sectionCount = (
   if (section === "rules") return summary.counts.rules;
   if (section === "bundles") return summary.counts.bundle;
   if (section === "identity") {
-    return summary.counts.soul + summary.counts.memory + summary.counts.identity;
+    return identitySectionCount(summary.counts);
+  }
+  if (section === "memories") {
+    return memoriesSectionCount(summary);
   }
   if (section === "other") return summary.counts.other + summary.counts["tool-runtime"];
   return 0;
 };
-
-const identitySectionCount = (counts: HarnessSummary["counts"]): number =>
-  counts.soul + counts.memory + counts.identity;
 
 const findArtifact = (
   artifacts: ReadonlyArray<ArtifactEntry>,
@@ -227,11 +270,11 @@ function NavList({
         const indent =
           item.kind === "harness"
             ? ""
-            : item.kind === "profile"
+            : item.kind === "profile" || item.kind === "project"
               ? "  "
               : item.kind === "plugin"
                 ? "      "
-                : item.kind === "section" && item.profileId
+                : item.kind === "section" && (item.profileId || item.projectId)
                   ? "    "
                   : "  ";
         const color =
@@ -239,7 +282,7 @@ function NavList({
             ? selected
               ? PALETTE.fgBright
               : PALETTE.accentBright
-            : item.kind === "profile"
+            : item.kind === "profile" || item.kind === "project"
               ? selected
                 ? PALETTE.fgBright
                 : PALETTE.cyan
@@ -439,14 +482,19 @@ function SummaryDetail({
   duplicateCount,
   profileCount,
   profiles,
+  projectCount,
+  projects,
 }: {
   readonly summary: HarnessSummary;
   readonly duplicateCount: number;
   readonly profileCount?: number;
   readonly profiles?: ReadonlyArray<ProfileInventory>;
+  readonly projectCount?: number;
+  readonly projects?: ReadonlyArray<ProjectInventory>;
 }) {
   const mark = harnessMark(summary.harness);
   const identityN = identitySectionCount(summary.counts);
+  const memoryN = memoriesSectionCount(summary);
   return (
     <box style={{ flexDirection: "column", width: "100%" }}>
       <Row
@@ -463,6 +511,9 @@ function SummaryDetail({
       <Row content={`snap    ${summary.snapshotEntryCount} entries`} />
       {profileCount !== undefined && profileCount > 0 ? (
         <Row content={`profiles ${profileCount}  (expand under nav)`} fg={PALETTE.cyan} />
+      ) : null}
+      {projectCount !== undefined && projectCount > 0 ? (
+        <Row content={`projects ${projectCount}  (expand under nav)`} fg={PALETTE.cyan} />
       ) : null}
       <Row
         content={
@@ -483,6 +534,7 @@ function SummaryDetail({
           ["hooks", summary.counts.hook],
           ["rules", summary.counts.rules],
           ["identity", identityN],
+          ["memories", memoryN],
           ["bundles", summary.counts.bundle],
           ["other", summary.counts.other + summary.counts["tool-runtime"]],
         ] as const
@@ -509,6 +561,22 @@ function SummaryDetail({
           ) : null}
         </>
       ) : null}
+      {projects && projects.length > 0 ? (
+        <>
+          <Row content="" />
+          <Row content={`PROJECTS (${projects.length})`} fg={PALETTE.fgMuted} />
+          {projects.slice(0, 16).map((p) => (
+            <Row
+              key={p.summary.id}
+              content={`  ${truncate(p.summary.id, 16).padEnd(16)}  sk ${p.summary.counts.skill}  mem ${memoriesSectionCount(p.summary)}  id ${identitySectionCount(p.summary.counts)}`}
+              fg={PALETTE.cyan}
+            />
+          ))}
+          {projects.length > 16 ? (
+            <Row content={`  +${projects.length - 16} more`} fg={PALETTE.fgDim} />
+          ) : null}
+        </>
+      ) : null}
       <Row content="" />
       <Row content={`PLUGINS (${summary.plugins.length})`} fg={PALETTE.fgMuted} />
       {summary.plugins.length === 0 ? (
@@ -528,20 +596,71 @@ function SummaryDetail({
   );
 }
 
-function ProfileSummaryDetail({
-  profile,
-  duplicateCount,
+function FileEntryRow({
+  file,
+  onOpen,
 }: {
-  readonly profile: ProfileInventory;
-  readonly duplicateCount: number;
+  readonly file: ConfigFileEntry;
+  readonly onOpen?: (path: string, title: string) => void;
 }) {
-  const s = profile.summary;
+  const line = `  ${file.exists ? "●" : "○"} ${truncate(file.label, 22).padEnd(22)}${file.exists && file.sizeBytes !== undefined ? ` ${file.sizeBytes}b` : " —"}`;
+  if (onOpen && file.exists) {
+    return (
+      <box
+        onMouseDown={() => onOpen(file.path, file.label)}
+        style={{ height: 1, width: "100%", flexDirection: "row" }}
+      >
+        <text content={line} style={{ fg: PALETTE.fg, wrapMode: "none" }} />
+      </box>
+    );
+  }
+  return <Row content={line} fg={file.exists ? PALETTE.fg : PALETTE.fgDim} />;
+}
+
+function ScopeSummaryDetail({
+  scope,
+  variant,
+  duplicateCount,
+  onOpenFile,
+}: {
+  readonly scope: ProfileInventory;
+  readonly variant: "profile" | "project";
+  readonly duplicateCount: number;
+  readonly onOpenFile: (path: string, title: string) => void;
+}) {
+  const s = scope.summary;
   const identityN = identitySectionCount(s.counts);
+  const memoryN = memoriesSectionCount(s);
+  const memoryFiles = s.memoryFiles ?? [];
+  const countRows =
+    variant === "project"
+      ? ([
+          ["skills", s.counts.skill],
+          ["memories", memoryN],
+          ["rules", s.counts.rules],
+          ["identity", identityN],
+          ["other", s.counts.other],
+        ] as const)
+      : ([
+          ["skills", s.counts.skill],
+          ["hooks", s.counts.hook],
+          ["identity", identityN],
+          ["memories", memoryN],
+          ["other", s.counts.other],
+        ] as const);
   return (
     <box style={{ flexDirection: "column", width: "100%" }}>
-      <Row content={`◎ Hermes profile  ${s.displayName}`} fg={PALETTE.fgBright} />
+      <Row
+        content={
+          variant === "project"
+            ? `▣ Project  ${s.displayName}`
+            : `◎ Hermes profile  ${s.displayName}`
+        }
+        fg={PALETTE.fgBright}
+      />
       <Row content="" />
       <WrapText content={`root    ${s.root}`} />
+      {s.memoryRoot ? <WrapText content={`memory  ${s.memoryRoot}`} fg={PALETTE.fgDim} /> : null}
       <Row
         content={
           duplicateCount > 0
@@ -551,30 +670,87 @@ function ProfileSummaryDetail({
         fg={duplicateCount > 0 ? PALETTE.yellow : PALETTE.fg}
       />
       <Row content="" />
-      <Row content="COUNTS (profile-local only)" fg={PALETTE.fgMuted} />
-      {(
-        [
-          ["skills", s.counts.skill],
-          ["hooks", s.counts.hook],
-          ["identity", identityN],
-          ["other", s.counts.other],
-        ] as const
-      ).map(([label, n]) => (
+      <Row
+        content={variant === "project" ? "COUNTS (project-local only)" : "COUNTS (profile-local only)"}
+        fg={PALETTE.fgMuted}
+      />
+      {countRows.map(([label, n]) => (
         <Row
           key={label}
           content={`  ${label.padEnd(10)}${String(n)}`}
           fg={n === 0 ? PALETTE.fgDim : PALETTE.fg}
         />
       ))}
-      <Row content="" />
-      <Row content="IDENTITY FILES" fg={PALETTE.fgMuted} />
-      {s.identityFiles.map((f) => (
-        <Row
-          key={f.id}
-          content={`  ${f.exists ? "●" : "○"} ${truncate(f.label, 22).padEnd(22)}${f.exists && f.sizeBytes !== undefined ? ` ${f.sizeBytes}b` : " —"}`}
-          fg={f.exists ? PALETTE.fg : PALETTE.fgDim}
-        />
-      ))}
+      {(s.identityFiles ?? []).length > 0 ? (
+        <>
+          <Row content="" />
+          <Row content="IDENTITY FILES" fg={PALETTE.fgMuted} />
+          {(s.identityFiles ?? []).map((f) => (
+            <FileEntryRow key={f.id} file={f} onOpen={onOpenFile} />
+          ))}
+        </>
+      ) : null}
+      {memoryFiles.length > 0 ? (
+        <>
+          <Row content="" />
+          <Row content="MEMORY FILES  ·  click / enter from Memories" fg={PALETTE.fgMuted} />
+          {memoryFiles.map((f) => (
+            <FileEntryRow key={f.id} file={f} onOpen={onOpenFile} />
+          ))}
+        </>
+      ) : null}
+    </box>
+  );
+}
+
+function MemoryFileRows({
+  files,
+  cursor,
+  windowSize,
+  focused,
+  onSelect,
+  onScroll,
+}: {
+  readonly files: ReadonlyArray<ConfigFileEntry>;
+  readonly cursor: number;
+  readonly windowSize: number;
+  readonly focused: boolean;
+  readonly onSelect: (index: number) => void;
+  readonly onScroll: (delta: number) => void;
+}) {
+  if (files.length === 0) {
+    return <text content="(no memory files)" style={{ fg: PALETTE.fgDim }} />;
+  }
+  const win = windowAround(files, cursor, windowSize);
+  return (
+    <box
+      onMouseScroll={(event: ScrollEvt) => {
+        const delta = scrollDelta(event);
+        if (delta !== 0) onScroll(delta);
+      }}
+      style={{ flexDirection: "column", height: "100%" }}
+    >
+      {win.above > 0 ? <text content={`  +${win.above} more above`} style={{ fg: PALETTE.fgDim }} /> : null}
+      {win.slice.map(({ item, index }) => {
+        const selected = focused && index === cursor;
+        const size =
+          item.exists && item.sizeBytes !== undefined ? `  ${item.sizeBytes}b` : item.exists ? "" : "  —";
+        return (
+          <box
+            key={item.id}
+            onMouseDown={() => onSelect(index)}
+            style={{ height: 1, flexDirection: "row", ...(selected ? { backgroundColor: SEL_BG } : {}) }}
+          >
+            <text>
+              <span fg={selected ? PALETTE.fgBright : PALETTE.fgDim}>{selected ? "› " : "  "}</span>
+              <span fg={item.exists ? PALETTE.ok : PALETTE.fgDim}>{item.exists ? "● " : "○ "}</span>
+              <span fg={selected ? PALETTE.fgBright : PALETTE.fg}>{truncate(item.label, 32)}</span>
+              <span fg={PALETTE.fgDim}>{size}</span>
+            </text>
+          </box>
+        );
+      })}
+      {win.below > 0 ? <text content={`  +${win.below} more below`} style={{ fg: PALETTE.fgDim }} /> : null}
     </box>
   );
 }
@@ -870,6 +1046,7 @@ function Footer({
   error,
   status,
   width,
+  viewingMemories,
 }: {
   readonly focus: Focus;
   readonly view: View;
@@ -879,6 +1056,7 @@ function Footer({
   readonly status: string | null;
   /** Full terminal width — used for explicit column wrap. */
   readonly width: number;
+  readonly viewingMemories?: boolean;
 }) {
   const hints: ReadonlyArray<readonly [string, string]> =
     focus === "detail"
@@ -967,6 +1145,14 @@ function Footer({
           ) : null}
         </box>
       )}
+      {viewingMemories && confirm === null && error === null ? (
+        <box style={{ height: 1, width: "100%", flexDirection: "row" }}>
+          <text
+            content="Memories are generated files — session bugs land here."
+            style={{ fg: PALETTE.fgDim, wrapMode: "none" }}
+          />
+        </box>
+      ) : null}
     </box>
   );
 }
@@ -1001,6 +1187,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   const [expandedHarness, setExpandedHarness] = useState<string | null>(null);
   /** Hermes: which profile is expanded under the hermes harness. */
   const [expandedProfile, setExpandedProfile] = useState<string | null>(null);
+  /** Which project-local root is expanded under the focused harness. */
+  const [expandedProject, setExpandedProject] = useState<string | null>(null);
   /** Which harness detail panel shows (follows expand, or last opened). */
   const [focusedHarness, setFocusedHarness] = useState<string | null>(null);
   const [metaByPath, setMetaByPath] = useState<ReadonlyMap<string, string>>(new Map());
@@ -1072,8 +1260,10 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       const open = expandedHarness === h.harness;
       const det = inventory.byHarness[h.harness as keyof typeof inventory.byHarness];
       const profileN = det?.profiles?.length ?? h.profileCount ?? 0;
-      const harnessLabelExtra =
-        h.harness === "hermes" && profileN > 0 ? ` ·${profileN}p` : "";
+      const projectN = det?.projects?.length ?? h.projectCount ?? 0;
+      const harnessLabelExtra = `${
+        h.harness === "hermes" && profileN > 0 ? ` ·${profileN}p` : ""
+      }${projectN > 0 ? ` ·${projectN}proj` : ""}`;
       items.push({
         id: `harness:${h.harness}`,
         kind: "harness",
@@ -1083,21 +1273,13 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       if (!open) continue;
       const sum = det?.summary ?? h;
       for (const s of SECTIONS) {
-        // Hide Identity on non-hermes / empty
+        // Identity stays Hermes-only unless another harness actually has soul/identity files
         if (s.id === "identity" && h.harness !== "hermes" && sectionCount(sum, "identity") === 0) {
           continue;
         }
         const count = sectionCount(sum, s.id);
-        // Skip zero-count noise sections on shared root (except always-visible)
-        if (
-          count === 0 &&
-          s.id !== "summary" &&
-          s.id !== "config" &&
-          s.id !== "plugins" &&
-          s.id !== "skills" &&
-          s.id !== "identity"
-        ) {
-          // still show skills/identity even if 0 for hermes context
+        if (s.id === "memories" && !showMemoriesSection(h.harness, count)) {
+          continue;
         }
         items.push({
           id: `section:${h.harness}:${s.id}`,
@@ -1145,9 +1327,41 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           }
         }
       }
+      // Project-local roots — same expand/collapse UX as Hermes profiles
+      for (const proj of det?.projects ?? []) {
+        const jOpen = expandedProject === proj.summary.id;
+        const sk = proj.summary.counts.skill;
+        items.push({
+          id: `project:${h.harness}:${proj.summary.id}`,
+          kind: "project",
+          projectId: proj.summary.id,
+          label: `${jOpen ? "▾" : "▸"} ${truncate(proj.summary.id, 14)} ·${sk}sk`,
+        });
+        if (!jOpen) continue;
+        for (const s of PROJECT_SECTIONS) {
+          const count = sectionCount(proj.summary, s.id);
+          if (s.id === "identity" && identitySectionCount(proj.summary.counts) === 0) {
+            continue;
+          }
+          if (s.id === "memories" && !showMemoriesSection(h.harness, count)) {
+            continue;
+          }
+          items.push({
+            id: `section:${h.harness}:project:${proj.summary.id}:${s.id}`,
+            kind: "section",
+            section: s.id,
+            projectId: proj.summary.id,
+            label:
+              s.id === "summary" || s.id === "config"
+                ? s.label
+                : `${s.label} (${count})`,
+            ...(s.id !== "summary" && s.id !== "config" ? { count } : {}),
+          });
+        }
+      }
     }
     return items;
-  }, [inventory, expandedHarness, expandedProfile, pluginsExpanded]);
+  }, [inventory, expandedHarness, expandedProfile, expandedProject, pluginsExpanded]);
 
   // Keep nav cursor in range when items change — do NOT reset to 0 on expand
   useEffect(() => {
@@ -1156,19 +1370,29 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
 
   const selectedNav = navItems[navCursor];
 
-  // Scope lists only when nav is on a profile row or a profile-scoped section.
-  // expandedProfile only controls which profile tree is open in the nav.
+  // Scope lists only when nav is on a profile/project row or a scoped section.
+  // expandedProfile / expandedProject only control which tree is open in the nav.
   const navProfileId =
     selectedNav?.kind === "profile"
       ? selectedNav.profileId
       : selectedNav?.kind === "section"
         ? selectedNav.profileId
         : undefined;
+  const navProjectId =
+    selectedNav?.kind === "project"
+      ? selectedNav.projectId
+      : selectedNav?.kind === "section"
+        ? selectedNav.projectId
+        : undefined;
   const activeProfile: ProfileInventory | undefined = navProfileId
     ? harnessDetail?.profiles?.find((p) => p.summary.id === navProfileId)
     : undefined;
+  const activeProject: ProjectInventory | undefined = navProjectId
+    ? harnessDetail?.projects?.find((p) => p.summary.id === navProjectId)
+    : undefined;
+  const activeScope = activeProfile ?? activeProject;
 
-  /** Scope for lists/counts: profile when nav is on a profile subtree, else shared. */
+  /** Scope for lists/counts: profile/project when nav is on that subtree, else shared. */
   const summary = activeProfile
     ? ({
         harness: "hermes" as const,
@@ -1181,9 +1405,22 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         counts: activeProfile.summary.counts,
         config: activeProfile.summary.config,
       } satisfies HarnessSummary)
-    : harnessSummary;
-  const artifacts = activeProfile?.artifacts ?? harnessDetail?.artifacts ?? [];
-  const groups = activeProfile?.groups ?? harnessDetail?.groups ?? [];
+    : activeProject
+      ? ({
+          harness: activeHarnessId as HarnessSummary["harness"],
+          displayName: `${harnessSummary?.displayName ?? activeHarnessId} · ${activeProject.summary.displayName}`,
+          presence: "present" as const,
+          globalRoot: activeProject.summary.root,
+          rootExists: activeProject.summary.rootExists,
+          snapshotEntryCount: 0,
+          plugins: [],
+          counts: activeProject.summary.counts,
+          config: activeProject.summary.config,
+        } satisfies HarnessSummary)
+      : harnessSummary;
+  const artifacts = activeScope?.artifacts ?? harnessDetail?.artifacts ?? [];
+  const groups = activeScope?.groups ?? harnessDetail?.groups ?? [];
+  const memoryFiles = activeScope?.summary.memoryFiles ?? [];
   const duplicateCount = useMemo(
     () => groups.filter((g) => g.isDuplicate).length,
     [groups],
@@ -1221,7 +1458,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         pickOptions: [...view.options],
       };
     }
-    if (view.kind === "section" && view.section === "plugins" && summary && !activeProfile) {
+    if (view.kind === "section" && view.section === "plugins" && summary && !activeScope) {
       return {
         mode: "plugins" as const,
         plugins: summary.plugins,
@@ -1270,20 +1507,29 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       configKeys: [],
       pickOptions: [] as string[],
     };
-  }, [view, groups, summary, configKeys, activeProfile]);
+  }, [view, groups, summary, configKeys, activeScope]);
+
+  const memoriesFallback =
+    view.kind === "section" &&
+    view.section === "memories" &&
+    detailList.mode === "groups" &&
+    detailList.groups.length === 0 &&
+    memoryFiles.length > 0;
 
   const detailLen =
-    detailList.mode === "plugins"
-      ? detailList.plugins.length
-      : detailList.mode === "groups"
-        ? detailList.groups.length
-        : detailList.mode === "locations"
-          ? detailList.locations.length
-          : detailList.mode === "config"
-            ? detailList.configKeys.length
-            : detailList.mode === "pick"
-              ? detailList.pickOptions.length
-              : 0;
+    memoriesFallback
+      ? memoryFiles.length
+      : detailList.mode === "plugins"
+        ? detailList.plugins.length
+        : detailList.mode === "groups"
+          ? detailList.groups.length
+          : detailList.mode === "locations"
+            ? detailList.locations.length
+            : detailList.mode === "config"
+              ? detailList.configKeys.length
+              : detailList.mode === "pick"
+                ? detailList.pickOptions.length
+                : 0;
 
   const viewKey =
     view.kind === "section"
@@ -1611,6 +1857,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         setExpandedHarness(id);
         setFocusedHarness(id);
         setExpandedProfile(null);
+        setExpandedProject(null);
         setPluginsExpanded(false);
         setRootView({ kind: "summary" });
         return;
@@ -1620,6 +1867,12 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         // Toggle expand; stay on nav
         setExpandedProfile((prev) => (prev === id ? null : id));
         setFocusedHarness("hermes");
+        setRootView({ kind: "summary" });
+        return;
+      }
+      if (selectedNav.kind === "project") {
+        const id = selectedNav.projectId;
+        setExpandedProject((prev) => (prev === id ? null : id));
         setRootView({ kind: "summary" });
         return;
       }
@@ -1649,6 +1902,12 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     }
     if (detailList.mode === "config" && detailList.configKeys[detailCursor]) {
       openConfigKey(detailList.configKeys[detailCursor]!.key);
+      return;
+    }
+    if (memoriesFallback && memoryFiles[detailCursor]) {
+      const file = memoryFiles[detailCursor]!;
+      if (file.exists) openReader(file.path, file.label);
+      else setError(`Missing file: ${file.path}`);
       return;
     }
     if (detailList.mode === "plugins" && detailList.plugins[detailCursor]) {
@@ -1724,6 +1983,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     const result = navBackFromNavFocus(selectedNav, {
       expandedHarness,
       expandedProfile,
+      expandedProject,
       pluginsExpanded,
     });
     switch (result.action) {
@@ -1735,6 +1995,9 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       case "collapse-profile":
         setExpandedProfile(null);
         return;
+      case "collapse-project":
+        setExpandedProject(null);
+        return;
       case "collapse-plugins":
         setPluginsExpanded(false);
         moveNavToId(result.navId);
@@ -1742,6 +2005,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       case "collapse-harness":
         setExpandedHarness(null);
         setExpandedProfile(null);
+        setExpandedProject(null);
         setPluginsExpanded(false);
         return;
     }
@@ -1829,11 +2093,19 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     view.kind === "summary"
       ? activeProfile
         ? `Profile · ${activeProfile.summary.id}`
-        : "Summary"
+        : activeProject
+          ? `Project · ${activeProject.summary.id}`
+          : "Summary"
       : view.kind === "section"
-        ? `${activeProfile ? `${activeProfile.summary.id} · ` : ""}${
-            [...SECTIONS, ...PROFILE_SECTIONS].find((s) => s.id === view.section)?.label ??
-            view.section
+        ? `${
+            activeProfile
+              ? `${activeProfile.summary.id} · `
+              : activeProject
+                ? `${activeProject.summary.id} · `
+                : ""
+          }${
+            [...SECTIONS, ...PROFILE_SECTIONS, ...PROJECT_SECTIONS].find((s) => s.id === view.section)
+              ?.label ?? view.section
           }`
         : view.kind === "plugin"
           ? `Plugin · ${view.plugin}`
@@ -1893,8 +2165,13 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
                 <PlanPreview plan={confirm.plan} />
               )}
             </box>
-          ) : view.kind === "summary" && activeProfile ? (
-            <ProfileSummaryDetail profile={activeProfile} duplicateCount={duplicateCount} />
+          ) : view.kind === "summary" && activeScope ? (
+            <ScopeSummaryDetail
+              scope={activeScope}
+              variant={activeProfile ? "profile" : "project"}
+              duplicateCount={duplicateCount}
+              onOpenFile={openReader}
+            />
           ) : view.kind === "summary" && harnessSummary ? (
             <SummaryDetail
               summary={harnessSummary}
@@ -1904,6 +2181,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
               }
               profileCount={harnessSummary.profileCount ?? profiles.length}
               profiles={profiles}
+              projectCount={harnessSummary.projectCount ?? (harnessDetail?.projects?.length ?? 0)}
+              projects={harnessDetail?.projects}
             />
           ) : view.kind === "summary" ? (
             <SummaryDetail summary={summary} duplicateCount={duplicateCount} />
@@ -2033,6 +2312,23 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
                 setDetailCursor((c) => clamp(c + d, 0, Math.max(0, summary.plugins.length - 1)));
               }}
             />
+          ) : memoriesFallback ? (
+            <MemoryFileRows
+              files={memoryFiles}
+              cursor={detailCursor}
+              windowSize={listWindow}
+              focused={focus === "detail"}
+              onSelect={(i) => {
+                setDetailCursor(i);
+                setFocus("detail");
+                const file = memoryFiles[i];
+                if (file?.exists) openReader(file.path, file.label);
+              }}
+              onScroll={(d) => {
+                setFocus("detail");
+                setDetailCursor((c) => clamp(c + d, 0, Math.max(0, memoryFiles.length - 1)));
+              }}
+            />
           ) : (
             <GroupRows
               items={detailList.groups}
@@ -2059,6 +2355,10 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         error={error}
         status={status}
         width={termWidth}
+        viewingMemories={
+          (view.kind === "section" && view.section === "memories") ||
+          (selectedNav?.kind === "section" && selectedNav.section === "memories")
+        }
       />
     </box>
     </WrapWidthContext.Provider>

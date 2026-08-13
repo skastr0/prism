@@ -496,11 +496,11 @@ program
     }
   });
 
-// Configure TUI — harness config browser (POC: claude-code)
+// Configure TUI — harness config browser
 program
   .command("configure")
-  .description("Open the harness configure TUI (POC: Claude Code inventory, uninstall, delete)")
-  .option("-p, --project <path>", "Project path for project-scoped roots (reserved)")
+  .description("Browse harness config, inventory, project roots, and memories")
+  .option("-p, --project <path>", "Project path for project-local roots (default: cwd)")
   .action(async (options: { readonly project?: string }) => {
     try {
       await runConfigureTui({

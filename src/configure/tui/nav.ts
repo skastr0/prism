@@ -30,7 +30,7 @@ export type ConfigureView =
       readonly editing?: boolean;
     };
 
-export type NavItemKind = "harness" | "section" | "profile" | "plugin";
+export type NavItemKind = "harness" | "section" | "profile" | "project" | "plugin";
 
 export type ConfigureNavItem =
   | { readonly id: string; readonly kind: "harness"; readonly label: string }
@@ -41,11 +41,18 @@ export type ConfigureNavItem =
       readonly label: string;
       readonly count?: number;
       readonly profileId?: string;
+      readonly projectId?: string;
     }
   | {
       readonly id: string;
       readonly kind: "profile";
       readonly profileId: string;
+      readonly label: string;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "project";
+      readonly projectId: string;
       readonly label: string;
     }
   | { readonly id: string; readonly kind: "plugin"; readonly plugin: string; readonly label: string };
@@ -56,6 +63,8 @@ export const viewFromNavItem = (item: ConfigureNavItem): ConfigureView => {
     case "harness":
       return { kind: "summary" };
     case "profile":
+      return { kind: "summary" };
+    case "project":
       return { kind: "summary" };
     case "section":
       return item.section === "summary"
@@ -81,9 +90,16 @@ export const parentNavId = (
       return null;
     case "profile":
       return options.expandedHarness ? `harness:${options.expandedHarness}` : "harness:hermes";
+    case "project":
+      return options.expandedHarness ? `harness:${options.expandedHarness}` : null;
     case "section":
       if (item.profileId) {
         return `profile:hermes:${item.profileId}`;
+      }
+      if (item.projectId) {
+        return options.expandedHarness
+          ? `project:${options.expandedHarness}:${item.projectId}`
+          : null;
       }
       return options.expandedHarness ? `harness:${options.expandedHarness}` : null;
     case "plugin":
@@ -118,6 +134,7 @@ export type NavBackResult =
   | { readonly action: "noop" }
   | { readonly action: "move"; readonly navId: string }
   | { readonly action: "collapse-profile" }
+  | { readonly action: "collapse-project" }
   | { readonly action: "collapse-harness" }
   | { readonly action: "collapse-plugins"; readonly navId: string };
 
@@ -126,6 +143,7 @@ export const navBackFromNavFocus = (
   options: {
     readonly expandedHarness: string | null;
     readonly expandedProfile: string | null;
+    readonly expandedProject: string | null;
     readonly pluginsExpanded: boolean;
   },
 ): NavBackResult => {
@@ -136,9 +154,22 @@ export const navBackFromNavFocus = (
     return { action: "collapse-profile" };
   }
 
+  // On an expanded project row → collapse that project
+  if (item.kind === "project" && options.expandedProject === item.projectId) {
+    return { action: "collapse-project" };
+  }
+
   // On a profile section → move to profile row (keep profile expanded)
   if (item.kind === "section" && item.profileId) {
     return { action: "move", navId: `profile:hermes:${item.profileId}` };
+  }
+
+  // On a project section → move to project row (keep project expanded)
+  if (item.kind === "section" && item.projectId) {
+    const hid = options.expandedHarness;
+    return hid
+      ? { action: "move", navId: `project:${hid}:${item.projectId}` }
+      : { action: "noop" };
   }
 
   // On a plugin child → plugins section
@@ -178,6 +209,13 @@ export const navBackFromNavFocus = (
   // Profile row already collapsed — climb to hermes harness
   if (item.kind === "profile") {
     return { action: "move", navId: "harness:hermes" };
+  }
+
+  // Project row already collapsed — climb to parent harness
+  if (item.kind === "project") {
+    return options.expandedHarness
+      ? { action: "move", navId: `harness:${options.expandedHarness}` }
+      : { action: "noop" };
   }
 
   return { action: "noop" };

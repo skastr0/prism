@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createRequire } from "node:module";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
@@ -175,42 +175,46 @@ const typecheckGeneratedRefs = async (options: {
   readonly probeSource: string;
   readonly expectErrors?: boolean;
 }): Promise<readonly string[]> => {
-  const dir = await mkdtemp(join(process.cwd(), ".tmp-workflow-refs-typecheck-"));
-  await writeFile(join(dir, "agents.ts"), options.agentsSource, "utf8");
-  await writeFile(join(dir, "orbits.ts"), options.orbitsSource, "utf8");
-  await writeFile(join(dir, "probe.ts"), options.probeSource, "utf8");
+  const dir = await mkdtemp(join(tmpdir(), "prism-workflow-refs-typecheck-"));
+  try {
+    await writeFile(join(dir, "agents.ts"), options.agentsSource, "utf8");
+    await writeFile(join(dir, "orbits.ts"), options.orbitsSource, "utf8");
+    await writeFile(join(dir, "probe.ts"), options.probeSource, "utf8");
 
-  const typeDirs = resolveWorkflowTypeDirs();
-  const paths = buildWorkflowPaths({ typeDirs, refsDir: dir });
-  const { options: compilerOptions, errors } = ts.convertCompilerOptionsFromJson(
-    {
-      target: "ESNext",
-      module: "ESNext",
-      moduleResolution: "bundler",
-      strict: true,
-      skipLibCheck: true,
-      noEmit: true,
-      allowImportingTsExtensions: true,
-      paths,
-    },
-    dir,
-  );
-  if (errors.length > 0) {
-    throw new Error(`failed to build compiler options: ${errors.map((e) => e.messageText).join("; ")}`);
-  }
+    const typeDirs = resolveWorkflowTypeDirs();
+    const paths = buildWorkflowPaths({ typeDirs, refsDir: dir });
+    const { options: compilerOptions, errors } = ts.convertCompilerOptionsFromJson(
+      {
+        target: "ESNext",
+        module: "ESNext",
+        moduleResolution: "bundler",
+        strict: true,
+        skipLibCheck: true,
+        noEmit: true,
+        allowImportingTsExtensions: true,
+        paths,
+      },
+      dir,
+    );
+    if (errors.length > 0) {
+      throw new Error(`failed to build compiler options: ${errors.map((e) => e.messageText).join("; ")}`);
+    }
 
-  const host = ts.createCompilerHost(compilerOptions);
-  const program = ts.createProgram([join(dir, "probe.ts")], compilerOptions, host);
-  const diagnostics = ts.getPreEmitDiagnostics(program);
-  const messages = diagnostics.map((diagnostic) =>
-    ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
-  );
-  if (options.expectErrors) {
-    expect(messages.length).toBeGreaterThan(0);
-  } else {
-    expect(messages).toEqual([]);
+    const host = ts.createCompilerHost(compilerOptions);
+    const program = ts.createProgram([join(dir, "probe.ts")], compilerOptions, host);
+    const diagnostics = ts.getPreEmitDiagnostics(program);
+    const messages = diagnostics.map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+    );
+    if (options.expectErrors) {
+      expect(messages.length).toBeGreaterThan(0);
+    } else {
+      expect(messages).toEqual([]);
+    }
+    return messages;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
-  return messages;
 };
 
 describe("workflow refs emitter", () => {
@@ -512,28 +516,32 @@ describe("workflow refs emitter", () => {
     const agentsSource = renderWorkflowAgentsModule({ manifest });
     const orbitsSource = renderWorkflowOrbitsModule({ manifest });
     const dir = await mkdtemp(join(process.cwd(), ".tmp-workflow-refs-identity-"));
-    const agentsPath = join(dir, "agents.ts");
-    const orbitsPath = join(dir, "orbits.ts");
-    const probePath = join(dir, "probe.ts");
-    await writeFile(agentsPath, agentsSource, "utf8");
-    await writeFile(orbitsPath, orbitsSource, "utf8");
-    await writeFile(
-      probePath,
-      [
-        `import { agents } from ${JSON.stringify(agentsPath)};`,
-        `import { orbits } from ${JSON.stringify(orbitsPath)};`,
-        "export const exploreSame =",
-        "  orbits.forge.forge.phases.explore.agents.explorer === agents.forge.explorer;",
-        "export const buildSame =",
-        "  orbits.forge.forge.phases.build.agents.codebaseArcheologist ===",
-        "  agents.forge.codebaseArcheologist;",
-      ].join("\n"),
-      "utf8",
-    );
-    const probe = await import(probePath);
+    try {
+      const agentsPath = join(dir, "agents.ts");
+      const orbitsPath = join(dir, "orbits.ts");
+      const probePath = join(dir, "probe.ts");
+      await writeFile(agentsPath, agentsSource, "utf8");
+      await writeFile(orbitsPath, orbitsSource, "utf8");
+      await writeFile(
+        probePath,
+        [
+          `import { agents } from ${JSON.stringify(agentsPath)};`,
+          `import { orbits } from ${JSON.stringify(orbitsPath)};`,
+          "export const exploreSame =",
+          "  orbits.forge.forge.phases.explore.agents.explorer === agents.forge.explorer;",
+          "export const buildSame =",
+          "  orbits.forge.forge.phases.build.agents.codebaseArcheologist ===",
+          "  agents.forge.codebaseArcheologist;",
+        ].join("\n"),
+        "utf8",
+      );
+      const probe = await import(probePath);
 
-    expect(probe.exploreSame).toBe(true);
-    expect(probe.buildSame).toBe(true);
+      expect(probe.exploreSame).toBe(true);
+      expect(probe.buildSame).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("missing phase agent is a hard emit error", () => {

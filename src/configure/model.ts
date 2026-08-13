@@ -135,12 +135,18 @@ export interface HarnessSummary {
   readonly config?: ConfigOverview;
   /** Hermes (etc.): count of agent profiles under the shared root. */
   readonly profileCount?: number;
+  /** Project-local harness roots discovered from cwd / --project. */
+  readonly projectCount?: number;
+  /** Absolute project path used for this inventory load, if any. */
+  readonly projectPath?: string;
 }
 
 /**
- * Hermes agent profile — a harness-equivalent sub-root under profiles/<id>/.
- * Inventory is scoped to that directory only (no shared-root bleed).
+ * Nested configure scope: a Hermes profile or a project-local harness root.
+ * Inventory is scoped to that directory (no parent-root bleed).
  */
+export type ScopeKind = "profile" | "project";
+
 export interface ProfileSummary {
   readonly id: string;
   readonly displayName: string;
@@ -148,8 +154,14 @@ export interface ProfileSummary {
   readonly rootExists: boolean;
   readonly counts: Readonly<Record<ArtifactNoun, number>>;
   readonly config?: ConfigOverview;
-  /** Quick identity surface (SOUL, MEMORY, identity-brief, …). */
+  /** Soul / identity-brief / profile.yaml. Memory files belong in memoryFiles. */
   readonly identityFiles: ReadonlyArray<ConfigFileEntry>;
+  /** profile = Hermes profiles/<id>; project = catalog.projectRoot under cwd. */
+  readonly kind?: ScopeKind;
+  /** Generated memory files (may live outside root, e.g. Claude projects/<id>/memory). */
+  readonly memoryFiles?: ReadonlyArray<ConfigFileEntry>;
+  /** Absolute memory bucket when distinct from root. */
+  readonly memoryRoot?: string;
 }
 
 export interface ProfileInventory {
@@ -158,12 +170,17 @@ export interface ProfileInventory {
   readonly groups: ReadonlyArray<ArtifactGroup>;
 }
 
+/** Project-local harness root — same shape as a Hermes profile. */
+export type ProjectInventory = ProfileInventory;
+
 export interface HarnessInventory {
   readonly summary: HarnessSummary;
   readonly artifacts: ReadonlyArray<ArtifactEntry>;
   readonly groups: ReadonlyArray<ArtifactGroup>;
   /** Present for hermes (and any future multi-profile harness). */
   readonly profiles?: ReadonlyArray<ProfileInventory>;
+  /** Project-local roots (.claude/, .grok/, …) plus attached memory buckets. */
+  readonly projects?: ReadonlyArray<ProjectInventory>;
 }
 
 export interface ConfigureInventory {
@@ -180,7 +197,7 @@ export interface ConfigureInventory {
   readonly focusedHarness: ConfigureHarnessId;
 }
 
-export type NavKind = "harness" | "section" | "plugin" | "artifact" | "profile";
+export type NavKind = "harness" | "section" | "plugin" | "artifact" | "profile" | "project";
 
 export type SectionId =
   | "summary"
@@ -192,8 +209,10 @@ export type SectionId =
   | "hooks"
   | "rules"
   | "bundles"
-  /** Hermes: SOUL / memories / identity-brief / profile.yaml */
+  /** Hermes: SOUL / identity-brief / profile.yaml */
   | "identity"
+  /** Generated memories (MEMORY.md, topic files) — not session transcripts. */
+  | "memories"
   | "other";
 
 export interface NavNode {
@@ -209,6 +228,8 @@ export interface NavNode {
   readonly artifactId?: string;
   /** Hermes profile id when nav is scoped to a profile. */
   readonly profileId?: string;
+  /** Project-scope id when nav is scoped to a project root. */
+  readonly projectId?: string;
 }
 
 export interface MutationPlanOp {

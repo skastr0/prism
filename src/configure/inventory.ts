@@ -1095,9 +1095,9 @@ export const artifactsForSection = (
     case "bundles":
       return artifacts.filter((a) => a.noun === "bundle");
     case "identity":
-      return artifacts.filter(
-        (a) => a.noun === "soul" || a.noun === "memory" || a.noun === "identity",
-      );
+      return artifacts.filter((a) => a.noun === "soul" || a.noun === "identity");
+    case "memories":
+      return artifacts.filter((a) => a.noun === "memory");
     case "plugins":
       return artifacts.filter((a) => a.plugin !== undefined);
     case "other":
@@ -1126,9 +1126,9 @@ export const groupsForSection = (
     case "bundles":
       return groups.filter((g) => g.noun === "bundle");
     case "identity":
-      return groups.filter(
-        (g) => g.noun === "soul" || g.noun === "memory" || g.noun === "identity",
-      );
+      return groups.filter((g) => g.noun === "soul" || g.noun === "identity");
+    case "memories":
+      return groups.filter((g) => g.noun === "memory");
     case "other":
       return groups.filter((g) => g.noun === "other" || g.noun === "tool-runtime");
     case "plugins":

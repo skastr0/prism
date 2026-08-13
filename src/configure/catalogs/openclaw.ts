@@ -1,7 +1,7 @@
 import type { HarnessCatalog } from "./types.js";
 
 /**
- * OpenClaw settings catalogue — researched 2026-08-11 from live ~/.openclaw/openclaw.json,
+ * OpenClaw settings catalogue — researched 2026-08-13 from live ~/.openclaw/openclaw.json,
  * zsh completions, harness registry, and lowerer capabilities.
  * Prism surface is skills-only (direct-file under skills/); no compile lowerer.
  */
@@ -189,6 +189,44 @@ export const openclawCatalog: HarnessCatalog = {
       type: "string",
       file: "openclaw.json",
       prismTouch: "none",
+      description:
+        "Live installs still use agents.defaults.memorySearch.* (this path). Current docs use memory.search.model.",
+    },
+    {
+      key: "agents.defaults.memorySearch.enabled",
+      label: "Memory search enabled (legacy path)",
+      type: "boolean",
+      file: "openclaw.json",
+      prismTouch: "none",
+      description:
+        "Dual-read with memory.search.enabled. Live disk may only set memorySearch.model under agents.defaults.",
+    },
+    {
+      key: "memory.search.enabled",
+      label: "Memory search enabled",
+      type: "boolean",
+      file: "openclaw.json",
+      prismTouch: "none",
+      description:
+        "Current-docs path (default true). Live installs may still only have agents.defaults.memorySearch.*.",
+    },
+    {
+      key: "memory.search.provider",
+      label: "Memory search provider",
+      type: "string",
+      file: "openclaw.json",
+      prismTouch: "none",
+      description:
+        "Current-docs path (default openai). Live/legacy: agents.defaults.memorySearch.provider. e.g. openai, gemini, voyage, local, ollama.",
+    },
+    {
+      key: "plugins.entries.memory-core.config.dreaming.enabled",
+      label: "Memory-core dreaming",
+      type: "boolean",
+      file: "openclaw.json",
+      prismTouch: "none",
+      description:
+        "Not under memory.search. Live sample: plugins.entries.memory-core.config.dreaming.{enabled,frequency}.",
     },
     {
       key: "agents.defaults.heartbeat.every",
@@ -464,7 +502,7 @@ export const openclawCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-11",
+    lastResearched: "2026-08-13",
     procedure: [
       "Run `openclaw --help` and `openclaw config schema` (or schema subcommand)",
       "Read ~/.openclaw/openclaw.json top-level keys (redact gateway.auth.token, plugin apiKeys, credentials/)",
@@ -482,6 +520,8 @@ export const openclawCatalog: HarnessCatalog = {
       "openclaw skills",
       "openclaw plugins",
       "~/.openclaw/openclaw.json",
+      "https://docs.openclaw.ai/reference/memory-config",
+      "https://docs.openclaw.ai/concepts/memory",
       "~/.openclaw/exec-approvals.json",
       "~/.openclaw/completions/openclaw.zsh",
       "src/harnesses.ts",
@@ -498,5 +538,6 @@ export const openclawCatalog: HarnessCatalog = {
     "Secrets live in openclaw.json (gateway.auth.token, plugins.*.config.apiKey), credentials/, identity/, exec-approvals.json — always redact.",
     "workflowWorker: false — OpenClaw is not a Prism workflow harness worker.",
     "claw-harness preset companion of hermes; inventory doctor groups only skills.",
+    "No project root. Memory is per-agent workspace Markdown: MEMORY.md + memory/*.md (read-only in this catalogue). Dual-read: live agents.defaults.memorySearch.* vs current-docs memory.search.*.",
   ],
 };

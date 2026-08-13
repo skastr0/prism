@@ -3,7 +3,7 @@ import type { HarnessCatalog } from "./types.js";
 /**
  * Claude Code settings catalogue.
  *
- * Grounded 2026-08-11 from:
+ * Grounded 2026-08-13 from:
  * - live `~/.claude/settings.json` top-level keys (secrets redacted)
  * - SchemaStore `claude-code-settings.json`
  * - `src/harnesses.ts`, `src/lowerer-capabilities.ts`, `src/compile/lowerers/claude-code.ts`
@@ -22,12 +22,12 @@ export const claudeCodeCatalog: HarnessCatalog = {
       path: "settings.json",
       format: "json",
       primary: true,
-      note: "User/global settings; Prism never whole-file owns this",
+      note: "User/global settings (~/.claude/settings.json). Project layers (not this root): <repo>/.claude/settings.json (shared) and <repo>/.claude/settings.local.json (personal, typically gitignored). Prism never whole-file owns these.",
     },
     {
       path: "CLAUDE.md",
       format: "md",
-      note: "Global rules; Prism appends marker regions (file-router + inline-skill)",
+      note: "Global rules; Prism appends marker regions (file-router + inline-skill). Project also loads ./CLAUDE.md, ./.claude/CLAUDE.md, and ./CLAUDE.local.md (personal; not under ~/.claude/).",
     },
     {
       path: ".credentials.json",
@@ -356,6 +356,8 @@ export const claudeCodeCatalog: HarnessCatalog = {
       type: "boolean",
       file: "settings.json",
       prismTouch: "none",
+      description:
+        "Default true. Toggle via /memory. Env CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 forces off. CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 skips loading CLAUDE.md and auto-memory files.",
     },
     {
       key: "autoMemoryDirectory",
@@ -363,6 +365,8 @@ export const claudeCodeCatalog: HarnessCatalog = {
       type: "string",
       file: "settings.json",
       prismTouch: "none",
+      description:
+        "Override store path (absolute or ~/). Default is ~/.claude/projects/<encoded>/memory/, not repo .claude/.",
     },
     {
       key: "autoCompactEnabled",
@@ -370,6 +374,15 @@ export const claudeCodeCatalog: HarnessCatalog = {
       type: "boolean",
       file: "settings.json",
       prismTouch: "none",
+    },
+    {
+      key: "autoCompactWindow",
+      label: "Auto-compact window (tokens)",
+      type: "number",
+      file: "settings.json",
+      prismTouch: "none",
+      description:
+        "Token fill before auto-compact (100000–1000000). Unset uses a model-tuned window. Also /autocompact, --autocompact, CLAUDE_CODE_AUTO_COMPACT_WINDOW.",
     },
     {
       key: "fileCheckpointingEnabled",
@@ -599,7 +612,7 @@ export const claudeCodeCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-11",
+    lastResearched: "2026-08-13",
     procedure: [
       "Run `claude --help` and `claude --version`; note --settings, doctor, mcp, permission-mode flags",
       "Read ~/.claude/settings.json top-level keys; redact env secrets and credentials",
@@ -617,6 +630,8 @@ export const claudeCodeCatalog: HarnessCatalog = {
       "~/.claude/skills/prism-generated-*/",
       "https://json.schemastore.org/claude-code-settings.json",
       "https://code.claude.com/docs/en/settings",
+      "https://code.claude.com/docs/en/memory",
+      "https://code.claude.com/docs/en/env-vars",
       "https://code.claude.com/docs/en/permissions",
       "src/harnesses.ts (claude-code entry)",
       "src/lowerer-capabilities.ts (claude-code surfaces)",
@@ -638,5 +653,7 @@ export const claudeCodeCatalog: HarnessCatalog = {
     "Schema allows additionalProperties; live feedbackSurveyState is internal UI state, not catalogued as a user setting.",
     "Workflow worker binary: claude via PATH or PRISM_WORKFLOW_CLAUDE_BIN; default model probe uses claude-haiku-4-5.",
     "`claude --settings` loads extra settings JSON — it is not a settings viewer.",
+    "Auto memory lives at ~/.claude/projects/<encoded-git-or-cwd>/memory/ (MEMORY.md + topic .md files), not in repo .claude/. .claude/ is project config (settings.json, settings.local.json, rules, agents).",
+    "scanDirs includes projects/ for layout discovery. Inventory must only take memory/*.md under that tree — projects/<id>/*.jsonl are session transcripts, not memory.",
   ],
 };

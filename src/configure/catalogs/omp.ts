@@ -2,7 +2,7 @@ import type { HarnessCatalog } from "./types.js";
 
 /**
  * Oh My Pi (omp) settings catalogue.
- * Researched 2026-08-11 from live ~/.omp/agent/config.yml, oh-my-pi SETTINGS_SCHEMA,
+ * Researched 2026-08-13 from live ~/.omp/agent/config.yml, oh-my-pi SETTINGS_SCHEMA,
  * harness registry, lowerer capabilities, and workflow worker flags.
  */
 export const ompCatalog: HarnessCatalog = {
@@ -205,6 +205,24 @@ export const ompCatalog: HarnessCatalog = {
       prismTouch: "none",
     },
     {
+      key: "memory.backend",
+      label: "Memory backend",
+      type: "enum",
+      enumValues: ["off", "local", "hindsight", "mnemopi"],
+      file: "config.yml",
+      prismTouch: "none",
+      description:
+        "Default off. local writes ~/.omp/agent/memories/<encoded-cwd>/ — project .omp/ is config, not the store. Legacy memories.enabled migrates to local|off.",
+    },
+    {
+      key: "autolearn.enabled",
+      label: "Autolearn (learn tool)",
+      type: "boolean",
+      file: "config.yml",
+      prismTouch: "none",
+      description: "When true, exposes the learn tool (local backend writes learned.md).",
+    },
+    {
       key: "skills.enabled",
       label: "Skills enabled",
       type: "boolean",
@@ -341,7 +359,7 @@ export const ompCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-11",
+    lastResearched: "2026-08-13",
     procedure: [
       "Run `omp --help` (and scripting flags: --mode json, --approval-mode, --model, --thinking, --profile, --resume)",
       "Read ~/.omp/agent/config.yml top-level keys (redact auth.broker.token and any secrets)",
@@ -355,6 +373,7 @@ export const ompCatalog: HarnessCatalog = {
       "~/.omp/agent/config.yml",
       "~/.omp/agent/mcp.json",
       "oh-my-pi packages/coding-agent/src/config/settings-schema.ts",
+      "https://github.com/can1357/oh-my-pi/blob/main/docs/memory.md",
       "src/harnesses.ts (omp entry)",
       "src/lowerer-capabilities.ts (omp)",
       "src/compile/lowerers/omp.ts",
@@ -371,5 +390,6 @@ export const ompCatalog: HarnessCatalog = {
     "Workflow worker: PRISM_WORKFLOW_OMP_BIN || omp; --mode json --append-system-prompt <agent.md> --approval-mode yolo (permissive/full-access).",
     "Profiles live under ~/.omp/profiles/<name>/agent/ and are selected via --profile.",
     "Agent skill permission surface is unsupported; permission-only skill access fails closed at compile.",
+    "memory.backend default off. local backend writes ~/.omp/agent/memories/<encoded-cwd>/; project .omp/ is config, not the memory store.",
   ],
 };

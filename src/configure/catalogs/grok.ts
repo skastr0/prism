@@ -1,6 +1,6 @@
 import type { HarnessCatalog } from "./types.js";
 
-/** Grok Build settings catalogue — researched 2026-08-11 from live config.toml + ~/.grok/docs + Prism lowerer. */
+/** Grok Build settings catalogue — researched 2026-08-13 from live config.toml + ~/.grok/docs + Prism lowerer. */
 export const grokCatalog: HarnessCatalog = {
   harness: "grok",
   displayName: "Grok Build",
@@ -34,6 +34,11 @@ export const grokCatalog: HarnessCatalog = {
       path: "settings.json",
       format: "json",
       note: "Optional Claude-compat surface (marketplaces / permissions); not primary",
+    },
+    {
+      path: "memory/MEMORY.md",
+      format: "md",
+      note: "Global memory (relative to ~/.grok/, not project .grok/). Inventory must not treat this as a project-root scan.",
     },
   ],
   scanDirs: [
@@ -364,7 +369,64 @@ export const grokCatalog: HarnessCatalog = {
       type: "boolean",
       file: "config.toml",
       prismTouch: "none",
-      description: "Also gated by --experimental-memory / GROK_MEMORY",
+      description:
+        "Experimental; default false. Priority: --no-memory > --experimental-memory > GROK_MEMORY > this key.",
+    },
+    {
+      key: "memory.session.save_on_end",
+      label: "Save session summary on end",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Default true. Writes a metadata summary to ~/.grok/memory/ (not .grok/).",
+    },
+    {
+      key: "memory.watcher.enabled",
+      label: "Memory file watcher",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Default true. Reindex ~/.grok/memory/ after external edits.",
+    },
+    {
+      key: "memory.initial_injection.enabled",
+      label: "First-turn memory injection",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Default true. Search+inject relevant memory on the first turn.",
+    },
+    {
+      key: "memory.dream.enabled",
+      label: "Auto dream consolidation",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Default true. Also /dream. Requires memory.enabled.",
+    },
+    {
+      key: "memory.dream.min_hours",
+      label: "Dream min hours",
+      type: "number",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Default 4. Minimum hours between automatic consolidations.",
+    },
+    {
+      key: "memory.dream.min_sessions",
+      label: "Dream min sessions",
+      type: "number",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Default 3. Minimum sessions since the last consolidation.",
+    },
+    {
+      key: "compaction.memory_flush.enabled",
+      label: "Pre-compaction memory flush",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Default true. Lives under [compaction], not [memory].",
     },
     {
       key: "subagents.enabled",
@@ -412,7 +474,7 @@ export const grokCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-11",
+    lastResearched: "2026-08-13",
     procedure: [
       "Run `grok --help` and `grok --version` (note --model, --permission-mode, --always-approve, --agent, -r)",
       "Read ~/.grok/config.toml top-level tables (redact auth / api keys / mcp env)",
@@ -425,6 +487,7 @@ export const grokCatalog: HarnessCatalog = {
       "grok --help",
       "~/.grok/config.toml",
       "~/.grok/docs/user-guide/05-configuration.md",
+      "~/.grok/docs/user-guide/13-memory.md",
       "~/.grok/docs/user-guide/22-permissions-and-safety.md",
       "~/.grok/docs/user-guide/09-plugins.md",
       "src/harnesses.ts",
@@ -442,5 +505,7 @@ export const grokCatalog: HarnessCatalog = {
     "Project .grok/config.toml only contributes mcp_servers, plugins, and permission rules.",
     "Workflow worker pins GROK_HOME=~/.grok and disables Cursor/Claude MCP auto-import.",
     "Live version at research time: 1.0.0 (version.json).",
+    "Memory files live at ~/.grok/memory/ (global MEMORY.md + <project-slug>-<hash8>/), not project .grok/. Experimental; gated by --experimental-memory / GROK_MEMORY / --no-memory.",
+    "Do not scanDirs memory from a project root — inventory handles $GROK_HOME/memory separately.",
   ],
 };

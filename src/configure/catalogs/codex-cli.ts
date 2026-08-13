@@ -1,6 +1,6 @@
 import type { HarnessCatalog } from "./types.js";
 
-/** Codex CLI settings catalogue — researched 2026-08-11 from live ~/.codex + lowerer + config skill. */
+/** Codex CLI settings catalogue — researched 2026-08-13 from live ~/.codex + lowerer + config skill. */
 export const codexCliCatalog: HarnessCatalog = {
   harness: "codex-cli",
   displayName: "Codex CLI",
@@ -170,6 +170,56 @@ export const codexCliCatalog: HarnessCatalog = {
       description: "Prism-owned fenced scalar under [features] when hooks are compiled",
     },
     {
+      key: "features.memories",
+      label: "Enable memories",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Off by default. Store is ~/.codex/memories/ (generated; one global store, cwd tags inside files).",
+    },
+    {
+      key: "memories.generate_memories",
+      label: "Generate memories",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "When false, new threads are not stored as memory-generation inputs. Defaults to true once the feature is on.",
+    },
+    {
+      key: "memories.use_memories",
+      label: "Use memories",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "When false, skip injecting existing memories into future sessions. Defaults to true once the feature is on.",
+    },
+    {
+      key: "memories.disable_on_external_context",
+      label: "Skip memories on external context",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description:
+        "When true, threads that used MCP / web search / tool search stay out of memory generation. Default false. Alias: memories.no_memories_if_mcp_or_web_search.",
+    },
+    {
+      key: "memories.dedicated_tools",
+      label: "Dedicated memory tools",
+      type: "boolean",
+      file: "config.toml",
+      prismTouch: "none",
+      description:
+        "Expose native list/search/read/note memory tools when memories are on. Not listed in the 2026-08-13 config-reference table; documented in memories usage writeups.",
+    },
+    {
+      key: "memories.min_rate_limit_remaining_percent",
+      label: "Memory gen min rate-limit remaining %",
+      type: "number",
+      file: "config.toml",
+      prismTouch: "none",
+      description: "Skip background generation when remaining quota is below this. Default 25; clamped 0–100.",
+    },
+    {
       key: "hooks",
       label: "Inline hooks",
       type: "object",
@@ -308,7 +358,7 @@ export const codexCliCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-11",
+    lastResearched: "2026-08-13",
     procedure: [
       "Run `codex --help` and `codex exec --help` (timeout ok); note --config, --profile, --sandbox, --model",
       "Read ~/.codex/config.toml top-level keys and tables (redact auth/tokens/env secrets)",
@@ -328,6 +378,8 @@ export const codexCliCatalog: HarnessCatalog = {
       "https://developers.openai.com/codex/config-basic",
       "https://developers.openai.com/codex/config-advanced",
       "https://developers.openai.com/codex/config-reference",
+      "https://learn.chatgpt.com/docs/config-file/config-reference",
+      "https://learn.chatgpt.com/docs/customization/memories",
       "https://developers.openai.com/codex/hooks",
       "src/harnesses.ts",
       "src/lowerer-capabilities.ts",
@@ -347,5 +399,6 @@ export const codexCliCatalog: HarnessCatalog = {
     "Project .codex/ layers load only for trusted projects (projects.<path>.trust_level).",
     "Do not combine default_permissions with sandbox_mode / sandbox_workspace_write.",
     "auth.json holds ChatGPT/OAuth tokens — always redacted in TUI.",
+    "Memories are off by default (features.memories). Store is ~/.codex/memories/ — treat as generated; one global store (cwd tags live inside files). Do not scan sessions/*.jsonl as memory.",
   ],
 };

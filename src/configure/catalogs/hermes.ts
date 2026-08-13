@@ -1,6 +1,6 @@
 import type { HarnessCatalog } from "./types.js";
 
-/** Hermes Agent settings catalogue — researched 2026-08-11 from live config.yaml + lowerer + CLI example. */
+/** Hermes Agent settings catalogue — researched 2026-08-13 from live config.yaml + lowerer + CLI example. */
 export const hermesCatalog: HarnessCatalog = {
   harness: "hermes",
   displayName: "Hermes Agent",
@@ -32,7 +32,12 @@ export const hermesCatalog: HarnessCatalog = {
     {
       path: "memories/MEMORY.md",
       format: "md",
-      note: "Shared memory; profiles have their own memories/",
+      note: "Agent notes (environment/conventions); profiles have their own memories/",
+    },
+    {
+      path: "memories/USER.md",
+      format: "md",
+      note: "User profile store (preferences/style); not a project file",
     },
     {
       path: ".env",
@@ -359,6 +364,15 @@ export const hermesCatalog: HarnessCatalog = {
       prismTouch: "none",
     },
     {
+      key: "display.memory_notifications",
+      label: "Memory notifications",
+      type: "enum",
+      enumValues: ["off", "on", "verbose"],
+      file: "config.yaml",
+      prismTouch: "none",
+      description: "Self-improvement / memory-update notices. Bool also accepted (true→on, false→off).",
+    },
+    {
       key: "privacy.redact_pii",
       label: "Redact PII",
       type: "boolean",
@@ -378,6 +392,47 @@ export const hermesCatalog: HarnessCatalog = {
       type: "boolean",
       file: "config.yaml",
       prismTouch: "none",
+    },
+    {
+      key: "memory.user_profile_enabled",
+      label: "User profile memory",
+      type: "boolean",
+      file: "config.yaml",
+      prismTouch: "none",
+      description: "Inject/update memories/USER.md (preferences, style). Distinct from MEMORY.md.",
+    },
+    {
+      key: "memory.memory_char_limit",
+      label: "MEMORY.md char limit",
+      type: "number",
+      file: "config.yaml",
+      prismTouch: "none",
+      description: "Live/example default 2200 (~800 tokens)",
+    },
+    {
+      key: "memory.user_char_limit",
+      label: "USER.md char limit",
+      type: "number",
+      file: "config.yaml",
+      prismTouch: "none",
+      description: "Live/example default 1375 (~500 tokens)",
+    },
+    {
+      key: "memory.provider",
+      label: "Memory provider",
+      type: "string",
+      file: "config.yaml",
+      prismTouch: "none",
+      description:
+        "Empty/unset = built-in files. Plugin ids e.g. supermemory, mem0 (`hermes config set memory.provider …`).",
+    },
+    {
+      key: "memory.nudge_interval",
+      label: "Memory nudge interval",
+      type: "number",
+      file: "config.yaml",
+      prismTouch: "none",
+      description: "Remind the agent every N user turns; 0 disables. Active only when memory is enabled.",
     },
     {
       key: "delegation.max_iterations",
@@ -628,7 +683,7 @@ export const hermesCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-11",
+    lastResearched: "2026-08-13",
     procedure: [
       "Run `hermes --help` and `hermes chat --help`; note --model/--provider/--profile/--yolo/-Q/--accept-hooks",
       "Read ~/.hermes/config.yaml top-level + nested keys (redact api_key, auth.json, custom_providers[].api_key, dashboard.basic_auth)",
@@ -658,6 +713,7 @@ export const hermesCatalog: HarnessCatalog = {
     "Hook wrappers live under plugins/prism-generated-<plugin>/hooks/*.mjs; native Python plugins/ is a separate Hermes surface.",
     "Profiles are alternate HERMES_HOME roots: ~/.hermes/profiles/<name>/ (own config.yaml, skills/, SOUL.md, memories/). Configure TUI expands each profile as a harness-equivalent sub-list under Hermes.",
     "projectRoot is null — Hermes is user/profile-scoped, not project-.hermes/.",
+    "Memory files live at ~/.hermes/memories/{MEMORY.md,USER.md} (and profiles/<id>/memories/); there is no project-root memory store.",
     "Workflow worker: hermes chat --query … -Q [--model] [--provider] [--yolo]; permission modes restricted/sandbox/interactive unsupported.",
     "custom_providers and model.api_key may hold plaintext secrets in live YAML — always redact in inventory previews.",
   ],

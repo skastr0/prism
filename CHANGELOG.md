@@ -9,6 +9,17 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## 0.4.6 - 2026-08-17
+
+### Added
+
+- **`prism configure`** — OpenTUI harness control plane. Browse detected
+  harnesses, Prism-owned inventory, project/profile scopes, and memory
+  buckets; read and edit catalogued settings; uninstall a plugin's owned
+  surface; delete owned or stray paths. Confirm-gated writes only. Ships
+  after `v0.4.5` as an unreleased-main cut: keep iterating on the TUI in
+  follow-up patches.
+
 ## 0.4.5 - 2026-07-27
 
 ### Removed

@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-darwin-x64",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "type": "module",
   "description": "Prism standalone CLI binary for macOS x64.",
   "license": "MIT",
@@ -19,7 +19,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "^1.15.13",
     "@opentui/core-darwin-x64": "0.4.1",
-    "@skastr0/prism-sdk": "0.4.5",
+    "@skastr0/prism-sdk": "0.4.6",
     "effect": "^3.21.1",
     "typescript": "^5.8.3",
     "zod": "4.4.3"

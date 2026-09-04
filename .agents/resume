@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Prism has no backing services or per-orb authentication to restore.
+exit 0

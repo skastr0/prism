@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly BUN_VERSION="1.3.14"
+readonly BUN_INSTALL="${HOME}/.bun"
+readonly PROFILE_MARKER="# Prism orb Bun toolchain"
+
+export BUN_INSTALL
+export PATH="${BUN_INSTALL}/bin:${PATH}"
+
+run_step() {
+  local label="$1"
+  shift
+  local started_at=$SECONDS
+
+  printf '\n==> %s\n' "$label"
+  "$@"
+  printf '<== %s (%ss)\n' "$label" "$((SECONDS - started_at))"
+}
+
+install_bun() {
+  if [[ -x "${BUN_INSTALL}/bin/bun" ]] && [[ "$("${BUN_INSTALL}/bin/bun" --version)" == "$BUN_VERSION" ]]; then
+    printf 'Bun %s is already installed at %s\n' "$BUN_VERSION" "${BUN_INSTALL}/bin/bun"
+    return
+  fi
+
+  curl --fail --silent --show-error --location https://bun.sh/install \
+    | bash -s -- "bun-v${BUN_VERSION}"
+}
+
+persist_bun_path() {
+  touch "${HOME}/.bash_profile"
+  if ! grep -Fqx "$PROFILE_MARKER" "${HOME}/.bash_profile"; then
+    cat >> "${HOME}/.bash_profile" <<'EOF'
+
+# Prism orb Bun toolchain
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+EOF
+  fi
+}
+
+run_step "Install Bun ${BUN_VERSION}" install_bun
+persist_bun_path
+
+if [[ "$(bun --version)" != "$BUN_VERSION" ]]; then
+  printf 'Expected Bun %s, found %s at %s\n' "$BUN_VERSION" "$(bun --version)" "$(command -v bun)" >&2
+  exit 1
+fi
+
+run_step "Install locked dependencies" bun install --frozen-lockfile --cpu='*' --os='*'
+run_step "Build Prism SDK" bun run build:core
+
+printf '\nOrb setup complete with Bun %s.\n' "$(bun --version)"

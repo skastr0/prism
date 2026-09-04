@@ -248,12 +248,6 @@ function PreviewContent({ selection }: { readonly selection: SelectionState }) {
           })}
         </text>
       ))}
-      {preview.inlineSkills.length > 0 ? (
-        <text style={{ marginTop: 1 }}>
-          <span fg={PALETTE.fgMuted}>{"inline skills  "}</span>
-          <span fg={PALETTE.fg}>{preview.inlineSkills.join(", ")}</span>
-        </text>
-      ) : null}
       <box style={{ height: 1 }} />
       <text>
         <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>{"HARNESSES"}</span>

@@ -111,7 +111,6 @@ export interface InstallPreviewRow {
 
 export interface InstallPreview {
   readonly rows: ReadonlyArray<InstallPreviewRow>;
-  readonly inlineSkills: ReadonlyArray<string>;
   /** Compact one-line target summary (formatManifestTargets). */
   readonly targetsSummary: string;
 }

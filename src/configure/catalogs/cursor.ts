@@ -28,7 +28,7 @@ export const cursorCatalog: HarnessCatalog = {
     {
       path: ".cursorrules",
       format: "md",
-      note: "Legacy rules file; Prism may marker-region inject tools-cli / inline skills",
+      note: "Legacy rules file; Prism may marker-region inject tools-cli",
     },
     {
       path: "rules/",

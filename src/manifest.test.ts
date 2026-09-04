@@ -321,6 +321,28 @@ test("readManifest rejects file-level targets in harness overlay entrypoints", a
   ]);
 });
 
+test("readManifest rejects leftover inlineSkills", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "inline-skills-removed");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "inline-skills-removed",
+        version: "0.1.0",
+        targets: { rules: ["codex-cli"] },
+        inlineSkills: ["demo"],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await expectManifestValidationDetails(pluginRoot, [
+    "'inlineSkills' is not supported. Remove the 'inlineSkills' key from plugin.json; skills install via targets.skills, they are not dumped into harness rules files.",
+  ]);
+});
+
 test("readManifest ignores skill support markdown file-level targets", async () => {
   const pluginRoot = await createPluginWithManifest("support-file-targets", {
     skills: ["opencode"],

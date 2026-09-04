@@ -171,20 +171,6 @@ const directRegionKey = (input: {
     stableRegionPart(input.sourcePath),
   ].join(".");
 
-const inlineSkillRegionKey = (input: {
-  readonly pluginName: string;
-  readonly harness: HarnessId;
-  readonly scope: HarnessScope;
-  readonly skillName: string;
-}): string =>
-  [
-    "file-router.inline-skill",
-    stableRegionPart(input.pluginName),
-    input.harness,
-    input.scope,
-    stableRegionPart(input.skillName),
-  ].join(".");
-
 class DesiredRootBuilder {
   readonly roots = new Map<string, DesiredRoot>();
 
@@ -389,45 +375,6 @@ const addRuleRegion = async (options: {
   });
 };
 
-/**
- * Deterministically assemble the full inline-skill body for one skill directory:
- * SKILL.md first (frontmatter stripped), then each referenced `.md` file
- * (frontmatter stripped) in stable order, each under a `## skill-reference:`
- * boundary. Non-markdown references are listed as pointers under a single
- * `## skill-reference (not inlined):` block (never inlined — they may be binary).
- * Returns `""` when the skill has no SKILL.md so the caller can warn and skip.
- */
-const assembleInlineSkillRegion = async (
-  pluginPath: string,
-  skillDirName: string,
-  harnessId: HarnessId,
-): Promise<string> => {
-  const files = await collectArtifactSourceFiles(pluginPath, "skills", harnessId);
-  const prefix = `${skillDirName}/`;
-  const skillFiles = files.filter((file) => file.relativePath.startsWith(prefix));
-
-  const skillMd = skillFiles.find((file) => file.relativePath === `${skillDirName}/SKILL.md`);
-  if (!skillMd) return "";
-
-  const markdownRefs = skillFiles
-    .filter((file) => file !== skillMd && file.relativePath.endsWith(".md"))
-    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-  const nonMarkdownRefs = skillFiles
-    .filter((file) => !file.relativePath.endsWith(".md"))
-    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-
-  const sections: string[] = [(await parseMarkdownFile(skillMd.sourcePath)).content];
-  for (const ref of markdownRefs) {
-    const { content } = await parseMarkdownFile(ref.sourcePath);
-    sections.push(`## skill-reference: ${ref.relativePath}\n\n${content}`);
-  }
-  if (nonMarkdownRefs.length > 0) {
-    const pointers = nonMarkdownRefs.map((ref) => `- ${ref.relativePath}`).join("\n");
-    sections.push(`## skill-reference (not inlined):\n\n${pointers}`);
-  }
-  return sections.join("\n\n");
-};
-
 const addRulesForHarness = async (options: {
   readonly builder: DesiredRootBuilder;
   readonly warnings: RefreshWarning[];
@@ -478,44 +425,6 @@ const addRulesForHarness = async (options: {
         options.harness.id === "cursor"
           ? convertToMdc(getHarnessFrontmatter(frontmatter, options.harness.id), content)
           : reconstructMarkdown(getHarnessFrontmatter(frontmatter, options.harness.id), content),
-    });
-  }
-
-  for (const skillName of options.manifest.inlineSkills ?? []) {
-    if (!rulesFile) {
-      options.warnings.push({
-        harness: options.harness.id,
-        targetPath: globalRoot,
-        reason: `inline-skill ${skillName} skipped on ${options.harness.id}: no single rules file`,
-      });
-      continue;
-    }
-    const content = await assembleInlineSkillRegion(
-      options.pluginPath,
-      skillName,
-      options.harness.id,
-    );
-    if (!content) {
-      options.warnings.push({
-        harness: options.harness.id,
-        targetPath: join(globalRoot, rulesFile),
-        reason: `inline-skill ${skillName} skipped: skills/${skillName}/SKILL.md not found`,
-      });
-      continue;
-    }
-    options.builder.addRegion(options.harness.id, globalRoot, {
-      kind: "marker",
-      targetPath: join(globalRoot, rulesFile),
-      regionKey: inlineSkillRegionKey({
-        pluginName: options.manifest.name,
-        harness: options.harness.id,
-        scope: "global",
-        skillName,
-      }),
-      commentPrefix: "<!--",
-      commentSuffix: " -->",
-      content,
-      plugin: options.plugin,
     });
   }
 

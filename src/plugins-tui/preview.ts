@@ -27,8 +27,7 @@ export function buildPreview(manifest: PluginManifest): InstallPreview {
     };
   });
 
-  const inlineSkills = manifest.inlineSkills ?? [];
   const targetsSummary = formatManifestTargets(manifest);
 
-  return { rows, inlineSkills, targetsSummary };
+  return { rows, targetsSummary };
 }

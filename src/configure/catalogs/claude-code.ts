@@ -27,7 +27,7 @@ export const claudeCodeCatalog: HarnessCatalog = {
     {
       path: "CLAUDE.md",
       format: "md",
-      note: "Global rules; Prism appends marker regions (file-router + inline-skill). Project also loads ./CLAUDE.md, ./.claude/CLAUDE.md, and ./CLAUDE.local.md (personal; not under ~/.claude/).",
+      note: "Global rules; Prism appends marker regions (file-router). Project also loads ./CLAUDE.md, ./.claude/CLAUDE.md, and ./CLAUDE.local.md (personal; not under ~/.claude/).",
     },
     {
       path: ".credentials.json",
@@ -599,7 +599,7 @@ export const claudeCodeCatalog: HarnessCatalog = {
       file: "CLAUDE.md",
       prismTouch: "region",
       description:
-        "Marker regions `prism:file-router.rules.*` and `prism:file-router.inline-skill.*` written by refresh for rules + inline skills.",
+        "Marker regions `prism:file-router.rules.*` written by refresh for rules.",
     },
     {
       key: "skills/prism-generated-*/",
@@ -636,7 +636,7 @@ export const claudeCodeCatalog: HarnessCatalog = {
       "src/harnesses.ts (claude-code entry)",
       "src/lowerer-capabilities.ts (claude-code surfaces)",
       "src/compile/lowerers/claude-code.ts",
-      "src/refresh.ts (file-router rules + inline-skill regions)",
+      "src/refresh.ts (file-router rules regions)",
       "src/workflow-harness-detection.ts (binary + PRISM_WORKFLOW_CLAUDE_BIN)",
     ],
   },

@@ -510,7 +510,7 @@ export const factoryDroidCatalog: HarnessCatalog = {
       file: "AGENTS.md",
       prismTouch: "region",
       description:
-        "Prism install-phase rules + inline skills as marker regions; not whole-file ownership",
+        "Prism install-phase rules as marker regions; not whole-file ownership",
     },
   ],
   refresh: {

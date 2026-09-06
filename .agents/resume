@@ -1,5 +1,29 @@
 #!/usr/bin/env bash
+# Never trace the short-lived workload identity, even when invoked with bash -x.
+set +x
 set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
 
-# Prism has no backing services or per-orb authentication to restore.
-exit 0
+: "${TAILSCALE_CLIENT_ID:?Refresh the orb environment with amp orb restart-processes}"
+: "${TAILSCALE_AUDIENCE:?Refresh the orb environment with amp orb restart-processes}"
+: "${QUASAR_SERVER_URL:?Refresh the orb environment with amp orb restart-processes}"
+if [[ "$QUASAR_SERVER_URL" != https://* ]]; then
+  printf '[resume] error: QUASAR_SERVER_URL must use HTTPS\n' >&2
+  exit 1
+fi
+
+# Start a stopped daemon without disrupting an already connected orb.
+sudo systemctl enable --now tailscaled
+# Keep the fresh project identity in memory only, and clear it on failure too.
+trap 'unset token' EXIT
+token="$(amp orb id-token --audience "$TAILSCALE_AUDIENCE" --subject-scope project)"
+# Pass through a pipe, not argv (which sudo can persist in its audit log).
+printf '%s' "$token" | sudo tailscale up \
+  --client-id="${TAILSCALE_CLIENT_ID}?ephemeral=true&preauthorized=true" \
+  --id-token=file:/dev/stdin \
+  --advertise-tags=tag:amp-orb \
+  --hostname="amp-orb-$(hostname | cut -c1-40)" \
+  --timeout=60s
+unset token
+curl --fail --silent --show-error --proto '=https' --max-time 60 "${QUASAR_SERVER_URL%/}/health"
+printf '\n[resume] Quasar reachable over Tailscale\n'

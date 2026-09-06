@@ -51,4 +51,28 @@ fi
 run_step "Install locked dependencies" bun install --frozen-lockfile --cpu='*' --os='*'
 run_step "Build Prism SDK" bun run build:core
 
+prepare_tailscale_and_quasar() {
+  # Install clients only: authentication belongs in resume, never in a shared snapshot.
+  sudo install -d /etc/systemd/system/tailscaled.service.d
+  sudo tee /etc/systemd/system/tailscaled.service.d/amp-orb.conf >/dev/null <<'EOF'
+[Service]
+Environment=TS_ASSUME_NETWORK_UP_FOR_TEST=true
+EOF
+  if ! command -v tailscale >/dev/null 2>&1; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+  fi
+  sudo systemctl daemon-reload
+  # Start a stopped daemon; never restart an already-running one.
+  sudo systemctl enable --now tailscaled
+
+  local quasar_version=0.5.3
+  local quasar_package="${HOME}/.local/lib/node_modules/@skastr0/quasar-cli/package.json"
+  if [[ ! -x "${HOME}/.local/bin/quasar" ]] ||
+     [[ "$(node -p 'require(process.argv[1]).version' "$quasar_package" 2>/dev/null || true)" != "$quasar_version" ]]; then
+    npm install --global --prefix "${HOME}/.local" "@skastr0/quasar-cli@${quasar_version}"
+  fi
+}
+
+run_step "Prepare Tailscale and Quasar clients" prepare_tailscale_and_quasar
+
 printf '\nOrb setup complete with Bun %s.\n' "$(bun --version)"

@@ -84,6 +84,48 @@ test("Cursor lowerer emits plugin subagents and command hooks", async () => {
     output.files.find((file) => file.targetPath.endsWith("hooks.json"))?.content ?? "{}",
   ) as { hooks?: Record<string, Array<{ command?: string }>> };
   expect(hooksJson.hooks?.sessionStart?.[0]?.command).toContain("session-start.mjs");
+  expect(hooksJson.hooks?.sessionStart?.[0]).not.toHaveProperty("hooks");
+});
+
+const writeToolBeforeHook = async (): Promise<Hook> => {
+  const dir = await mkdtemp(join(tmpdir(), "prism-cursor-hook-src-"));
+  const sourcePath = join(dir, "audit-read.hook.ts");
+  await writeFile(
+    sourcePath,
+    `import { Effect } from "effect";
+export default {
+  name: "audit-read",
+  event: "tool.before",
+  handle: () => Effect.succeed({ decision: "block", message: "nope" }),
+};
+`,
+  );
+  return new Hook({
+    name: "audit-read",
+    sourcePath,
+    event: "tool.before",
+    targets: [],
+    match: {},
+    handle: () => Effect.succeed({ decision: "block" as const, message: "nope" }),
+  });
+};
+
+test("Cursor tool.before wrapper emits permission deny and exit 2", async () => {
+  const output = await planLowering({
+    agents: [agent("reviewer")],
+    orbits: [],
+    hooks: [await writeToolBeforeHook()],
+    target: {
+      scope: "global",
+      root: "/tmp/cursor-block",
+      sourcePluginName: "demo",
+    },
+  });
+  const wrapper = output.files.find((file) => file.targetPath.endsWith("audit-read.mjs"))?.content ?? "";
+  expect(wrapper).toContain("permission");
+  expect(wrapper).toContain("deny");
+  expect(wrapper).toContain("user_message");
+  expect(wrapper).toContain("process.exit(2)");
 });
 
 test("tools-only Cursor compile plants no plugin bundle", async () => {

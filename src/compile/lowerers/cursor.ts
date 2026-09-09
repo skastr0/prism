@@ -182,8 +182,7 @@ const renderHookWrapperEntry = (
     fallbackSessionId: TARGET_ID,
     blockDecisionSource: `  console.log(JSON.stringify({
     permission: "deny",
-    decision: "block",
-    reason: result.message ?? "blocked",
+    user_message: result.message ?? "blocked",
   }));
   process.exit(2);`,
   });

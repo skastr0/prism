@@ -18,7 +18,7 @@ export const cursorCatalog: HarnessCatalog = {
     {
       path: "hooks.json",
       format: "json",
-      note: "Native CLI/IDE hooks; Prism hooks unsupported for Cursor",
+      note: "User-owned native hooks.json. Prism hooks emit under plugins/local/prism-generated-*/hooks/",
     },
     {
       path: "auth.json",
@@ -362,7 +362,7 @@ export const cursorCatalog: HarnessCatalog = {
       type: "object",
       file: "hooks.json",
       prismTouch: "none",
-      description: "Cursor native hooks. Prism hook DSL unsupported for this harness.",
+      description: "User-owned native hooks. Prism hook DSL lowers into plugins/local/prism-generated-*/hooks/hooks.json.",
     },
   ],
   refresh: {

@@ -432,7 +432,8 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
     "prompt.submit": {
       kind: "native",
       nativeEvent: "beforeSubmitPrompt",
-      controls: ["block"],
+      controls: [],
+      note: "Wrapper only emits a deny payload for tool.before; beforeSubmitPrompt is observe-only.",
     },
     "permission.request": {
       kind: "unsupported",
@@ -441,9 +442,19 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
     "session.start": { kind: "native", nativeEvent: "sessionStart", controls: [] },
     "session.end": { kind: "native", nativeEvent: "sessionEnd", controls: [] },
     "tool.failure": { kind: "native", nativeEvent: "postToolUseFailure", controls: [] },
-    stop: { kind: "native", nativeEvent: "stop", controls: ["block"] },
+    stop: {
+      kind: "native",
+      nativeEvent: "stop",
+      controls: [],
+      note: "Wrapper only emits a deny payload for tool.before; stop is observe-only.",
+    },
     "subagent.start": { kind: "native", nativeEvent: "subagentStart", controls: [] },
-    "subagent.stop": { kind: "native", nativeEvent: "subagentStop", controls: ["block"] },
+    "subagent.stop": {
+      kind: "native",
+      nativeEvent: "subagentStop",
+      controls: [],
+      note: "Wrapper only emits a deny payload for tool.before; subagentStop is observe-only.",
+    },
     "compact.before": { kind: "native", nativeEvent: "preCompact", controls: [] },
     "compact.after": {
       kind: "unsupported",

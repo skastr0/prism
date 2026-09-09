@@ -141,6 +141,23 @@ describe("pickPluginFreeScaffoldPins", () => {
     const catalogs = projectWorkerModelCatalog(snapshot);
     expect(pickScaffoldModel(catalogs, "cursor")).toBe("composer-2.5-fast");
   });
+
+  test("pickScaffoldModel prefers OMP flash selectors", () => {
+    const catalogs = projectWorkerModelCatalog({
+      generatedAt: "2026-09-09T00:00:00.000Z",
+      harnesses: [{
+        harness: "omp",
+        source: "command",
+        models: [
+          { id: "opencode-go/gpt-5.6-luna" },
+          { id: "opencode-go/glm-5.3-flash" },
+          { id: "ollama-cloud/glm-5.3-flash" },
+          { id: "opencode-go/glm-5.3-pro" },
+        ],
+      }],
+    });
+    expect(pickScaffoldModel(catalogs, "omp")).toBe("ollama-cloud/glm-5.3-flash");
+  });
 });
 
 describe("buildWorkflowModelCatalog", () => {

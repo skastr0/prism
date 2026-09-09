@@ -54,6 +54,7 @@ export const workflow = defineWorkflow({
 - \`anonymousWorkflowAgent\` — plugin-free. Use \`agents.*\` from \`prism/refs\` only after \`prism refresh <plugin>\`.
 - \`worker.model\` is harness-bound. There is no shared model type.
 - Cursor slugs are effort-suffixed. \`gemini-3.8-flash\` is not a slug; use \`gemini-3.8-flash-low|medium|high\`.
+- OMP pins are \`provider/id\` selectors from \`omp models --json\` (e.g. \`ollama-cloud/glm-5.3-flash\`). Bare ids such as \`gpt-5.6-luna\` are not selectors. \`opencode-go/*\` is Console Go and 400s in workflow \`--print\` (\`MissingSessionID\`). Thinking stays on \`--thinking\` / a \`:high\` config suffix, not \`worker.effort\`.
 - Amp: \`worker.model\` is a \`--mode\` dial (\`low|medium|high|ultra\`) or plugin key. Catalog slugs go in \`worker.catalogModel\`. Reasoning goes in \`worker.effort\`. Example: \`{ worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }\`.
 - Discover slugs: \`prism workflow models --worker <id> --query <text>\`.
 - \`worker.permission\` is harness-bound. Do not copy Codex \`sandbox-read-only\` onto Claude, Grok, Amp, or OMP.

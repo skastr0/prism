@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { readOmpConfigDefaultModel } from "./harness-types-discover.js";
 import { workflowWorkerHarnessIds, type WorkflowWorkerHarnessId } from "./lowerer-capabilities.js";
 import type { HarnessId } from "./types.js";
 import { workflowBunRuntime } from "./workflow-bun-runtime.js";
@@ -198,7 +200,9 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     command: "omp",
     envVar: "PRISM_WORKFLOW_OMP_BIN",
     probeArgs: ["--version"],
-    defaultModel: "gpt-5.6-luna",
+    // Selector form only. Prefer ~/.omp/agent/config.yml modelRoles.default
+    // (see workflowHarnessDefaultModel). This is last-resort when config is absent.
+    defaultModel: "opencode-go/gpt-5.6-luna",
   },
 } as const;
 
@@ -212,8 +216,14 @@ export const isWorkflowHarnessId = (id: string): id is WorkflowHarnessId =>
  * id outside the registry. Single source of truth for `resolveWorkflowTaskModel`
  * (src/workflows.ts) — do not hand-maintain a second per-harness default list.
  */
-export const workflowHarnessDefaultModel = (harness: string): string | undefined =>
-  isWorkflowHarnessId(harness) ? WORKFLOW_HARNESS_DETECTION_SPECS[harness].defaultModel : undefined;
+export const workflowHarnessDefaultModel = (harness: string): string | undefined => {
+  if (!isWorkflowHarnessId(harness)) return undefined;
+  if (harness === "omp") {
+    const fromConfig = readOmpConfigDefaultModel(homedir());
+    if (fromConfig !== undefined) return fromConfig;
+  }
+  return WORKFLOW_HARNESS_DETECTION_SPECS[harness].defaultModel;
+};
 
 /** Provider paired with `workflowHarnessDefaultModel` for provider-multiplexing harnesses (hermes). */
 export const workflowHarnessDefaultProvider = (harness: string): string | undefined =>

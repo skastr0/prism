@@ -15,6 +15,8 @@ import {
   parseCursorModelsList,
   parseGrokModelsCli,
   parseKimiProviderList,
+  parseOmpConfigDefaultModel,
+  parseOmpModelsJson,
   parseOpenCodeModels,
   refreshHarnessTypes,
 } from "./harness-types-discover.js";
@@ -111,6 +113,32 @@ describe("harness model parsers", () => {
       .toEqual(["grok-composer-2.5-fast", "grok-4.5"]);
     expect(parseKimiProviderList("Default model: kimi-code/kimi-for-coding\n"))
       .toEqual([{ id: "kimi-code/kimi-for-coding" }]);
+    expect(parseOmpModelsJson(JSON.stringify({
+      models: [
+        {
+          provider: "opencode-go",
+          id: "glm-5.3-flash",
+          selector: "opencode-go/glm-5.3-flash",
+          name: "GLM 5.3 Flash",
+          thinking: ["low", "high"],
+        },
+        {
+          provider: "opencode-go",
+          id: "gpt-5.6-luna",
+          selector: "opencode-go/gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+        },
+        { provider: "google", id: "gemini-3-flash" },
+      ],
+    })).models).toEqual([
+      { id: "google/gemini-3-flash", provider: "google" },
+      { id: "opencode-go/glm-5.3-flash", label: "GLM 5.3 Flash", provider: "opencode-go" },
+      { id: "opencode-go/gpt-5.6-luna", label: "GPT-5.6 Luna", provider: "opencode-go" },
+    ]);
+    expect(parseOmpModelsJson("{").error).toBeDefined();
+    expect(parseOmpConfigDefaultModel("modelRoles:\n  default: opencode-go/glm-5.3-flash:high\n"))
+      .toBe("opencode-go/glm-5.3-flash");
+    expect(parseOmpConfigDefaultModel("modelRoles:\n  smol: ollama-cloud/glm-5.3-flash\n")).toBeUndefined();
     expect(parseAmpModeHelp(
       "  -m, --mode <value>\n      Set the agent mode (low, medium, high, ultra, or a plugin mode by key or label)\n",
     )).toEqual([
@@ -287,6 +315,17 @@ describe("refreshHarnessTypes", () => {
           });
         }
         if (command === "opencode" && args[0] === "models") return "openai/gpt-5.4\n";
+        if (command === "omp" && args[0] === "models" && args[1] === "--json") {
+          return JSON.stringify({
+            models: [{
+              provider: "opencode-go",
+              id: "glm-5.3-flash",
+              selector: "opencode-go/glm-5.3-flash",
+              name: "GLM 5.3 Flash",
+              thinking: ["low", "high"],
+            }],
+          });
+        }
         return "";
       },
     });
@@ -320,6 +359,10 @@ describe("refreshHarnessTypes", () => {
     expect(source).not.toMatch(/interface WorkflowHarnessModelMap \{[^}]*anthropic\/claude-opus-5/s);
     expect(source).toContain("interface WorkflowHarnessCatalogModelMap");
     expect(source).toContain("interface WorkflowHarnessEffortMap");
+    expect(source).toContain("ompModelSlugs");
+    expect(source).toContain("opencode-go/glm-5.3-flash");
+    expect(source).toContain('"omp": "opencode-go/glm-5.3-flash"');
+    expect(source).not.toContain("ompEfforts");
   });
 });
 

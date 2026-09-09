@@ -54,6 +54,17 @@ export class OmpWorkflowWorkerError extends Error {
   }
 }
 
+/** Console Go selectors 400 in workflow `--print` (no `x-opencode-session`). */
+export const OMP_CONSOLE_GO_PREFIX = "opencode-go/";
+
+export const ompConsoleGoPinError = (model: string): string =>
+  `OMP worker.model ${JSON.stringify(model)} is Console Go. Workflow --print has no x-opencode-session and the provider returns 400 MissingSessionID. Pin a non-opencode-go selector from \`prism workflow models --worker omp\`.`;
+
+export const assertOmpWorkflowModel = (model: string | undefined): void => {
+  if (model === undefined || !model.startsWith(OMP_CONSOLE_GO_PREFIX)) return;
+  throw new OmpWorkflowWorkerError(ompConsoleGoPinError(model), { adapter: "omp-cli" });
+};
+
 const assertOmpPermission = (mode: WorkflowPermissionMode): void => {
   switch (mode) {
     case "legacy":
@@ -260,6 +271,7 @@ export const runOmpWorkflowTask = async (
   task: AnyWorkflowTask,
   options: OmpWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
+  assertOmpWorkflowModel(options.model);
   const sessionPersistence = options.sessionPersistence ?? "persistent";
   if (sessionPersistence === "ephemeral" && options.repair?.mode === "native-continuation") {
     throw new OmpWorkflowWorkerError(

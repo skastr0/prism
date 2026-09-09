@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Schema } from "effect";
 import {
+  assertOmpWorkflowModel,
   buildOmpArgs,
   OmpWorkflowWorkerError,
   parseOmpJsonStream,
@@ -48,6 +49,13 @@ const fakeOmpEventStream = (callsFile: string, sessionId: string): string => [
   "process.stdout.write(JSON.stringify({ type: 'agent_end', messages: [] }) + '\\n');",
   "",
 ].join("\n");
+
+describe("OMP Console Go pins", () => {
+  test("rejects opencode-go selectors before spawn", () => {
+    expect(() => assertOmpWorkflowModel("opencode-go/glm-5.3-flash")).toThrow(/MissingSessionID/);
+    expect(() => assertOmpWorkflowModel("google/gemini-3.8-flash")).not.toThrow();
+  });
+});
 
 describe("OMP workflow argv", () => {
   test("uses scripting, model, profile, permission, tool, and exact-resume flags", () => {

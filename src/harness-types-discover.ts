@@ -355,6 +355,61 @@ export const parseDevinModelsList = (
   return { models };
 };
 
+const OMP_THINKING_SUFFIX = /:(?:off|minimal|low|medium|high|xhigh|max|auto)$/u;
+
+/** Canonical OMP `--model` pin is `selector` (`provider/id`). */
+export const parseOmpModelsJson = (
+  raw: string,
+): { readonly models: HarnessModelOption[]; readonly error?: string } => {
+  try {
+    const doc = JSON.parse(raw) as { models?: unknown };
+    if (!Array.isArray(doc.models)) {
+      return { models: [], error: "omp models --json missing models array" };
+    }
+    const models: HarnessModelOption[] = [];
+    const seen = new Set<string>();
+    for (const row of doc.models) {
+      if (!row || typeof row !== "object") continue;
+      const rec = row as Record<string, unknown>;
+      const selector = typeof rec.selector === "string" && rec.selector.length > 0
+        ? rec.selector
+        : typeof rec.provider === "string" && typeof rec.id === "string"
+          ? `${rec.provider}/${rec.id}`
+          : typeof rec.id === "string"
+            ? rec.id
+            : undefined;
+      if (!selector || seen.has(selector)) continue;
+      seen.add(selector);
+      models.push({
+        id: selector,
+        ...(typeof rec.name === "string" ? { label: rec.name } : {}),
+        ...(typeof rec.provider === "string" ? { provider: rec.provider } : {}),
+      });
+    }
+    models.sort((left, right) => left.id.localeCompare(right.id));
+    return { models };
+  } catch (err) {
+    return { models: [], error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
+/** `modelRoles.default` from ~/.omp/agent/config.yml, without a trailing :thinking suffix. */
+export const parseOmpConfigDefaultModel = (raw: string): string | undefined => {
+  const match = /(?:^|\n)modelRoles:\s*\n(?:[ \t]+[^\n]+\n)*?[ \t]+default:\s*([^\s#]+)/u.exec(raw);
+  const value = match?.[1]?.trim();
+  if (value === undefined || value.length === 0) return undefined;
+  return value.replace(OMP_THINKING_SUFFIX, "");
+};
+
+export const readOmpConfigDefaultModel = (
+  home: string,
+  readText: HarnessTypesReadText = defaultReadText,
+): string | undefined => {
+  const raw = readText(join(home, ".omp", "agent", "config.yml"));
+  if (raw === undefined) return undefined;
+  return parseOmpConfigDefaultModel(raw);
+};
+
 export const parseKimiProviderList = (stdout: string): HarnessModelOption[] => {
   const defaultMatch = stdout.match(/Default model:\s*([^\s]+)/);
   const slug = defaultMatch?.[1];
@@ -526,6 +581,7 @@ export const discoverWorkflowHarnessModels = async (
     antigravity,
     devin,
     kimi,
+    omp,
   ] = await Promise.all([
     discoverAmpModes(run),
     Promise.resolve(readClaudeModels(home, readText)),
@@ -538,6 +594,7 @@ export const discoverWorkflowHarnessModels = async (
     fromCommand("antigravity-cli", run, "agy", ["models"], parseAgyModelsList),
     fromCommand("devin", run, "devin", ["models", "list"], parseDevinModelsList),
     fromCommand("kimi-code", run, "kimi", ["provider", "list"], parseKimiProviderList),
+    fromCommand("omp", run, "omp", ["models", "--json"], parseOmpModelsJson),
   ]);
 
   const grok = grokFromCache.models.length > 0 ? grokFromCache : grokCli;
@@ -553,7 +610,7 @@ export const discoverWorkflowHarnessModels = async (
     antigravity,
     devin,
     kimi,
-    empty("omp", "omp has no model-list CLI; worker.model stays a string"),
+    omp,
   ];
 };
 

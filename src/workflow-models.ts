@@ -232,6 +232,15 @@ export const pickScaffoldModel = (
       ?? slugs.find((slug) => slug.endsWith("-fast") && !slug.includes("thinking"))
       ?? slugs[0];
   }
+  if (worker === "omp") {
+    const notConsoleGo = (slug: string) => !slug.startsWith("opencode-go/");
+    return slugs.find((slug) => notConsoleGo(slug) && slug.includes("flash") && !slug.includes("pro"))
+      ?? slugs.find((slug) => slug.includes("flash") && !slug.includes("pro"))
+      ?? slugs.find((slug) => notConsoleGo(slug) && slug.endsWith("-fast"))
+      ?? slugs.find((slug) => slug.endsWith("-fast"))
+      ?? slugs.find(notConsoleGo)
+      ?? slugs[0];
+  }
   return slugs.find((slug) => slug.endsWith("-fast") && !slug.includes("thinking"))
     ?? slugs.find((slug) => slug.endsWith("-fast"))
     ?? slugs.find((slug) => slug.endsWith("-low"))

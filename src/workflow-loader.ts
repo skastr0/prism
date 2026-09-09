@@ -10,6 +10,7 @@ import {
   validatePhaseAgentBindings,
 } from "./workflow-validate-dynamic.js";
 import { ampWorkerPins, validateAmpCatalogPins } from "./workflow-amp-worker.js";
+import { assertOmpWorkflowModel } from "./workflow-omp-worker.js";
 import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
 // (globalThis.__prism_effect) as a module side-effect, so the workflow DSL
@@ -140,12 +141,15 @@ const resolveTaskModelRow = (
 
   try {
     const resolution = resolveWorkflowTaskModelResolution(task, { worker });
-    if (resolution === undefined) {
-      const defaultModel = workflowHarnessDefaultModel(worker);
-      if (defaultModel === undefined) return { id: task.id, worker, ...pinFields };
-      return { id: task.id, worker, model: defaultModel, source: "default", ...pinFields };
-    }
-    return { id: task.id, worker, model: resolution.model, source: resolution.source, ...pinFields };
+    const row = resolution === undefined
+      ? (() => {
+        const defaultModel = workflowHarnessDefaultModel(worker);
+        if (defaultModel === undefined) return { id: task.id, worker, ...pinFields };
+        return { id: task.id, worker, model: defaultModel, source: "default" as const, ...pinFields };
+      })()
+      : { id: task.id, worker, model: resolution.model, source: resolution.source, ...pinFields };
+    if (worker === "omp" && "model" in row) assertOmpWorkflowModel(row.model);
+    return row;
   } catch (error) {
     return {
       id: task.id,

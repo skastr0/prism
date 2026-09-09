@@ -168,6 +168,25 @@ describe("renderHarnessModelsModule", () => {
     expect(source).toContain('"claude-code": "opus" | "sonnet"');
   });
 
+  test("keeps Amp catalog slugs out of the worker.model union", () => {
+    const source = renderHarnessModelsModule({
+      generatedAt: "2026-09-09T00:00:00.000Z",
+      harnesses: [{
+        harness: "amp-code",
+        models: [
+          { id: "low", kind: "dial", label: "Low" },
+          { id: "grok45", kind: "plugin-mode" },
+          { id: "anthropic/claude-opus-5", kind: "model", label: "Claude Opus 5", provider: "anthropic" },
+        ],
+        source: "command",
+      }],
+    });
+    expect(source).toContain('"amp-code": "grok45" | "low"');
+    expect(source).toContain("ampCodeCatalogSlugs");
+    expect(source).toContain("anthropic/claude-opus-5");
+    expect(source).not.toMatch(/"amp-code": .*"anthropic\/claude-opus-5"/);
+  });
+
   test("plugin-free worker.model accepts live slugs and rejects unknown ones", async () => {
     const ok = await typecheckPluginFreeWorkflow("high");
     expect(ok).toEqual([]);
@@ -241,8 +260,11 @@ describe("refreshHarnessTypes", () => {
     expect(source).toContain("openai/gpt-5.4");
     expect(source).toContain("ampCodeModelSlugs");
     expect(source).toContain("grok45");
+    expect(source).toContain("ampCodeCatalogSlugs");
     expect(source).toContain("anthropic/claude-opus-5");
     expect(source).toContain("ampCodeEfforts");
+    expect(source).toContain('"amp-code": "grok45" | "high" | "low" | "medium" | "ultra"');
+    expect(source).not.toMatch(/"amp-code": .*"anthropic\/claude-opus-5"/);
   });
 });
 

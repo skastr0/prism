@@ -82,26 +82,46 @@ const unionType = (name: string, arrayName: string): string =>
 const stringUnion = (values: readonly string[]): string =>
   values.map((value) => JSON.stringify(value)).join(" | ");
 
+const workerFacingModels = (
+  harness: WorkflowWorkerId,
+  models: readonly HarnessModelOption[],
+): readonly HarnessModelOption[] =>
+  harness === "amp-code" ? models.filter((model) => model.kind !== "model") : models;
+
+const catalogModels = (
+  harness: WorkflowWorkerId,
+  models: readonly HarnessModelOption[],
+): readonly HarnessModelOption[] =>
+  harness === "amp-code" ? models.filter((model) => model.kind === "model") : [];
+
 const emitHarnessBlock = (
   harness: WorkflowWorkerId,
   models: readonly HarnessModelOption[],
-): { readonly constName: string; readonly unionLiteral: string; readonly source: string } | undefined => {
-  const slugs = uniqueSorted(models.map((model) => model.id));
-  if (slugs.length === 0) return undefined;
+): { readonly constName?: string; readonly unionLiteral?: string; readonly source: string } | undefined => {
+  const slugs = uniqueSorted(workerFacingModels(harness, models).map((model) => model.id));
+  const catalogSlugs = uniqueSorted(catalogModels(harness, models).map((model) => model.id));
+  if (slugs.length === 0 && catalogSlugs.length === 0) return undefined;
   const camel = CAMEL_BY_HARNESS[harness];
   const constName = `${camel}ModelSlugs`;
   const typeName = `${camel[0]!.toUpperCase()}${camel.slice(1)}ModelSlug`;
+  const parts: string[] = [];
+  if (slugs.length > 0) {
+    parts.push(`${constArray(constName, slugs)}\n${unionType(typeName, constName)}`);
+  }
+  if (catalogSlugs.length > 0) {
+    const catalogConst = `${camel}CatalogSlugs`;
+    const catalogType = `${camel[0]!.toUpperCase()}${camel.slice(1)}CatalogSlug`;
+    parts.push(`${constArray(catalogConst, catalogSlugs)}\n${unionType(catalogType, catalogConst)}`);
+  }
   const efforts = uniqueSorted(models.flatMap((model) => [...(model.efforts ?? [])]));
-  const effortConst = `${camel}Efforts`;
-  const effortType = `${camel[0]!.toUpperCase()}${camel.slice(1)}Effort`;
-  const effortBlock =
-    efforts.length > 0
-      ? `\n${constArray(effortConst, efforts)}\n${unionType(effortType, effortConst)}\n`
-      : "\n";
+  if (efforts.length > 0) {
+    const effortConst = `${camel}Efforts`;
+    const effortType = `${camel[0]!.toUpperCase()}${camel.slice(1)}Effort`;
+    parts.push(`${constArray(effortConst, efforts)}\n${unionType(effortType, effortConst)}`);
+  }
   return {
-    constName,
-    unionLiteral: stringUnion(slugs),
-    source: `${constArray(constName, slugs)}\n${unionType(typeName, constName)}${effortBlock}`,
+    ...(slugs.length > 0 ? { constName, unionLiteral: stringUnion(slugs) } : {}),
+    source: `${parts.join("\n")}\n`,
   };
 };
 
@@ -139,8 +159,10 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
     const block = emitHarnessBlock(harness, entry.models);
     if (block === undefined) continue;
     blocks.push(block.source);
-    augmentLines.push(`    ${JSON.stringify(harness)}: ${block.unionLiteral};`);
-    mapLines.push(`  ${JSON.stringify(harness)}: ${block.constName},`);
+    if (block.unionLiteral !== undefined && block.constName !== undefined) {
+      augmentLines.push(`    ${JSON.stringify(harness)}: ${block.unionLiteral};`);
+      mapLines.push(`  ${JSON.stringify(harness)}: ${block.constName},`);
+    }
   }
 
   return `/**

@@ -184,7 +184,7 @@ export const ampCodeCatalog: HarnessCatalog = {
     "Compiled agents lower as skills/prism-agent-<name>/SKILL.md (role skills); no native Amp agent config surface.",
     "Harness projectConfigPath is .agents/ (skills + AGENTS.md routing); native Amp workspace settings/plugins also use .amp/ at the project root.",
     "commands/ under the Amp root holds native markdown commands (user/legacy); Prism-managed commands register via generated plugins, not that directory.",
-    "Workflow Amp inventory: --mode dial (low|medium|high|ultra), plugin mode keys from `amp plugins list`, and curated provider/model IDs from `amp plugins show-agent-options --json`. Default detection model: low.",
+    "Workflow Amp inventory: --mode dial + plugin mode keys type worker.model. Curated provider/model IDs from show-agent-options stay catalog data (ampCodeCatalogSlugs), not --mode. Default detection model: low.",
     "Managed/enterprise override path (outside Prism): macOS /Library/Application Support/ampcode/managed-settings.json.",
   ],
 };

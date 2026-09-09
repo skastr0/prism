@@ -164,17 +164,27 @@ const platformPackageRootFromSource = (): string | undefined => {
 
 /**
  * Find the prism.d.ts directory. Resolution order:
- *   1. Binary heuristic: platformPackageRootFromBinary() returns the platform
- *      package root (handles both npm-installed and dev-symlink layouts).
- *      Check <pkg-root>/types/index.d.ts.
- *   2. Source-checkout fallback: the freshly-emitted dist/dts-tmp/.
+ *   1. Source checkout with dist/dts-tmp/ (prism-dev / bun src/cli.ts).
+ *   2. Installed platform package types/ (npm layout).
+ *   3. In-repo packages/npm/<platform>/types when dts-tmp is absent.
  *
  * Returns undefined when none resolve — callers then warn + proceed rather than
  * pointing "prism" at a nonexistent file (which would surface as a misleading
  * "Cannot find module 'prism'" type error on every valid workflow).
  */
 const resolvePrismTypesDir = (): string | undefined => {
-  // 1. Platform package root (npm-installed or dev-symlink via binary heuristic).
+  // Dev checkout first: prism-dev is a symlink to dist/prism-<platform>, and
+  // the in-repo packages/npm/*/types are last-publish snapshots. Prefer the
+  // just-emitted authoring dts so `prism-dev workflow typecheck` matches source.
+  const repoRoot = platformPackageRootFromSource();
+  if (repoRoot && existsSync(join(repoRoot, "packages", "npm"))) {
+    const tmp = join(repoRoot, "dist", "dts-tmp");
+    if (existsSync(join(tmp, "index.d.ts"))) {
+      return tmp;
+    }
+  }
+
+  // Installed binary: platform package root (npm layout or leftover npm types).
   const pkgRoot = platformPackageRootFromBinary();
   if (pkgRoot) {
     const candidate = join(pkgRoot, "types");
@@ -183,17 +193,10 @@ const resolvePrismTypesDir = (): string | undefined => {
     }
   }
 
-  // 2. Source-checkout fallback: the freshly-emitted dist/dts-tmp/.
-  const repoRoot = platformPackageRootFromSource();
   if (repoRoot) {
-    const tmp = join(repoRoot, "dist", "dts-tmp");
-    if (existsSync(join(tmp, "index.d.ts"))) {
-      return tmp;
-    }
 
-    // 3. Source-checkout fallback: pre-built platform package types under
-    // packages/npm/. This covers `bun run src/cli.ts` workflows when the
-    // lightweight build:cli target has not yet emitted dist/dts-tmp/.
+    // Source-checkout fallback: pre-built platform package types under
+    // packages/npm/. Covers `bun run src/cli.ts` when dist/dts-tmp/ is absent.
     if (existsSync(join(repoRoot, "packages", "npm"))) {
       for (const name of platformPackageDirNames()) {
         const candidate = join(repoRoot, "packages", "npm", name, "types");

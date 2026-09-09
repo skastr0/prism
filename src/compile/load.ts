@@ -167,10 +167,10 @@ export default effect;
 
 /**
  * The workflow DSL runtime. Off-repo workflow files import { defineTask,
- * defineWorkflow } from "prism"; this module supplies those builders with
- * behavior identical to src/workflows.ts. Schema is read from the binary's
- * embedded Effect (globalThis.__prism_effect) so Schema.isSchema and
- * decodeTaskOutput operate on the binary's Effect instance.
+ * defineWorkflow, anonymousWorkflowAgent } from "prism"; this module supplies
+ * those builders with behavior identical to src/workflows.ts. Schema is read
+ * from the binary's embedded Effect (globalThis.__prism_effect) so
+ * Schema.isSchema and decodeTaskOutput operate on the binary's Effect instance.
  */
 const WORKFLOW_DSL_RUNTIME_JS = `
 const effect = globalThis.__prism_effect;
@@ -178,6 +178,16 @@ if (!effect) {
   throw new Error("prism Effect runtime bridge was not initialized");
 }
 const Schema = effect.Schema;
+
+export const anonymousWorkflowAgent = {
+  kind: "agent-ref",
+  plugin: "prism",
+  name: "anonymous",
+  description: "Plugin-free workflow worker (no compiled Prism agent).",
+  sourceHash: "${"0".repeat(64)}",
+  manifestHash: "${"0".repeat(64)}",
+  installs: [],
+};
 
 export const defineTask = (definition) => ({
   kind: "workflow-task",

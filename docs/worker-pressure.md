@@ -68,7 +68,7 @@ adapter already walks its own stream:
 | `hermes` | **unconfirmed** — no structured-output flag in the adapter | session id via stderr regex |
 | `devin` | **unconfirmed** — ATIF export file, not a live stream | `sessionIdFromAtif` (`workflow-devin-worker.ts:142`) |
 
-Seven harnesses emit machine-readable events today. Three (`agy`, `hermes`,
+Eight harnesses emit machine-readable events today. Three (`agy`, `hermes`,
 `devin`) need a live capture before their taxonomy can be written honestly —
 see §11.
 

@@ -199,6 +199,31 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   expect(models).toContain("ampCodeModelSlugs");
   expect(models).not.toContain("projects/");
 
+  const catalog = await runCli(["workflow", "catalog"], env, { cwd: root });
+  expect(catalog.exitCode).toBe(0);
+  expect(catalog.stdout).toContain("plugin-free");
+  expect(catalog.stdout).toContain("prism workflow models");
+  expect(catalog.stdout).toContain("Installed harness slugs:");
+
+  const listed = await runCli(["workflow", "models", "--worker", "amp-code", "--json"], env, { cwd: root });
+  expect(listed.exitCode).toBe(0);
+  const listedJson = JSON.parse(listed.stdout) as {
+    snapshotPresent: boolean;
+    harnesses: ReadonlyArray<{ worker: string; modelCount: number }>;
+  };
+  expect(listedJson.snapshotPresent).toBe(true);
+  expect(listedJson.harnesses).toHaveLength(1);
+  expect(listedJson.harnesses[0]?.worker).toBe("amp-code");
+  expect(listedJson.harnesses[0]?.modelCount).toBeGreaterThan(0);
+
+  const queried = await runCli(["workflow", "catalog", "--query", "low"], env, { cwd: root });
+  expect(queried.exitCode).toBe(0);
+  expect(queried.stdout).toMatch(/low/i);
+
+  const unknownWorker = await runCli(["workflow", "models", "--worker", "not-a-worker"], env, { cwd: root });
+  expect(unknownWorker.exitCode).not.toBe(0);
+  expect(unknownWorker.stderr).toContain("Unknown worker");
+
   const scaffold = await runCli(["workflow", "scaffold", "plugin-free"], env, { cwd: root });
   expect(scaffold.exitCode).toBe(0);
   expect(scaffold.stdout).toContain("anonymousWorkflowAgent");

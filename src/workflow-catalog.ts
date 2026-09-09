@@ -318,11 +318,15 @@ export const buildWorkflowCatalog = async (
 
 const renderMissingSurfaceHuman = (surfaceDir: string): string =>
   [
-    `No compiled workflow surface found for this project at:`,
+    `Workflows are plugin-free. No compiled plugin refs at:`,
     `  ${surfaceDir}`,
     ``,
-    `Compile this project first: \`prism refresh <plugin-path>\`,`,
-    `then re-run \`prism workflow catalog\`.`,
+    `List live harness slugs:  \`prism workflow models\``,
+    `Query one worker:         \`prism workflow models --worker cursor --query opus\``,
+    `Refresh the snapshot:     \`prism workflow refresh-harness-types\``,
+    `Scaffold a starter:       \`prism workflow scaffold hello\``,
+    ``,
+    `Plugin refs (agents.* / orbits.*) are optional. Compile a plugin only if you want them.`,
   ].join("\n");
 
 /** Human-readable full-detail catalog rendering (used by `--full` and `--orbit <ns>`). */
@@ -410,7 +414,8 @@ export const renderCompactIndexHuman = (index: CompactCatalogIndex): string => {
   }
   lines.push(``);
   lines.push(`workers: ${index.workers.join(", ")}`);
-  lines.push(`model profiles: ${index.modelProfileCount}`);
+  lines.push(`model profiles: ${index.modelProfileCount}  (plugin modelspaces — optional)`);
+  lines.push(`harness models: \`prism workflow models\`  (plugin-free live slugs)`);
   lines.push(``);
   lines.push(
     `Drill down: --orbit <ns> (one namespace) | --ref <ref> (one entity) | --query <text> (search) | --full (complete dump)`,
@@ -637,7 +642,9 @@ export const renderRefsStatus = (status: RefsStatus): string => {
   if (!status.present) {
     return [
       `refs:      ${status.surfaceDir}`,
-      `freshness: missing — compile this project first (\`prism refresh <plugin-path>\`)`,
+      `freshness: missing — no compiled plugin refs (optional)`,
+      `  List slugs:  \`prism workflow models\``,
+      `  Compile refs only if you want agents.*: \`prism refresh <plugin-path>\``,
     ].join("\n");
   }
   const detail =
@@ -703,8 +710,9 @@ const scaffoldWorkflowHeader = (name: string, pluginFree: boolean): string => `/
  *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
  *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts --max-concurrent-tasks 2
  *
- * Discover harness models with: prism workflow refresh-harness-types
-${pluginFree ? " * No compiled plugin on this machine — using anonymousWorkflowAgent.\n" : " * Discover other agents/orbits/models with: prism workflow catalog\n"} */`;
+ * Discover harness models: prism workflow models --worker cursor --query opus
+ * Refresh slugs:           prism workflow refresh-harness-types
+${pluginFree ? " * Plugin-free — using anonymousWorkflowAgent. Plugins are optional.\n" : " * Plugin refs: prism workflow catalog --ref <ref>\n"} */`;
 
 /** Plugin-free starter when no compiled refs surface exists. */
 export const scaffoldPluginFreeWorkflowSource = (

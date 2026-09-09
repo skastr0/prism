@@ -91,8 +91,15 @@ import {
   scaffoldPluginFreeWorkflowSource,
   scaffoldWorkflowSource,
   searchCatalog,
+  WORKFLOW_WORKERS,
   workflowRefsStatus,
 } from "./workflow-catalog.js";
+import {
+  buildWorkflowModelCatalog,
+  parseWorkflowWorkerId,
+  renderWorkerModelCatalogHuman,
+  renderWorkerModelCountsHuman,
+} from "./workflow-models.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
 import { runConfigureTui } from "./configure/index.js";
@@ -219,7 +226,7 @@ program
 
 const workflow = program
   .command("workflow")
-  .description("Validate Prism workflow files");
+  .description("Author and run harness workflows (plugins optional)");
 
 const parseIntegerAtLeast = (value: string, minimum: number, message: string): number => {
   const parsed = Number(value);
@@ -325,8 +332,8 @@ workflow
 workflow
   .command("catalog")
   .description(
-    "Discover refs (agents.*/orbits.*/models.*) compiled for this project. Default: compact index. " +
-      "--orbit <ns> for one namespace, --ref <ref> for one entity, --query <text> to search, --full for the complete dump.",
+    "Discover workflow surface: live harness workers always, plugin refs when compiled. Default: compact index. " +
+      "Without a plugin, --query searches harness models. --orbit/--ref need plugin refs. --full dumps compiled refs.",
   )
   .option("--json", "Emit machine-readable JSON")
   .option("--orbit <name>", "Full detail for one orbit/namespace")
@@ -349,10 +356,43 @@ workflow
 
       const result = await buildWorkflowCatalog();
       if (result.catalog === null) {
-        const output = options.json === true
-          ? JSON.stringify({ surfaceDir: result.surfaceDir, present: false }, null, 2)
-          : renderCatalogHuman(result);
-        await writeStdout(`${output}\n`);
+        if (options.orbit !== undefined || options.ref !== undefined || options.full === true) {
+          throw new CliUsageError(
+            [
+              "That catalog flag needs compiled plugin refs (optional).",
+              `Missing: ${result.surfaceDir}`,
+              "List live slugs: `prism workflow models --worker cursor --query opus`",
+              "Scaffold: `prism workflow scaffold hello`",
+              "Compile refs only if you want agents.*: `prism refresh <plugin-path>`",
+            ].join("\n"),
+          );
+        }
+        const models = buildWorkflowModelCatalog({ query: options.query });
+        if (options.json === true) {
+          await writeStdout(`${JSON.stringify({
+            surfaceDir: result.surfaceDir,
+            present: false,
+            pluginRefs: false,
+            workers: [...WORKFLOW_WORKERS],
+            snapshotPresent: models.snapshotPresent,
+            harnesses: models.catalogs,
+            query: options.query,
+          }, null, 2)}\n`);
+          return;
+        }
+        const body = options.query !== undefined
+          ? renderWorkerModelCatalogHuman(models.catalogs, {
+            query: options.query,
+            missingSnapshot: !models.snapshotPresent,
+          })
+          : [
+            renderCatalogHuman(result),
+            "",
+            models.snapshotPresent
+              ? renderWorkerModelCountsHuman(models.catalogs)
+              : renderWorkerModelCatalogHuman(models.catalogs, { missingSnapshot: true }),
+          ].join("\n");
+        await writeStdout(`${body}\n`);
         return;
       }
       const catalog = result.catalog;
@@ -400,6 +440,39 @@ workflow
       await writeStdout(`${output}\n`);
     } catch (error) {
       printCliError(error, "Workflow catalog failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflow
+  .command("models")
+  .description("List live harness model slugs (plugin-free). Family-grouped; filter with --worker and --query")
+  .option("--json", "Emit machine-readable JSON")
+  .option("--worker <id>", "One workflow worker (cursor, amp-code, ...)")
+  .option("--query <text>", "Case-insensitive substring over family ids and slugs")
+  .action(async (options: {
+    readonly json?: boolean;
+    readonly worker?: string;
+    readonly query?: string;
+  }) => {
+    try {
+      const worker = options.worker === undefined ? undefined : parseWorkflowWorkerId(options.worker);
+      const result = buildWorkflowModelCatalog({ worker, query: options.query });
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify({
+          snapshotPresent: result.snapshotPresent,
+          query: options.query,
+          worker,
+          harnesses: result.catalogs,
+        }, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`${renderWorkerModelCatalogHuman(result.catalogs, {
+        query: options.query,
+        missingSnapshot: !result.snapshotPresent,
+      })}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow models failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });

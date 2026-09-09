@@ -40,14 +40,14 @@ These imports resolve through a **generated tsconfig**, not your project's own m
 - `prism workflow scaffold <name>` writes a validating starter into `~/.prism/workflows/` (never inside the repo it drives). With no compiled refs it uses `anonymousWorkflowAgent`.
 - `prism workflow typecheck <file>` and `prism workflow validate <file>` use that generated environment automatically.
 
-Workflow **store and refs** are project-scoped. Harness model types are not — they follow the machine. From a directory that was never compiled, `prism workflow catalog` and `prism workflow refs` tell you there is no plugin surface, and `prism/refs` will not resolve. You can still author and typecheck a workflow. Discover what is available with:
+Workflow **store and refs** are project-scoped. Harness model types are not — they follow the machine. From a directory that was never compiled, `prism/refs` will not resolve. That is fine — workflows are the flagship and plugins are optional. Discover what is available with:
 
 ```bash
 prism workflow refresh-harness-types   # global live model unions (no plugin)
-prism workflow catalog                 # compact index of agents.* / orbits.* / models.*
-prism workflow catalog --orbit forge   # one namespace
-prism workflow catalog --query review  # search
-prism workflow refs                    # refs surface location + freshness
+prism workflow models --worker cursor --query opus
+prism workflow catalog                 # workers + live slug counts; plugin refs if compiled
+prism workflow catalog --query opus    # searches harness models when no plugin
+prism workflow refs                    # optional plugin refs location + freshness
 ```
 
 ## defineTask
@@ -370,6 +370,7 @@ Traces interleave engine spans (task attempts, repairs, cache hits) with your ow
 
 ```bash
 prism workflow refresh-harness-types   # optional: live worker.model unions, no plugin
+prism workflow models --worker cursor --query opus
 prism workflow typecheck <file>        # generated tsconfig + shipped declarations
 prism workflow validate <file>         # loads the module, resolves each task's (worker, model)
 prism workflow run <file> --mock-output mocks.json

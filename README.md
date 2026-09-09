@@ -323,12 +323,13 @@ Transient worker failures retry with bounded attempts and backoff; config errors
 
 ```bash
 prism workflow refresh-harness-types  # global typed slugs from installed harnesses (no plugin)
+prism workflow models --worker cursor --query opus
 prism workflow scaffold my-first      # validating starter in ~/.prism/workflows
 prism workflow validate ~/.prism/workflows/my-first.workflow.ts   # resolved (worker, model) per task
 prism workflow run ~/.prism/workflows/my-first.workflow.ts
 ```
 
-A plugin is optional. `refresh-harness-types` writes machine-wide model unions so `worker.model` typechecks without `prism/refs` or modelspaces. `catalog` / `refs` still need a compiled plugin. A live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
+A plugin is optional. Workflows are the flagship: `catalog`, `models`, `scaffold`, `typecheck`, `validate`, and `run` work with no compiled plugin. `refresh-harness-types` writes machine-wide model unions so `worker.model` typechecks without `prism/refs` or modelspaces. Plugin refs (`agents.*` / `orbits.*`) are an add-on. A live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
 
 ## Stateless tools — no daemon, no MCP
 

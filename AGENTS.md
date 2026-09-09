@@ -153,6 +153,9 @@ prism harnesses
 
 # Discover installed harness models into a global typed cache
 prism workflow refresh-harness-types
+
+# List live harness slugs (plugin-free)
+prism workflow models --worker cursor --query opus
 ```
 
 ### Prism home and managed state

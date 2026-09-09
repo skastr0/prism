@@ -275,6 +275,7 @@ describe("scaffoldPluginFreeWorkflowSource", () => {
     const src = scaffoldPluginFreeWorkflowSource("bare");
     expect(src).toContain("anonymousWorkflowAgent");
     expect(src).toContain("refresh-harness-types");
+    expect(src).toContain("workflow models");
     expect(src).not.toContain('from "prism/refs"');
   });
 });
@@ -303,6 +304,8 @@ describe("renderRefsStatus", () => {
   test("missing surface explains how to compile", () => {
     const out = renderRefsStatus({ surfaceDir: "/d", present: false, refsManifestHash: null, compileManifestHash: null, freshness: "missing" });
     expect(out).toContain("missing");
+    expect(out).toContain("optional");
+    expect(out).toContain("workflow models");
   });
   test("stale shows both manifest hashes", () => {
     const out = renderRefsStatus({ surfaceDir: "/d", present: true, refsManifestHash: "aaaaaaaaaaaa1", compileManifestHash: "bbbbbbbbbbbb2", freshness: "stale" });
@@ -351,6 +354,7 @@ describe("renderCompactIndexHuman", () => {
     expect(out).toContain("--ref <ref>");
     expect(out).toContain("--query <text>");
     expect(out).toContain("--full");
+    expect(out).toContain("prism workflow models");
   });
 
   test("stays compact — well under a context-bomb line count", () => {

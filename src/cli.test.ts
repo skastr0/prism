@@ -228,7 +228,7 @@ export const workflow = defineWorkflow({
     agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
-    worker: { worker: "amp-code", model: "rush" },
+    worker: { worker: "amp-code", model: "low" },
   })],
 });
 `);

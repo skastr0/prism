@@ -754,8 +754,8 @@ describe("workflow-e2e matrix evidence checks", () => {
         harness: "amp-code" as const,
         workflow: "smoke-amp-code-deep.workflow.ts",
         challenge: "amp-code-deep-2026-06-20-001",
-        expectedModel: "deep",
-        metadata: { adapter: "amp-code", model: "deep", finish: { repairs: 0 } },
+        expectedModel: "high",
+        metadata: { adapter: "amp-code", model: "high", finish: { repairs: 0 } },
       },
     ];
 
@@ -772,21 +772,33 @@ describe("workflow-e2e matrix evidence checks", () => {
     }
   });
 
-  test("accepts Amp Code deep and rush mode metadata", () => {
-    for (const mode of ["deep", "rush"] as const) {
+  test("accepts Amp Code high and low mode metadata", () => {
+    const cases = [
+      {
+        workflow: "smoke-amp-code-deep.workflow.ts",
+        challenge: "amp-code-deep-2026-06-20-001",
+        expectedModel: "high",
+      },
+      {
+        workflow: "smoke-amp-code-rush.workflow.ts",
+        challenge: "amp-code-rush-2026-06-20-001",
+        expectedModel: "low",
+      },
+    ] as const;
+    for (const entry of cases) {
       const checks = evaluateHarnessChecks(
         {
           harness: "amp-code",
-          workflow: `smoke-amp-code-${mode}.workflow.ts`,
-          challenge: `amp-code-${mode}-2026-06-20-001`,
-          expectedModel: mode,
+          workflow: entry.workflow,
+          challenge: entry.challenge,
+          expectedModel: entry.expectedModel,
         },
         {
           run: completedRun,
-          expectedProof: proofFor(`amp-code-${mode}-2026-06-20-001`),
+          expectedProof: proofFor(entry.challenge),
           proof: {
             pass: true,
-            metadata: { adapter: "amp-code", model: mode, finish: { repairs: 0 } },
+            metadata: { adapter: "amp-code", model: entry.expectedModel, finish: { repairs: 0 } },
           },
         },
       );

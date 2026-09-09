@@ -294,10 +294,10 @@ const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
   agent: builder,
-  prompt: "Build with Amp deep mode.",
+  prompt: "Build with Amp high mode.",
   output,
   cacheKey: "amp-model-build",
-  worker: { worker: "amp-code", model: "deep" },
+  worker: { worker: "amp-code", model: "high" },
 });
 const review = defineTask({
   id: "review",
@@ -1562,7 +1562,7 @@ export default defineWorkflow({
           "--store",
           storeFile,
           "--model",
-          "rush",
+          "low",
         ],
         cwd: root,
         env: { ...process.env, PRISM_WORKFLOW_AMP_BIN: fakeAmp },
@@ -1583,9 +1583,9 @@ export default defineWorkflow({
 
     const result = await run();
     const cachedResult = await run();
-    expect(result.tasks.map((task) => task.output.summary)).toEqual(["deep", "rush"]);
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["high", "low"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["amp-code", "amp-code"]);
-    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["deep", "rush"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["high", "low"]);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
 
     const expectedCwd = await realpath(root);
@@ -1599,8 +1599,8 @@ export default defineWorkflow({
       cwd: string;
     });
     expect(calls).toEqual([
-      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "deep", cwd: expectedCwd },
-      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "rush", cwd: expectedCwd },
+      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "high", cwd: expectedCwd },
+      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "low", cwd: expectedCwd },
     ]);
   });
 

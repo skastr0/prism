@@ -28,12 +28,13 @@ export class AmpWorkflowWorkerError extends Error {
   }
 }
 
-export type AmpWorkflowMode = "deep" | "rush";
-
-export const assertAmpWorkflowMode = (mode: string | undefined): AmpWorkflowMode | undefined => {
+export const assertAmpWorkflowMode = (mode: string | undefined): string | undefined => {
   if (mode === undefined) return undefined;
-  if (mode === "deep" || mode === "rush") return mode;
-  throw new AmpWorkflowWorkerError(`unsupported Amp workflow mode '${mode}'. Supported modes: deep, rush`);
+  const trimmed = mode.trim();
+  if (trimmed.length === 0) {
+    throw new AmpWorkflowWorkerError("Amp workflow mode must be a non-empty string");
+  }
+  return trimmed;
 };
 
 const assertAmpPermission = (mode: WorkflowPermissionMode): void => {

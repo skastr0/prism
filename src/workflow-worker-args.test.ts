@@ -82,11 +82,14 @@ describe("workflow worker argument builders", () => {
     expect(args).not.toContain("subagent");
   });
 
-  test("amp accepts only deep and rush workflow modes", () => {
-    expect(assertAmpWorkflowMode("deep")).toBe("deep");
-    expect(assertAmpWorkflowMode("rush")).toBe("rush");
-    expect(() => assertAmpWorkflowMode("smart")).toThrow("unsupported Amp workflow mode");
-    expect(buildAmpArgs({ mode: "deep", prompt: "return json", permission: "legacy" })).toContain("deep");
+  test("amp passes --mode through as a live Amp mode key", () => {
+    expect(assertAmpWorkflowMode("low")).toBe("low");
+    expect(assertAmpWorkflowMode("ultra")).toBe("ultra");
+    expect(assertAmpWorkflowMode("grok45")).toBe("grok45");
+    expect(() => assertAmpWorkflowMode("")).toThrow("non-empty");
+    expect(buildAmpArgs({ mode: "high", prompt: "return json", permission: "legacy" })).toEqual(
+      expect.arrayContaining(["--mode", "high"]),
+    );
   });
 
   test("antigravity-cli is a supported workflow worker", () => {

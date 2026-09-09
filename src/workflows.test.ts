@@ -52,7 +52,7 @@ const modelProfile = {
     grok: { model: "grok-build-fast" },
     hermes: { model: "openai/gpt-5.1-mini" },
     "kimi-code": { model: "moonshot/kimi-k2" },
-    "amp-code": { model: "deep" },
+    "amp-code": { model: "high" },
     "antigravity-cli": { model: "Gemini 3.5 Flash (Low)" },
   },
 } as const satisfies WorkflowModelProfileRef;
@@ -273,7 +273,7 @@ describe("workflow authoring primitives", () => {
       prompt: amp.prompt,
       permission: "legacy",
     });
-    expect(ampArgs.slice(ampArgs.indexOf("--mode"), ampArgs.indexOf("--mode") + 2)).toEqual(["--mode", "deep"]);
+    expect(ampArgs.slice(ampArgs.indexOf("--mode"), ampArgs.indexOf("--mode") + 2)).toEqual(["--mode", "high"]);
 
     const antigravity = taskFor("antigravity-cli");
     const antigravityModel = resolveWorkflowTaskModel(antigravity);

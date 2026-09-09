@@ -362,6 +362,47 @@ export const parseKimiProviderList = (stdout: string): HarnessModelOption[] => {
   return [{ id: slug }];
 };
 
+/** Built-in `--mode` values from `amp --help` (`low, medium, high, ultra, or a plugin mode…`). */
+export const parseAmpModeHelp = (stdout: string): HarnessModelOption[] => {
+  const match = stdout.match(/agent mode \(([^)]+)\)/i);
+  if (!match?.[1]) return [];
+  const head = match[1].split(/\s+or\s+/i)[0] ?? "";
+  const ids = [
+    ...new Set(
+      head
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => /^[A-Za-z][A-Za-z0-9-]*$/.test(part)),
+    ),
+  ];
+  return ids.map((id) => ({ id }));
+};
+
+/** Plugin-registered `--mode` keys from `amp plugins list` (`agent mode: grok45`). */
+export const parseAmpPluginListModes = (stdout: string): HarnessModelOption[] => {
+  const ids: string[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = line.match(/agent mode:\s+(\S+)/i);
+    if (match?.[1]) ids.push(match[1]);
+  }
+  return [...new Set(ids)].sort((left, right) => left.localeCompare(right)).map((id) => ({ id }));
+};
+
+const discoverAmpModes = async (run: HarnessTypesCommandRunner): Promise<DiscoveredHarnessModels> => {
+  const [help, plugins] = await Promise.all([run("amp", ["--help"]), run("amp", ["plugins", "list"])]);
+  const seen = new Set<string>();
+  const models: HarnessModelOption[] = [];
+  for (const model of [...parseAmpModeHelp(help), ...parseAmpPluginListModes(plugins)]) {
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    models.push(model);
+  }
+  if (models.length === 0) {
+    return empty("amp-code", "amp --help / amp plugins list produced no --mode values");
+  }
+  return result("amp-code", models, "command");
+};
+
 const fromCommand = async (
   harness: WorkflowWorkerId,
   run: HarnessTypesCommandRunner,
@@ -399,6 +440,7 @@ export const discoverWorkflowHarnessModels = async (
   };
 
   const [
+    amp,
     claude,
     codex,
     grokCli,
@@ -410,6 +452,7 @@ export const discoverWorkflowHarnessModels = async (
     devin,
     kimi,
   ] = await Promise.all([
+    discoverAmpModes(run),
     Promise.resolve(readClaudeModels(home, readText)),
     fromCommand("codex-cli", run, "codex", ["debug", "models"], parseCodexDebugModels),
     fromCommand("grok", run, "grok", ["models"], (stdout) => parseGrokModelsCli(stdout)),
@@ -425,11 +468,7 @@ export const discoverWorkflowHarnessModels = async (
   const grok = grokFromCache.models.length > 0 ? grokFromCache : grokCli;
 
   return [
-    {
-      harness: "amp-code",
-      models: [{ id: "deep" }, { id: "rush" }],
-      source: "static",
-    },
+    amp,
     claude,
     codex,
     grok,

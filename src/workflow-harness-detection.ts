@@ -114,8 +114,8 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     command: "amp",
     envVar: "PRISM_WORKFLOW_AMP_BIN",
     probeArgs: ["--version"],
-    // "rush" is Amp's fast mode (vs. "deep"); the only two valid values.
-    defaultModel: "rush",
+    // Amp --mode: low | medium | high | ultra | plugin mode key. `low` is the cheap-fast default.
+    defaultModel: "low",
   },
   "antigravity-cli": {
     harness: "antigravity-cli",

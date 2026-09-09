@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import type * as TypeScript from "typescript";
 import {
   parseAgyModelsList,
+  parseAmpModeHelp,
+  parseAmpPluginListModes,
   parseClaudeModelCache,
   parseCodexDebugModels,
   parseCursorModelsList,
@@ -31,7 +33,7 @@ const typecheckPluginFreeWorkflow = async (
   const snapshot: HarnessTypesSnapshot = {
     generatedAt: "2026-09-09T00:00:00.000Z",
     harnesses: [
-      { harness: "amp-code", models: [{ id: "deep" }, { id: "rush" }], source: "static" },
+      { harness: "amp-code", models: [{ id: "low" }, { id: "high" }], source: "command" },
     ],
   };
   await writeFile(harnessPath, renderHarnessModelsModule(snapshot), "utf8");
@@ -108,33 +110,41 @@ describe("harness model parsers", () => {
       .toEqual(["grok-composer-2.5-fast", "grok-4.5"]);
     expect(parseKimiProviderList("Default model: kimi-code/kimi-for-coding\n"))
       .toEqual([{ id: "kimi-code/kimi-for-coding" }]);
+    expect(parseAmpModeHelp(
+      "  -m, --mode <value>\n      Set the agent mode (low, medium, high, ultra, or a plugin mode by key or label)\n",
+    ).map((model) => model.id)).toEqual(["low", "medium", "high", "ultra"]);
+    expect(parseAmpPluginListModes("✓ plugin\n  agent mode: grok45\n  agent mode: gpt-6-astra-low\n").map((model) => model.id))
+      .toEqual(["gpt-6-astra-low", "grok45"]);
   });
 });
 
 describe("renderHarnessModelsModule", () => {
-  test("always emits Amp deep|rush and augments only discovered workers", () => {
+  test("emits discovered Amp modes and skips empty workers", () => {
     const snapshot: HarnessTypesSnapshot = {
       generatedAt: "2026-09-09T00:00:00.000Z",
       harnesses: [
+        { harness: "amp-code", models: [{ id: "low" }, { id: "high" }], source: "command" },
         { harness: "claude-code", models: [{ id: "sonnet" }, { id: "opus" }], source: "aliases" },
         { harness: "omp", models: [], source: "empty", error: "no list" },
       ],
     };
     const source = renderHarnessModelsModule(snapshot);
     expect(source).toContain("ampCodeModelSlugs");
-    expect(source).toContain('"deep"');
-    expect(source).toContain('"rush"');
+    expect(source).toContain('"low"');
+    expect(source).toContain('"high"');
+    expect(source).not.toContain('"deep"');
+    expect(source).not.toContain('"rush"');
     expect(source).toContain("claudeCodeModelSlugs");
     expect(source).toContain('"sonnet"');
     expect(source).not.toContain("ompModelSlugs");
     expect(source).toContain('import "prism"');
     expect(source).toContain('declare module "prism"');
-    expect(source).toContain('"amp-code": "deep" | "rush"');
+    expect(source).toContain('"amp-code": "high" | "low"');
     expect(source).toContain('"claude-code": "opus" | "sonnet"');
   });
 
   test("plugin-free worker.model accepts live slugs and rejects unknown ones", async () => {
-    const ok = await typecheckPluginFreeWorkflow("rush");
+    const ok = await typecheckPluginFreeWorkflow("high");
     expect(ok).toEqual([]);
     const bad = await typecheckPluginFreeWorkflow("not-a-mode");
     expect(bad.some((message) => message.includes("not-a-mode"))).toBe(true);
@@ -152,11 +162,9 @@ describe("refreshHarnessTypes", () => {
     expect(result.modelsPath).toBe(join(prismHome, "state", "harness-types", "harness-models.ts"));
     expect(result.modelsPath).not.toContain("projects/");
     const source = await readFile(result.modelsPath, "utf8");
-    expect(source).toContain('"amp-code"');
-    expect(source).toContain('"deep"');
     const amp = result.snapshot.harnesses.find((entry) => entry.harness === "amp-code");
-    expect(amp?.source).toBe("static");
-    expect(amp?.models.map((model) => model.id)).toEqual(["deep", "rush"]);
+    expect(amp?.source).toBe("empty");
+    expect(amp?.models).toEqual([]);
   });
 
   test("records command-discovered slugs when a runner returns output", async () => {
@@ -165,15 +173,25 @@ describe("refreshHarnessTypes", () => {
       home: join(prismHome, "home"),
       readText: () => undefined,
       runCommand: async (command, args) => {
+        if (command === "amp" && args[0] === "--help") {
+          return "Set the agent mode (low, medium, high, ultra, or a plugin mode by key)\n";
+        }
+        if (command === "amp" && args[0] === "plugins") {
+          return "  agent mode: grok45\n";
+        }
         if (command === "opencode" && args[0] === "models") return "openai/gpt-5.4\n";
         return "";
       },
     });
     const opencode = result.snapshot.harnesses.find((entry) => entry.harness === "opencode");
     expect(opencode?.models.map((model) => model.id)).toEqual(["openai/gpt-5.4"]);
+    const amp = result.snapshot.harnesses.find((entry) => entry.harness === "amp-code");
+    expect(amp?.models.map((model) => model.id)).toEqual(["low", "medium", "high", "ultra", "grok45"]);
     const source = await readFile(result.modelsPath, "utf8");
     expect(source).toContain("openCodeModelSlugs");
     expect(source).toContain("openai/gpt-5.4");
+    expect(source).toContain("ampCodeModelSlugs");
+    expect(source).toContain("grok45");
   });
 });
 

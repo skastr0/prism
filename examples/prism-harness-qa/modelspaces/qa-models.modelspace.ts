@@ -7,7 +7,7 @@ export default {
     smoke: {
       description: "Default smoke-test model profile used by qa-tester.",
       targets: {
-        "amp-code": { model: "deep" },
+        "amp-code": { model: "high" },
         "claude-code": { model: "sonnet" },
         "codex-cli": { model: "gpt-5.4-mini" },
         // Not "grok-build" — fails config validation against a restricted
@@ -25,7 +25,7 @@ export default {
     explicit: {
       description: "Secondary profile used by workflow model-ref tests.",
       targets: {
-        "amp-code": { model: "rush" },
+        "amp-code": { model: "low" },
         "claude-code": { model: "opus" },
         "codex-cli": { model: "gpt-5.5" },
         grok: { model: "grok-composer-2.5-fast" },

@@ -88,13 +88,13 @@ const MATRIX: readonly MatrixEntry[] = [
     harness: "amp-code",
     workflow: "smoke-amp-code-deep.workflow.ts",
     challenge: "amp-code-deep-2026-06-20-001",
-    expectedModel: "deep",
+    expectedModel: "high",
   },
   {
     harness: "amp-code",
     workflow: "smoke-amp-code-rush.workflow.ts",
     challenge: "amp-code-rush-2026-06-20-001",
-    expectedModel: "rush",
+    expectedModel: "low",
   },
 ];
 

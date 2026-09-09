@@ -104,29 +104,13 @@ const emitHarnessBlock = (
 };
 
 /**
- * Render the generated `prism/harnesses` module. Always includes Amp's
- * closed `deep | rush` workflow modes. Other workers appear only when
- * discovery returned at least one model id.
+ * Render the generated `prism/harnesses` module. A worker appears only
+ * when discovery returned at least one model id.
  */
 export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): string => {
   const byHarness = new Map<WorkflowWorkerId, DiscoveredHarnessModels>();
   for (const entry of snapshot.harnesses) {
     byHarness.set(entry.harness, entry);
-  }
-
-  const amp: DiscoveredHarnessModels = byHarness.get("amp-code") ?? {
-    harness: "amp-code",
-    models: [{ id: "deep" }, { id: "rush" }],
-    source: "static",
-  };
-  if (amp.models.length === 0) {
-    byHarness.set("amp-code", {
-      harness: "amp-code",
-      models: [{ id: "deep" }, { id: "rush" }],
-      source: "static",
-    });
-  } else {
-    byHarness.set("amp-code", amp);
   }
 
   const blocks: string[] = [];

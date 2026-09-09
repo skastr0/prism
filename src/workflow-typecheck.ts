@@ -19,6 +19,7 @@ import {
   resolveWorkflowTypeDirs,
   WORKFLOW_TSCONFIG_FILENAME,
 } from "./workflow-tsconfig.js";
+import { loadHarnessTypesSnapshot, projectWorkerModelCatalog, enrichHarnessModelTypeError } from "./workflow-models.js";
 
 const ts = createRequire(import.meta.url)(typescriptBundleImportPath()) as typeof TypeScript;
 
@@ -209,8 +210,8 @@ export const typecheckWorkflowFile = (
   const environment = resolveWorkflowTypeEnvironment(prismHome);
   if (environment === null) {
     const message =
-      `workflow type environment unavailable (no generated refs or ` +
-      `shipped declarations for this project). Run \`prism refresh <plugin-path>\` to enable typechecking.`;
+      `workflow type environment unavailable (no shipped declarations). ` +
+      `Run \`prism workflow refresh-harness-types\` for live slugs. Plugin refs are optional (\`prism refresh <plugin-path>\`).`;
     if (options.strictEnvironment === true) {
       throw new WorkflowTypecheckError(filePath, [
         { file: filePath, line: null, character: null, message },
@@ -275,7 +276,15 @@ export const typecheckWorkflowFile = (
     return;
   }
 
-  throw new WorkflowTypecheckError(filePath, realErrors.map(toStructured));
+  const source = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+  const catalogs = projectWorkerModelCatalog(loadHarnessTypesSnapshot(prismHome));
+  throw new WorkflowTypecheckError(
+    filePath,
+    realErrors.map((diagnostic) => {
+      const structured = toStructured(diagnostic);
+      return { ...structured, message: enrichHarnessModelTypeError(structured.message, source, catalogs) };
+    }),
+  );
 };
 
 export const runWorkflowTypecheck = async (

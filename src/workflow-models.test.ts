@@ -6,6 +6,7 @@ import type { HarnessTypesSnapshot } from "./harness-types.js";
 import { harnessTypesDir } from "./harness-types.js";
 import {
   buildWorkflowModelCatalog,
+  enrichHarnessModelTypeError,
   filterWorkerModelCatalog,
   modelFamilyId,
   parseWorkflowWorkerId,
@@ -80,6 +81,17 @@ describe("filterWorkerModelCatalog", () => {
     });
     expect(catalogs).toHaveLength(1);
     expect(catalogs[0]?.families.map((family) => family.family)).toEqual(["claude-opus-5"]);
+  });
+});
+
+describe("enrichHarnessModelTypeError", () => {
+  test("gemini-3.8-flash names the effort-suffixed family", () => {
+    const catalogs = projectWorkerModelCatalog(snapshot);
+    const message = `Type '"gemini-3.8-flash"' is not assignable to type 'WorkflowHarnessModel<"cursor">'.`;
+    const source = `worker: { worker: "cursor", model: "gemini-3.8-flash" }`;
+    const out = enrichHarnessModelTypeError(message, source, catalogs);
+    expect(out).toContain("gemini-3.8-flash-low");
+    expect(out).toContain("prism workflow models --worker cursor --query gemini-3.8-flash");
   });
 });
 

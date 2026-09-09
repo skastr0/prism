@@ -725,14 +725,14 @@ const renderScaffoldTask = (
   id: string,
   pin: { readonly worker: string; readonly model?: string },
   agentExpr: string,
-): string => `defineTask({
-    id: ${JSON.stringify(id)},
-    agent: ${agentExpr},
-    prompt: ${JSON.stringify(`Run under the ${pin.worker} harness and return a one-line summary in "summary". Set worker="${pin.worker}".`)},
-    output: Result,
-    cacheKey: ${JSON.stringify(`${name}-${pin.worker}-v1`)},
-    worker: ${renderScaffoldWorker(pin)},
-  })`;
+): string => `      const ${id} = defineTask({
+        id: ${JSON.stringify(id)},
+        agent: ${agentExpr},
+        prompt: ${JSON.stringify(`Run under the ${pin.worker} harness and return a one-line summary in "summary". Set worker="${pin.worker}".`)},
+        output: Result,
+        cacheKey: ${JSON.stringify(`${name}-${pin.worker}-v1`)},
+        worker: ${renderScaffoldWorker(pin)},
+      });`;
 
 const renderScaffoldRun = (
   name: string,
@@ -740,7 +740,7 @@ const renderScaffoldRun = (
   agentExpr: string,
 ): string => {
   const ids = pins.map((_, index) => (index === 0 ? "a" : "b"));
-  const tasks = pins.map((pin, index) => `      const ${ids[index]} = ${renderScaffoldTask(name, ids[index]!, pin, agentExpr)};`).join("\n");
+  const tasks = pins.map((pin, index) => renderScaffoldTask(name, ids[index]!, pin, agentExpr)).join("\n");
   if (pins.length === 1) {
     return `export const workflow = defineWorkflow({
   name: "${name}",

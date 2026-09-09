@@ -164,7 +164,7 @@ const platformPackageRootFromSource = (): string | undefined => {
 
 /**
  * Find the prism.d.ts directory. Resolution order:
- *   1. Source checkout with dist/dts-tmp/ (prism-dev / bun src/cli.ts).
+ *   1. Source checkout with dist/dts-tmp/ (`bun run build` / `install:dev` emit this).
  *   2. Installed platform package types/ (npm layout).
  *   3. In-repo packages/npm/<platform>/types when dts-tmp is absent.
  *

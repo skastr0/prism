@@ -226,6 +226,12 @@ export const pickScaffoldModel = (
   if (worker === "amp-code") {
     return slugs.includes("low") ? "low" : slugs.find((slug) => !slug.includes("/")) ?? slugs[0];
   }
+  if (worker === "cursor") {
+    return slugs.find((slug) => slug.startsWith("composer-") && slug.endsWith("-fast"))
+      ?? slugs.find((slug) => slug.endsWith("-low") && !slug.includes("thinking"))
+      ?? slugs.find((slug) => slug.endsWith("-fast") && !slug.includes("thinking"))
+      ?? slugs[0];
+  }
   return slugs.find((slug) => slug.endsWith("-fast") && !slug.includes("thinking"))
     ?? slugs.find((slug) => slug.endsWith("-fast"))
     ?? slugs.find((slug) => slug.endsWith("-low"))
@@ -251,6 +257,35 @@ export const pickPluginFreeScaffoldPins = (
   if (unique.length >= 2) return [toPin(unique[0]!), toPin(unique[1]!)];
   if (unique.length === 1) return [toPin(unique[0]!)];
   return [{ worker: "claude-code" }];
+};
+
+export const enrichHarnessModelTypeError = (
+  message: string,
+  source: string,
+  catalogs: readonly WorkerModelCatalog[],
+): string => {
+  const attempted = /Type '"([^"]+)"' is not assignable to type 'WorkflowHarnessModel/u.exec(message)?.[1];
+  if (attempted === undefined) return message;
+  const escaped = attempted.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const nearby = new RegExp(
+    String.raw`worker:\s*"([^"]+)"[\s\S]{0,120}${escaped}|${escaped}[\s\S]{0,120}worker:\s*"([^"]+)"`,
+    "u",
+  ).exec(source);
+  const worker = nearby?.[1] ?? nearby?.[2];
+  const suggestions = worker === undefined
+    ? catalogs.flatMap((entry) => suggestHarnessSlugs([entry], entry.worker, attempted)).slice(0, 8)
+    : suggestHarnessSlugs(catalogs, worker, attempted);
+  const query = modelFamilyId(attempted);
+  const hint = suggestions.length > 0
+    ? `Did you mean: ${suggestions.join(" | ")}`
+    : `No family match. List slugs: \`prism workflow models${worker !== undefined ? ` --worker ${worker}` : ""} --query ${query}\``;
+  return [
+    message,
+    hint,
+    worker !== undefined
+      ? `Fix: set worker.model to one of the effort-suffixed slugs. Query: \`prism workflow models --worker ${worker} --query ${query}\``
+      : `Fix: \`prism workflow models --query ${query}\``,
+  ].join("\n");
 };
 
 export const buildWorkflowModelCatalog = (

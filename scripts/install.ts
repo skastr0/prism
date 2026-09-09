@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, rmSync } from "fs";
 import { homedir, platform, arch } from "os";
 import { join } from "path";
 import { compile, repoRoot, targetLabel, type Target } from "./compile.js";
+import { buildDts } from "./build-dts.js";
 
 const INSTALL_DIR = process.env.INSTALL_DIR || join(homedir(), ".local", "bin");
 const DEV_BINARY_NAME = process.env.PRISM_DEV_BIN || "prism-dev";
@@ -65,6 +66,7 @@ async function install() {
   // can find the source checkout's node_modules without an npm wrapper.
   const binaryPath = join(repoRoot, "dist", `prism-${label}`);
   await compile(target, binaryPath);
+  await buildDts();
   await Bun.$`ln -s ${binaryPath} ${destPath}`;
 
   console.log(`\n✓ Installed ${DEV_BINARY_NAME} to ${destPath}`);

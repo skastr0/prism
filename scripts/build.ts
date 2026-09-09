@@ -3,6 +3,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { compile, targetLabel, version, type Target } from "./compile.js";
+import { buildDts } from "./build-dts.js";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const distDir = join(repoRoot, "dist");
@@ -48,8 +49,11 @@ If OpenTUI native packages are missing for cross-target builds, run:
   process.exit(1);
 }
 
+await buildDts();
+
 console.log(`
 Build complete! Binaries in ${distDir}/
+Workflow authoring types in ${distDir}/dts-tmp/
 
 To install a dev binary (does not touch production prism):
   bun run install:dev

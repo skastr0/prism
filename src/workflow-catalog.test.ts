@@ -13,6 +13,7 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
+  scaffoldPluginFreeWorkflowSource,
   scaffoldWorkflowSource,
   searchCatalog,
   WORKFLOW_WORKERS,
@@ -266,6 +267,15 @@ describe("pickDefaultWorkers", () => {
     );
     const agent = pickDefaultAgent(catalog);
     expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "amp-code"]);
+  });
+});
+
+describe("scaffoldPluginFreeWorkflowSource", () => {
+  test("uses anonymousWorkflowAgent and does not import prism/refs", () => {
+    const src = scaffoldPluginFreeWorkflowSource("bare");
+    expect(src).toContain("anonymousWorkflowAgent");
+    expect(src).toContain("refresh-harness-types");
+    expect(src).not.toContain('from "prism/refs"');
   });
 });
 

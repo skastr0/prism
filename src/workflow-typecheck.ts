@@ -12,6 +12,7 @@ import {
   projectGeneratedAgentsPath,
   projectGeneratedRefsDir,
 } from "./project-key.js";
+import { harnessModelsModulePath, harnessTypesExist } from "./harness-types.js";
 import {
   buildWorkflowPaths,
   generateWorkflowTsconfig,
@@ -140,9 +141,12 @@ const resolveWorkflowTypeEnvironment = (
   const refsPath = workflowRefsFilePath(prismHome);
   const hasRefs = existsSync(refsPath);
 
+  const harnessTypesPath = harnessTypesExist(prismHome) ? harnessModelsModulePath(prismHome) : undefined;
+
   const paths = buildWorkflowPaths({
     typeDirs,
     refsDir: hasRefs ? dirname(refsPath) : undefined,
+    harnessTypesPath,
   });
 
   const onDiskBase = readOnDiskWorkflowCompilerOptions(prismHome);
@@ -220,7 +224,9 @@ export const typecheckWorkflowFile = (
 
   const compilerOptions = environment.compilerOptions;
   const host = ts.createCompilerHost(compilerOptions);
-  const program = ts.createProgram([filePath], compilerOptions, host);
+  const harnessTypesPath = harnessTypesExist(prismHome) ? harnessModelsModulePath(prismHome) : undefined;
+  const rootFiles = harnessTypesPath === undefined ? [filePath] : [filePath, harnessTypesPath];
+  const program = ts.createProgram(rootFiles, compilerOptions, host);
   const allDiagnostics = ts.getPreEmitDiagnostics(program);
 
   const normalizedFilePath = filePath.replace(/\\/g, "/");
@@ -282,6 +288,7 @@ export const runWorkflowTypecheck = async (
     prismHome,
     refsDir: workflowRefsDirectory(prismHome),
     workflowDir: dirname(resolved),
+    harnessTypesPath: harnessTypesExist(prismHome) ? harnessModelsModulePath(prismHome) : undefined,
   });
   typecheckWorkflowFile(resolved, {
     prismHome,

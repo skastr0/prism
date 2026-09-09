@@ -85,6 +85,29 @@ export type WorkflowWorkerId =
   | "opencode"
   | "omp";
 
+/**
+ * Per-harness model identifier map. Empty in core so `worker.model` stays
+ * `string` until `prism workflow refresh-harness-types` augments keys with
+ * live unions. Do not pre-declare `string` properties here — interface
+ * merging cannot narrow `string` to a slug union.
+ */
+export interface WorkflowHarnessModelMap {}
+
+export type WorkflowHarnessModel<W extends WorkflowWorkerId> =
+  | (W extends keyof WorkflowHarnessModelMap ? WorkflowHarnessModelMap[W] : string)
+  | WorkflowModelProfileRef;
+
+/** Plugin-free agent stub so a workflow can dispatch a worker without `prism/refs`. */
+export const anonymousWorkflowAgent = {
+  kind: "agent-ref",
+  plugin: "prism",
+  name: "anonymous",
+  description: "Plugin-free workflow worker (no compiled Prism agent).",
+  sourceHash: "0".repeat(64),
+  manifestHash: "0".repeat(64),
+  installs: [] as const,
+} as const satisfies WorkflowAgentRef;
+
 export type WorkflowPermissionMode =
   | "legacy"
   | "permissive"
@@ -128,30 +151,42 @@ export interface WorkflowTaskWorkerRetryOptions {
   readonly backoffMs?: number;
 }
 
-type WorkflowTaskWorkerOptionsBase = {
-  readonly model?: string | WorkflowModelProfileRef;
+type WorkflowTaskWorkerOptionsCommon<W extends WorkflowWorkerId = WorkflowWorkerId> = {
+  readonly model?: WorkflowHarnessModel<W>;
   readonly modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   readonly profile?: string;
   readonly restrictedTools?: ReadonlyArray<string>;
   readonly retry?: WorkflowTaskWorkerRetryOptions;
 };
 
+type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
+  W extends "antigravity-cli"
+    ? WorkflowTaskWorkerOptionsCommon<W> & {
+      readonly worker: "antigravity-cli";
+      readonly permission?: AntigravityWorkflowPermissionMode;
+      readonly sessionPersistence?: never;
+    }
+    : W extends WorkflowSessionPersistenceWorkerId
+      ? WorkflowTaskWorkerOptionsCommon<W> & {
+        readonly worker: W;
+        readonly permission?: WorkflowPermissionMode;
+        readonly sessionPersistence?: WorkflowSessionPersistence;
+      }
+      : WorkflowTaskWorkerOptionsCommon<W> & {
+        readonly worker: W;
+        readonly permission?: WorkflowPermissionMode;
+        readonly sessionPersistence?: never;
+      };
+
 export type WorkflowTaskWorkerOptions =
-  | (WorkflowTaskWorkerOptionsBase & {
-    readonly worker?: Exclude<WorkflowWorkerId, "antigravity-cli" | WorkflowSessionPersistenceWorkerId>;
+  | (WorkflowTaskWorkerOptionsCommon & {
+    readonly worker?: undefined;
     readonly permission?: WorkflowPermissionMode;
     readonly sessionPersistence?: never;
   })
-  | (WorkflowTaskWorkerOptionsBase & {
-    readonly worker: WorkflowSessionPersistenceWorkerId;
-    readonly permission?: WorkflowPermissionMode;
-    readonly sessionPersistence?: WorkflowSessionPersistence;
-  })
-  | (WorkflowTaskWorkerOptionsBase & {
-    readonly worker: "antigravity-cli";
-    readonly permission?: AntigravityWorkflowPermissionMode;
-    readonly sessionPersistence?: never;
-  });
+  | {
+    [W in WorkflowWorkerId]: WorkflowTaskWorkerOptionsFor<W>;
+  }[WorkflowWorkerId];
 
 export type WorkflowResolvedModelEntry = Readonly<{ readonly model: string }>;
 

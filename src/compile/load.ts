@@ -65,7 +65,9 @@ import {
   SourceParseError,
   type CompileError,
 } from "./errors.js";
+import { existsSync } from "node:fs";
 import { PluginManifestError } from "../errors.js";
+import { harnessModelsModulePath } from "../harness-types.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { deriveProjectKey, projectGeneratedAgentsPath, projectGeneratedRefsDir } from "../project-key.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
@@ -317,6 +319,8 @@ interface LoadSpecifierOverrides {
   readonly prismRefs?: string;
   /** Targets for `prism/refs/<module>` imports; absent when not applicable. */
   readonly prismRefsModules?: Readonly<Record<string, string>>;
+  /** Target for bare `prism/harnesses` imports (global harness model types). */
+  readonly prismHarnesses?: string;
   /**
    * Optional absolute path to the local Prism source entry. When provided,
    * absolute imports pointing at this path are rewritten to bare `prism` so
@@ -367,6 +371,9 @@ const rewriteImportSpecifiers = async (
       rewritten = replaceBareSpecifier(rewritten, specifier, target);
     }
     rewritten = replaceBareSpecifier(rewritten, "prism/refs", overrides.prismRefs);
+  }
+  if (overrides.prismHarnesses !== undefined) {
+    rewritten = replaceBareSpecifier(rewritten, "prism/harnesses", overrides.prismHarnesses);
   }
   rewritten = replaceBareSpecifier(rewritten, "prism", overrides.prism);
   rewritten = replaceBareSpecifier(rewritten, "effect", overrides.effect);
@@ -608,11 +615,15 @@ const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> =>
 const workflowSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
   const runtimePaths = await getImportRuntimePaths();
   const cacheBust = `?t=${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const harnessTypesPath = harnessModelsModulePath(resolvePrismHome());
   return {
     prism: toFileSpecifier(runtimePaths.workflowDsl),
     effect: toFileSpecifier(runtimePaths.effect),
     prismRefs: `${toFileSpecifier(workflowRefsTargetPath())}${cacheBust}`,
     prismRefsModules: workflowRefsModuleTargets(cacheBust),
+    ...(existsSync(harnessTypesPath)
+      ? { prismHarnesses: `${toFileSpecifier(harnessTypesPath)}${cacheBust}` }
+      : {}),
   };
 };
 

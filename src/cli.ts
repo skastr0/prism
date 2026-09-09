@@ -88,6 +88,7 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
+  scaffoldPluginFreeWorkflowSource,
   scaffoldWorkflowSource,
   searchCatalog,
   workflowRefsStatus,
@@ -106,6 +107,9 @@ import {
 } from "./workflow-controls.js";
 import type { WorkflowPermissionMode } from "./workflows.js";
 import { decodeWorkflowProcessGuardRequest, runWorkflowProcessGuard } from "./workflow-process-guard.js";
+import { refreshHarnessTypes, renderHarnessTypesRefreshHuman } from "./harness-types-discover.js";
+import { generateWorkflowTsconfig } from "./workflow-tsconfig.js";
+import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -401,6 +405,33 @@ workflow
   });
 
 workflow
+  .command("refresh-harness-types")
+  .description("Discover installed harness models and write global typed unions for plugin-free workflow authoring")
+  .option("--json", "Emit machine-readable JSON")
+  .action(async (options: { readonly json?: boolean }) => {
+    try {
+      const prismHome = resolvePrismHome();
+      const result = await refreshHarnessTypes(prismHome);
+      const { key } = deriveProjectKey();
+      const refsDir = projectGeneratedRefsDir(prismHome, key);
+      await generateWorkflowTsconfig({
+        prismHome,
+        refsDir: existsSync(refsDir) ? refsDir : undefined,
+        workflowDir: prismWorkflowsSourceDir(prismHome),
+        harnessTypesPath: result.modelsPath,
+      });
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`${renderHarnessTypesRefreshHuman(result)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow refresh-harness-types failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+workflow
   .command("refs")
   .description("Show the generated workflow refs surface for this project and its freshness")
   .option("--json", "Emit machine-readable JSON")
@@ -416,7 +447,7 @@ workflow
 
 workflow
   .command("scaffold <name>")
-  .description("Write a validating starter workflow that uses a real discovered agent ref")
+  .description("Write a validating starter workflow (compiled agent ref when present, otherwise plugin-free)")
   .option("--print", "Print to stdout instead of writing a file")
   .option(
     "--out <path>",
@@ -425,18 +456,20 @@ workflow
   .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
     try {
       const result = await buildWorkflowCatalog();
-      if (result.catalog === null) {
-        printCliError(
-          new Error(`no compiled surface at ${result.surfaceDir} — run \`prism refresh <plugin-path>\` first`),
-          "Workflow scaffold failed",
-        );
-        exitWith(EXIT_CODES.domainFailure);
-        return;
-      }
-      const agent = pickDefaultAgent(result.catalog);
-      const agentRef = agent?.ref ?? "agents.forge.explorer";
-      const workers = pickDefaultWorkers(result.catalog, agent);
-      const source = scaffoldWorkflowSource(name, agentRef, workers);
+      const source =
+        result.catalog === null
+          ? scaffoldPluginFreeWorkflowSource(name)
+          : scaffoldWorkflowSource(
+            name,
+            pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer",
+            pickDefaultWorkers(result.catalog, pickDefaultAgent(result.catalog)),
+          );
+      const agentRef = result.catalog === null
+        ? "anonymousWorkflowAgent"
+        : pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer";
+      const workers = result.catalog === null
+        ? (["claude-code"] as const)
+        : pickDefaultWorkers(result.catalog, pickDefaultAgent(result.catalog));
       if (options.print === true) {
         await writeStdout(source);
         return;

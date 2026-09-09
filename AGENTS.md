@@ -27,7 +27,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Kimi Code | generated plugin `prism-context` skill | generated plugin command skills | generated plugin role skills | generated plugin skills |
 | Amp Code | `~/.config/amp/AGENTS.md` | generated plugin `registerCommand` | generated role skills | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
-| Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | - | `~/.cursor/skills/` |
+| Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | generated local plugin `agents/` | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
 | Pi | generated package extension context | generated package `prompts/` | pi-agents markdown discovery | generated package `skills/` |
 | Oh My Pi | native extension context | `~/.omp/agent/commands/` | native agent discovery | `~/.omp/agent/skills/` |
@@ -150,6 +150,9 @@ prism validate <plugin-path>
 
 # List supported harness IDs
 prism harnesses
+
+# Discover installed harness models into a global typed cache
+prism workflow refresh-harness-types
 ```
 
 ### Prism home and managed state
@@ -159,6 +162,7 @@ Prism stores cross-harness state in Prism home, defaulting to `~/.prism` and ove
 - `~/.prism/config.json` controls managed behavior. The current config shape is `{ "version": 1, "backup": { "mode": "always" | "never", "retentionPerTarget": 3 } }`.
 - `~/.prism/backups/` stores managed backups outside harness config trees. Prism preserves original filenames and does not create sibling `.bak` files.
 - `~/.prism/state/roots/*.json` records files and rule sections Prism owns for each harness root.
+- `~/.prism/state/harness-types/` is the machine-wide discovered harness model cache (`prism workflow refresh-harness-types`). It is not project-keyed.
 - Re-running `prism refresh` is the sync operation. It compiles first where relevant, writes desired outputs, skips unchanged content, fails closed on drift, and prunes stale Prism-owned outputs.
 - Existing files that Prism does not own are not silently adopted. Use `--overwrite` when deliberately replacing an unmanaged whole-file artifact.
 

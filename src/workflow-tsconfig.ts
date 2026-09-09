@@ -4,9 +4,10 @@
  * The generated tsconfig maps the three virtual specifiers a workflow author
  * uses to their shipped type declarations:
  *
- *   "prism"      → <platform-package>/types/index.d.ts  (the emitted prism.d.ts)
- *   "prism/refs" → ~/.prism/state/projects/<key>/generated/agents.ts  (per-project refs)
- *   "effect"     → <platform-package>/node_modules/effect/dist/dts/index.d.ts
+ *   "prism"           → <platform-package>/types/index.d.ts  (the emitted prism.d.ts)
+ *   "prism/refs"      → ~/.prism/state/projects/<key>/generated/agents.ts  (per-project refs)
+ *   "prism/harnesses" → ~/.prism/state/harness-types/harness-models.ts  (global, not project-keyed)
+ *   "effect"          → <platform-package>/node_modules/effect/dist/dts/index.d.ts
  *
  * Resolution strategy:
  *
@@ -31,6 +32,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { harnessModelsModulePath } from "./harness-types.js";
 
 // ---------------------------------------------------------------------------
 // Platform package root resolution
@@ -312,6 +314,8 @@ export const buildWorkflowPaths = (options: {
   readonly typeDirs: WorkflowTypeDirs;
   /** Absolute path to the generated refs directory (~/.../generated/). */
   readonly refsDir?: string;
+  /** Absolute path to the global harness-models.ts (`prism/harnesses`). */
+  readonly harnessTypesPath?: string;
 }): Record<string, string[]> => {
   const paths: Record<string, string[]> = {};
   const { prismTypesDir, effectDtsDir } = options.typeDirs;
@@ -322,6 +326,9 @@ export const buildWorkflowPaths = (options: {
   }
   if (options.refsDir) {
     Object.assign(paths, buildWorkflowRefsPaths(options.refsDir));
+  }
+  if (options.harnessTypesPath) {
+    paths["prism/harnesses"] = [options.harnessTypesPath];
   }
   if (effectDtsDir) {
     paths["effect"] = [join(effectDtsDir, "index.d.ts")];
@@ -352,6 +359,11 @@ export interface WorkflowTsconfigOptions {
    * Added to tsconfig `include` so the IDE and tsc pick them up automatically.
    */
   readonly workflowDir?: string;
+  /**
+   * Absolute path to the global generated harness-models.ts.
+   * Wires `prism/harnesses` and pulls module augmentation into the program.
+   */
+  readonly harnessTypesPath?: string;
 }
 
 export interface GeneratedWorkflowTsconfig {
@@ -386,11 +398,24 @@ export const generateWorkflowTsconfig = async (
   // paths — the typecheck pre-step detects a missing prism/effect surface and
   // warns+proceeds rather than reporting a misleading "Cannot find module".
   //
-  const paths = buildWorkflowPaths({ typeDirs, refsDir: options.refsDir });
+  const harnessTypesPath =
+    options.harnessTypesPath ??
+    (existsSync(harnessModelsModulePath(options.prismHome))
+      ? harnessModelsModulePath(options.prismHome)
+      : undefined);
+
+  const paths = buildWorkflowPaths({
+    typeDirs,
+    refsDir: options.refsDir,
+    harnessTypesPath,
+  });
 
   const include: string[] = [];
   if (options.workflowDir) {
     include.push(join(options.workflowDir, "**", "*.ts"));
+  }
+  if (harnessTypesPath) {
+    include.push(harnessTypesPath);
   }
 
   const tsconfig = {

@@ -322,13 +322,13 @@ Transient worker failures retry with bounded attempts and backoff; config errors
 ### Start in four moves
 
 ```bash
-prism workflow scaffold my-first     # validating starter in ~/.prism/workflows
-prism workflow catalog               # discover typed agent/orbit/model refs
+prism workflow refresh-harness-types  # global typed slugs from installed harnesses (no plugin)
+prism workflow scaffold my-first      # validating starter in ~/.prism/workflows
 prism workflow validate ~/.prism/workflows/my-first.workflow.ts   # resolved (worker, model) per task
 prism workflow run ~/.prism/workflows/my-first.workflow.ts
 ```
 
-Two things to know before the first live run: workflow commands are **project-scoped** — run them from the project you compiled (`prism refresh`), or `catalog`/`refs` will tell you to compile first. And a live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
+A plugin is optional. `refresh-harness-types` writes machine-wide model unions so `worker.model` typechecks without `prism/refs` or modelspaces. `catalog` / `refs` still need a compiled plugin. A live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
 
 ## Stateless tools — no daemon, no MCP
 

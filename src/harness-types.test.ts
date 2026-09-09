@@ -1,0 +1,190 @@
+import { describe, expect, test } from "bun:test";
+import { createRequire } from "node:module";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type * as TypeScript from "typescript";
+import {
+  parseAgyModelsList,
+  parseClaudeModelCache,
+  parseCodexDebugModels,
+  parseCursorModelsList,
+  parseGrokModelsCli,
+  parseKimiProviderList,
+  parseOpenCodeModels,
+  refreshHarnessTypes,
+} from "./harness-types-discover.js";
+import { renderHarnessModelsModule, type HarnessTypesSnapshot } from "./harness-types.js";
+import { buildWorkflowPaths } from "./workflow-tsconfig.js";
+
+const ts = createRequire(import.meta.url)("typescript") as typeof TypeScript;
+const srcDir = dirname(fileURLToPath(import.meta.url));
+const effectDts = join(srcDir, "..", "node_modules", "effect", "dist", "dts", "index.d.ts");
+
+const typecheckPluginFreeWorkflow = async (
+  model: string,
+): Promise<readonly string[]> => {
+  const dir = await mkdtemp(join(tmpdir(), "prism-harness-typecheck-"));
+  const harnessPath = join(dir, "harness-models.ts");
+  const workflowPath = join(dir, "flow.workflow.ts");
+  const snapshot: HarnessTypesSnapshot = {
+    generatedAt: "2026-09-09T00:00:00.000Z",
+    harnesses: [
+      { harness: "amp-code", models: [{ id: "deep" }, { id: "rush" }], source: "static" },
+    ],
+  };
+  await writeFile(harnessPath, renderHarnessModelsModule(snapshot), "utf8");
+  await writeFile(
+    workflowPath,
+    `
+import { Schema } from "effect";
+import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+
+export const workflow = defineWorkflow({
+  name: "typed-harness",
+  tasks: [defineTask({
+    id: "amp",
+    agent: anonymousWorkflowAgent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    worker: { worker: "amp-code", model: ${JSON.stringify(model)} },
+  })],
+});
+`,
+    "utf8",
+  );
+  const { options, errors } = ts.convertCompilerOptionsFromJson(
+    {
+      target: "ESNext",
+      module: "ESNext",
+      moduleResolution: "bundler",
+      strict: true,
+      skipLibCheck: true,
+      noEmit: true,
+      paths: {
+        prism: [join(srcDir, "workflows.ts")],
+        "prism/harnesses": [harnessPath],
+        effect: [effectDts],
+      },
+    },
+    dir,
+  );
+  if (errors.length > 0) {
+    return errors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+  }
+  const program = ts.createProgram([workflowPath, harnessPath], options);
+  return ts.getPreEmitDiagnostics(program).map((diagnostic) =>
+    ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+  );
+};
+
+describe("harness model parsers", () => {
+  test("parses Claude cache plus aliases", () => {
+    const parsed = parseClaudeModelCache(JSON.stringify({
+      additionalModelOptionsCache: [{ value: "claude-opus-4-8", label: "Opus 4.8" }],
+    }));
+    expect(parsed.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    expect(parsed.models.map((model) => model.id)).toContain("sonnet");
+  });
+
+  test("parses Codex JSON and line-oriented output", () => {
+    const json = parseCodexDebugModels(JSON.stringify({
+      models: [{ slug: "gpt-5.6-terra", efforts: ["low", "high"] }],
+    }));
+    expect(json.models).toEqual([{ id: "gpt-5.6-terra", efforts: ["low", "high"] }]);
+    const lines = parseCodexDebugModels("gpt-5.4-mini low medium\n");
+    expect(lines.models[0]).toEqual({ id: "gpt-5.4-mini", efforts: ["low", "medium"] });
+  });
+
+  test("parses OpenCode, Cursor, Agy, Grok CLI, and Kimi lists", () => {
+    expect(parseOpenCodeModels("openai/gpt-5.4\n\nollama-cloud/glm-5.2\n").map((model) => model.id))
+      .toEqual(["openai/gpt-5.4", "ollama-cloud/glm-5.2"]);
+    expect(parseCursorModelsList("Available models\n\ncomposer-2.5-fast - Composer\n").models)
+      .toEqual([{ id: "composer-2.5-fast", label: "Composer" }]);
+    expect(parseAgyModelsList("Fetching available models...\nGemini 3.5 Flash (Low)\tFlash\n").models)
+      .toEqual([{ id: "Gemini 3.5 Flash (Low)", label: "Flash" }]);
+    expect(parseGrokModelsCli("Default model: grok-4.5\n  - grok-composer-2.5-fast\n").map((model) => model.id))
+      .toEqual(["grok-composer-2.5-fast", "grok-4.5"]);
+    expect(parseKimiProviderList("Default model: kimi-code/kimi-for-coding\n"))
+      .toEqual([{ id: "kimi-code/kimi-for-coding" }]);
+  });
+});
+
+describe("renderHarnessModelsModule", () => {
+  test("always emits Amp deep|rush and augments only discovered workers", () => {
+    const snapshot: HarnessTypesSnapshot = {
+      generatedAt: "2026-09-09T00:00:00.000Z",
+      harnesses: [
+        { harness: "claude-code", models: [{ id: "sonnet" }, { id: "opus" }], source: "aliases" },
+        { harness: "omp", models: [], source: "empty", error: "no list" },
+      ],
+    };
+    const source = renderHarnessModelsModule(snapshot);
+    expect(source).toContain("ampCodeModelSlugs");
+    expect(source).toContain('"deep"');
+    expect(source).toContain('"rush"');
+    expect(source).toContain("claudeCodeModelSlugs");
+    expect(source).toContain('"sonnet"');
+    expect(source).not.toContain("ompModelSlugs");
+    expect(source).toContain('import "prism"');
+    expect(source).toContain('declare module "prism"');
+    expect(source).toContain('"amp-code": "deep" | "rush"');
+    expect(source).toContain('"claude-code": "opus" | "sonnet"');
+  });
+
+  test("plugin-free worker.model accepts live slugs and rejects unknown ones", async () => {
+    const ok = await typecheckPluginFreeWorkflow("rush");
+    expect(ok).toEqual([]);
+    const bad = await typecheckPluginFreeWorkflow("not-a-mode");
+    expect(bad.some((message) => message.includes("not-a-mode"))).toBe(true);
+  });
+});
+
+describe("refreshHarnessTypes", () => {
+  test("writes a global cache under state/harness-types, not a project key", async () => {
+    const prismHome = await mkdtemp(join(tmpdir(), "prism-harness-types-"));
+    const result = await refreshHarnessTypes(prismHome, {
+      home: join(prismHome, "home"),
+      runCommand: async () => "",
+      readText: () => undefined,
+    });
+    expect(result.modelsPath).toBe(join(prismHome, "state", "harness-types", "harness-models.ts"));
+    expect(result.modelsPath).not.toContain("projects/");
+    const source = await readFile(result.modelsPath, "utf8");
+    expect(source).toContain('"amp-code"');
+    expect(source).toContain('"deep"');
+    const amp = result.snapshot.harnesses.find((entry) => entry.harness === "amp-code");
+    expect(amp?.source).toBe("static");
+    expect(amp?.models.map((model) => model.id)).toEqual(["deep", "rush"]);
+  });
+
+  test("records command-discovered slugs when a runner returns output", async () => {
+    const prismHome = await mkdtemp(join(tmpdir(), "prism-harness-types-"));
+    const result = await refreshHarnessTypes(prismHome, {
+      home: join(prismHome, "home"),
+      readText: () => undefined,
+      runCommand: async (command, args) => {
+        if (command === "opencode" && args[0] === "models") return "openai/gpt-5.4\n";
+        return "";
+      },
+    });
+    const opencode = result.snapshot.harnesses.find((entry) => entry.harness === "opencode");
+    expect(opencode?.models.map((model) => model.id)).toEqual(["openai/gpt-5.4"]);
+    const source = await readFile(result.modelsPath, "utf8");
+    expect(source).toContain("openCodeModelSlugs");
+    expect(source).toContain("openai/gpt-5.4");
+  });
+});
+
+describe("workflow tsconfig harness path", () => {
+  test("maps prism/harnesses independently of project refs", () => {
+    const paths = buildWorkflowPaths({
+      typeDirs: { prismTypesDir: "/tmp/prism-types", effectDtsDir: "/tmp/effect-dts" },
+      refsDir: "/tmp/generated",
+      harnessTypesPath: "/tmp/harness-types/harness-models.ts",
+    });
+    expect(paths["prism/harnesses"]).toEqual(["/tmp/harness-types/harness-models.ts"]);
+    expect(paths["prism/refs"]).toEqual(["/tmp/generated/agents.ts"]);
+  });
+});

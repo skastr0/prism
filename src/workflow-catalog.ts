@@ -694,13 +694,7 @@ export const pickDefaultWorkers = (
   return ordered.length >= 2 ? [ordered[0]!, ordered[1]!] : [ordered[0]!];
 };
 
-/** A complete, validating starter workflow source that uses a real discovered agent ref and installed workers. */
-export const scaffoldWorkflowSource = (
-  name: string,
-  agentRef: string,
-  workers: readonly [string] | readonly [string, string],
-): string => {
-  const header = `/**
+const scaffoldWorkflowHeader = (name: string, pluginFree: boolean): string => `/**
  * ${name} — scaffolded by \`prism workflow scaffold\`.
  * Lives at ~/.prism/workflows/${name}.workflow.ts by convention — never inside
  * (or git-added to) the project repo it drives; tasks reference their target
@@ -709,8 +703,67 @@ export const scaffoldWorkflowSource = (
  *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
  *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts --max-concurrent-tasks 2
  *
- * Discover other agents/orbits/models with: prism workflow catalog
- */
+ * Discover harness models with: prism workflow refresh-harness-types
+${pluginFree ? " * No compiled plugin on this machine — using anonymousWorkflowAgent.\n" : " * Discover other agents/orbits/models with: prism workflow catalog\n"} */`;
+
+/** Plugin-free starter when no compiled refs surface exists. */
+export const scaffoldPluginFreeWorkflowSource = (
+  name: string,
+  workers: readonly [string] | readonly [string, string] = ["claude-code"],
+): string => {
+  const header = `${scaffoldWorkflowHeader(name, true)}
+import { Effect, Schema } from "effect";
+import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+
+const Result = Schema.Struct({
+  worker: Schema.String,
+  summary: Schema.String,
+});
+`;
+  const workerUnion = workers.map((worker) => JSON.stringify(worker)).join(" | ");
+  const probe = `const probe = (id: string, worker: ${workerUnion}) =>
+  defineTask({
+    id,
+    agent: anonymousWorkflowAgent,
+    prompt: \`Run under the \${worker} harness and return a one-line summary in "summary". Set worker="\${worker}".\`,
+    output: Result,
+    cacheKey: \`${name}-\${worker}-v1\`,
+    worker: { worker },
+  });
+`;
+  const run =
+    workers.length === 2
+      ? `export const workflow = defineWorkflow({
+  name: "${name}",
+  run: (wf) =>
+    Effect.gen(function* () {
+      const results = yield* Effect.all(
+        [wf.runTask(probe("a", ${JSON.stringify(workers[0])})), wf.runTask(probe("b", ${JSON.stringify(workers[1])}))],
+        { concurrency: "unbounded" },
+      );
+      return { results };
+    }),
+});
+`
+      : `export const workflow = defineWorkflow({
+  name: "${name}",
+  run: (wf) =>
+    Effect.gen(function* () {
+      const result = yield* wf.runTask(probe("a", ${JSON.stringify(workers[0])}));
+      return { results: [result] };
+    }),
+});
+`;
+  return `${header}\n${probe}\n${run}`;
+};
+
+/** A complete, validating starter workflow source that uses a real discovered agent ref and installed workers. */
+export const scaffoldWorkflowSource = (
+  name: string,
+  agentRef: string,
+  workers: readonly [string] | readonly [string, string],
+): string => {
+  const header = `${scaffoldWorkflowHeader(name, false)}
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 import { agents } from "prism/refs";

@@ -117,14 +117,19 @@ const assertCursorPermission = (mode: WorkflowPermissionMode): void => {
     case "legacy":
     case "permissive":
     case "full-access":
-    case "sandbox-read-only":
     case "sandbox-workspace-write":
       return;
+    case "sandbox-read-only":
+      throw new WorkflowPermissionError(
+        "cursor",
+        mode,
+        "Cursor Agent CLI sandbox is enabled/disabled (workspace write), not read-only. Choose 'legacy', 'permissive', or 'sandbox-workspace-write'.",
+      );
     case "restricted":
       throw new WorkflowPermissionError(
         "cursor",
         mode,
-        "Cursor Agent CLI has no per-invocation tool allowlist flag. Use cli-config.json permissions or choose 'legacy', 'permissive', or a sandbox mode.",
+        "Cursor Agent CLI has no per-invocation tool allowlist flag. Use cli-config.json permissions or choose 'legacy', 'permissive', or 'sandbox-workspace-write'.",
       );
     case "interactive":
       throw new WorkflowPermissionError(
@@ -154,11 +159,8 @@ export const buildCursorArgs = (input: {
   if (mode === "full-access") {
     permissionArgs.push("--approve-mcps");
   }
-  if (mode === "sandbox-read-only" || mode === "sandbox-workspace-write") {
+  if (mode === "sandbox-workspace-write") {
     permissionArgs.push("--sandbox", "enabled");
-  }
-  if (mode === "sandbox-read-only") {
-    permissionArgs.push("--mode", "ask");
   }
 
   return [

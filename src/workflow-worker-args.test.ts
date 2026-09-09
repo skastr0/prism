@@ -726,11 +726,22 @@ describe("cursor permission arg mapping", () => {
     expect(args).toContain("--approve-mcps");
   });
 
-  test("sandbox-read-only emits sandbox + ask mode without --force", () => {
-    const args = buildCursorArgs({ cwd: "/r", prompt: "p", permission: "sandbox-read-only" });
-    expect(args.slice(args.indexOf("--sandbox"), args.indexOf("--sandbox") + 2)).toEqual(["--sandbox", "enabled"]);
-    expect(args.slice(args.indexOf("--mode"), args.indexOf("--mode") + 2)).toEqual(["--mode", "ask"]);
-    expect(args).not.toContain("--force");
+  test("sandbox-read-only throws", () => {
+    expect(() => buildCursorArgs({ cwd: "/r", prompt: "p", permission: "sandbox-read-only" }))
+      .toThrow(WorkflowPermissionError);
+  });
+
+  test("plugin-dir is forwarded when discovery finds a generated plugin", () => {
+    const args = buildCursorArgs({
+      cwd: "/r",
+      prompt: "p",
+      generatedPlugin: { pluginDir: "/tmp/.cursor/plugins/local/prism-generated-agent-core" },
+    });
+    expect(args.slice(args.indexOf("--plugin-dir"), args.indexOf("--plugin-dir") + 2)).toEqual([
+      "--plugin-dir",
+      "/tmp/.cursor/plugins/local/prism-generated-agent-core",
+    ]);
+    expect(args).not.toContain("--agent");
   });
 
   test("sandbox-workspace-write emits sandbox + --force", () => {

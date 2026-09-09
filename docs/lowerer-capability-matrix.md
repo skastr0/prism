@@ -189,7 +189,8 @@ Cursor documents Agent Skills under `.cursor/skills/` and `~/.cursor/skills/`,
 so Prism keeps install-phase skills as direct-file artifacts. Per-agent skill
 permissions remain unsupported. The Agent CLI has no `--agent` selector, so the
 workflow worker still prompt-injects identity, resumes with `--resume`, and maps
-permission flags (`--force`, `--sandbox`, `--approve-mcps`).
+`--force`, `--sandbox enabled` (`sandbox-workspace-write`), and `--approve-mcps`.
+`sandbox-read-only` fails closed because Cursor sandbox is workspace-write.
 
 ## Source Pointers
 

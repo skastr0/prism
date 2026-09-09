@@ -55,6 +55,13 @@ describe("workflow harness detection", () => {
     expect(result.available).toBe(true);
     expect(result.reason.command).toBe("/opt/harnesses/claude");
     expect(result.reason.executablePath).toBe("/opt/harnesses/claude");
+
+    const cursor = await detectWorkflowHarness("cursor", {
+      env: { PRISM_WORKFLOW_CURSOR_BIN: "/opt/harnesses/agent" },
+      resolveExecutable: (command) => command,
+    });
+    expect(cursor.available).toBe(true);
+    expect(cursor.reason.command).toBe("/opt/harnesses/agent");
   });
 
   test("reports verified executables as available when the probe succeeds", async () => {

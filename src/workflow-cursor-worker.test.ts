@@ -59,6 +59,7 @@ describe("runCursorWorkflowTask success", () => {
       expect(args.slice(args.indexOf("--workspace"), args.indexOf("--workspace") + 2)).toEqual(["--workspace", root]);
       expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "composer-2.5-fast"]);
       expect(args).not.toContain("--continue");
+      expect(args).not.toContain("--agent");
       expect(args).not.toContain("--auto-review");
       expect(result.output).toEqual({ summary: "ok" });
       expect(result.metadata).toMatchObject({

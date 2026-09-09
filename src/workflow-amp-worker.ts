@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { HarnessTypesSnapshot } from "./harness-types.js";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
@@ -95,6 +96,100 @@ export const resolveAmpCatalogPinPlan = (input: {
 
 export const ampCatalogPinPluginPath = (cwd: string): string =>
   join(cwd, ".amp", "plugins", AMP_WORKFLOW_CATALOG_PIN_FILENAME);
+
+const AMP_PLUGIN_MODE_KEY = /(?:registerAgentMode\(\s*\{\s*key:\s*|@amp-agent-mode\s*\{\s*"key"\s*:\s*)["']([^"']+)["']/u;
+
+/** Reuse a project plugin mode that already pins this catalog slug (and effort, if set). */
+export const findExistingAmpCatalogMode = async (
+  cwd: string,
+  input: { readonly catalogModel?: string; readonly effort?: string },
+): Promise<string | undefined> => {
+  if (input.catalogModel === undefined) return undefined;
+  const pluginsDir = join(cwd, ".amp", "plugins");
+  if (!existsSync(pluginsDir)) return undefined;
+  const files = await readdir(pluginsDir);
+  for (const file of files) {
+    if (!file.endsWith(".ts") || file === AMP_WORKFLOW_CATALOG_PIN_FILENAME) continue;
+    const source = await readFile(join(pluginsDir, file), "utf8");
+    if (!source.includes(`model: ${JSON.stringify(input.catalogModel)}`)) continue;
+    if (input.effort !== undefined && !source.includes(`reasoningEffort: ${JSON.stringify(input.effort)}`)) {
+      continue;
+    }
+    const key = AMP_PLUGIN_MODE_KEY.exec(source)?.[1];
+    if (key !== undefined && key !== AMP_WORKFLOW_CATALOG_PIN_MODE) return key;
+  }
+  return undefined;
+};
+
+export const ampWorkerPins = (
+  task: AnyWorkflowTask,
+): { readonly catalogModel?: string; readonly effort?: string } => {
+  const worker = task.worker;
+  if (worker === undefined || worker.worker !== "amp-code") return {};
+  return {
+    ...("catalogModel" in worker && typeof worker.catalogModel === "string"
+      ? { catalogModel: worker.catalogModel }
+      : {}),
+    ...("effort" in worker && typeof worker.effort === "string" ? { effort: worker.effort } : {}),
+  };
+};
+
+/** Fail closed when a snapshot lists the catalog row and effort is not on that row. */
+export const validateAmpCatalogPins = (
+  task: AnyWorkflowTask,
+  snapshot: HarnessTypesSnapshot | undefined,
+): string | undefined => {
+  if (snapshot === undefined) return undefined;
+  const pins = ampWorkerPins(task);
+  if (pins.catalogModel === undefined && pins.effort === undefined) return undefined;
+  const amp = snapshot.harnesses.find((entry) => entry.harness === "amp-code");
+  if (amp === undefined) return undefined;
+  if (pins.catalogModel !== undefined) {
+    const row = amp.models.find((model) => model.kind === "model" && model.id === pins.catalogModel);
+    if (row === undefined) {
+      const suggestions = amp.models
+        .filter((model) => model.kind === "model" && model.id.includes(pins.catalogModel!.split("/")[1] ?? pins.catalogModel!))
+        .map((model) => model.id)
+        .slice(0, 5);
+      return [
+        `Unknown Amp catalogModel ${JSON.stringify(pins.catalogModel)}.`,
+        suggestions.length > 0 ? `Nearby: ${suggestions.join(", ")}` : "List slugs: `prism workflow models --worker amp-code`",
+        "Fix: set worker.catalogModel to a catalog slug from `prism workflow models --worker amp-code`.",
+      ].join(" ");
+    }
+    if (pins.effort !== undefined && row.efforts !== undefined && row.efforts.length > 0 && !row.efforts.includes(pins.effort)) {
+      return [
+        `Amp catalogModel ${JSON.stringify(pins.catalogModel)} does not support effort ${JSON.stringify(pins.effort)}.`,
+        `Supported: ${row.efforts.join(", ")}`,
+        `Fix: worker.effort: ${JSON.stringify(row.efforts[0])}`,
+      ].join(" ");
+    }
+  }
+  return undefined;
+};
+
+/** User-facing Amp pin fields. Never report the transport mode `prism-pin` as the model. */
+export const ampWorkflowHonestMetadata = (input: {
+  readonly pin: AmpCatalogPinPlan;
+  readonly authoredModel?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+}): {
+  readonly model?: string;
+  readonly ampMode?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+} => {
+  const model = input.catalogModel
+    ?? input.authoredModel
+    ?? (input.pin.kind === "mode" ? input.pin.mode : input.pin.extendsMode);
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(input.authoredModel !== undefined ? { ampMode: input.authoredModel } : {}),
+    ...(input.catalogModel !== undefined ? { catalogModel: input.catalogModel } : {}),
+    ...(input.effort !== undefined ? { effort: input.effort } : {}),
+  };
+};
 
 export const renderAmpCatalogPinPlugin = (input: {
   readonly catalogModel?: string;
@@ -320,11 +415,20 @@ export const runAmpWorkflowTask = async (
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   assertAmpPermission(options.resolvedPermission);
-  const pin = resolveAmpCatalogPinPlan({
+  let pin = resolveAmpCatalogPinPlan({
     mode: options.model,
     catalogModel: options.catalogModel,
     effort: options.effort,
   });
+  if (pin.kind === "pin") {
+    const existing = await findExistingAmpCatalogMode(options.cwd, {
+      catalogModel: pin.catalogModel,
+      effort: pin.effort,
+    });
+    if (existing !== undefined) {
+      pin = { kind: "mode", mode: existing };
+    }
+  }
   const permissionSettings = await prepareAmpPermissionSettings(options.resolvedPermission);
   const catalogPin = await prepareAmpCatalogPin(options.cwd, pin);
   const args = buildAmpArgs({
@@ -364,10 +468,12 @@ export const runAmpWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(outputText),
     metadata: {
       adapter: "amp-code",
-      model: pin.mode,
-      ...(options.model !== undefined ? { ampMode: options.model } : {}),
-      ...(pin.kind === "pin" && pin.catalogModel !== undefined ? { catalogModel: pin.catalogModel } : {}),
-      ...(pin.kind === "pin" && pin.effort !== undefined ? { effort: pin.effort } : {}),
+      ...ampWorkflowHonestMetadata({
+        pin,
+        authoredModel: options.model,
+        catalogModel: options.catalogModel,
+        effort: options.effort,
+      }),
       durationMs,
       sessionId: ampSessionId(stdout, stderr) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),

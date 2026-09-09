@@ -774,7 +774,10 @@ export default defineWorkflow({
 
     expect(summary.dynamic).toBe(true);
     expect(summary.tasks).toEqual([]);
-    expect(summary.modelResolution).toEqual([]);
+    expect(summary.modelResolution).toEqual([
+      { id: "a", worker: "claude-code", model: "claude-haiku-4-5", source: "default" },
+      { id: "b", worker: "grok", model: "grok-4.5", source: "default" },
+    ]);
     expect(summary.note).toBeDefined();
     expect(summary.note?.length ?? 0).toBeGreaterThan(0);
     expect(summary.staticWorkers).toEqual([
@@ -791,6 +794,7 @@ export default defineWorkflow({
     const processHandle = Bun.spawn({
       cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), "workflow", "validate", file, "--table"],
       cwd: process.cwd(),
+      env: workflowTestEnv(),
       stdout: "pipe",
       stderr: "pipe",
     });

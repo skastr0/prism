@@ -6,9 +6,11 @@ import { loadGeneratedSurface, type GeneratedSurface } from "./workflow-catalog.
 import {
   collectDynamicPhaseAgentFindings,
   phaseStampedBindingsFromTasks,
+  probeDynamicWorkflowTasks,
   validatePhaseAgentBindings,
-  type WorkflowPhaseAgentFinding,
 } from "./workflow-validate-dynamic.js";
+import { ampWorkerPins, validateAmpCatalogPins } from "./workflow-amp-worker.js";
+import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
 // (globalThis.__prism_effect) as a module side-effect, so the workflow DSL
 // runtime and the file's `from "effect"` rewrite resolve to the binary's
@@ -52,6 +54,8 @@ export interface WorkflowTaskModelResolutionRow {
   readonly id: string;
   readonly worker?: string;
   readonly model?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
   readonly source?: WorkflowTaskModelResolutionSource;
   readonly error?: string;
 }
@@ -71,10 +75,8 @@ export interface WorkflowValidationResult extends WorkflowValidationSummary {
 }
 
 const DYNAMIC_WORKFLOW_NOTE =
-  "dynamic workflow: tasks are constructed at runtime inside `run`, so per-task (worker, model) " +
-  "resolution can't be determined by validate. Worker ids found by a static scan of the source are " +
-  "listed under staticWorkers with their harness registry default model — the actual per-task model " +
-  "may differ if a task overrides it. Run `prism workflow run` to see live per-task resolution.";
+  "dynamic workflow: tasks are constructed inside `run`. Validate probes that graph and lists every " +
+  "dispatched pin. Branches the probe did not execute are omitted. staticWorkers is the source-scan fallback.";
 
 const staticallyReferencedWorkers = (source: string): ReadonlyArray<WorkflowStaticWorkerReference> =>
   supportedWorkflowWorkers()
@@ -89,26 +91,48 @@ const staticallyReferencedWorkers = (source: string): ReadonlyArray<WorkflowStat
  * (WorkflowModelResolutionError), are real configuration errors and surface
  * as `.error` so the caller can fail the whole validate loudly.
  */
-const resolveTaskModelRow = (task: AnyWorkflowTask): WorkflowTaskModelResolutionRow => {
+const resolveTaskModelRow = (
+  task: AnyWorkflowTask,
+  snapshot?: ReturnType<typeof loadHarnessTypesSnapshot>,
+): WorkflowTaskModelResolutionRow => {
+  const pins = ampWorkerPins(task);
+  const pinFields = {
+    ...(pins.catalogModel !== undefined ? { catalogModel: pins.catalogModel } : {}),
+    ...(pins.effort !== undefined ? { effort: pins.effort } : {}),
+  };
   const worker = task.worker?.worker;
-  if (worker === undefined) return { id: task.id };
+  if (worker === undefined) return { id: task.id, ...pinFields };
 
   const supported = supportedWorkflowWorkers();
   if (!supported.includes(worker)) {
-    return { id: task.id, worker, error: new UnsupportedWorkflowWorkerError(worker, supported).message };
+    return {
+      id: task.id,
+      worker,
+      ...pinFields,
+      error: new UnsupportedWorkflowWorkerError(worker, supported).message,
+    };
+  }
+
+  const ampError = validateAmpCatalogPins(task, snapshot);
+  if (ampError !== undefined) {
+    return { id: task.id, worker, ...pinFields, error: ampError };
   }
 
   try {
     const resolution = resolveWorkflowTaskModelResolution(task, { worker });
     if (resolution === undefined) {
-      // No task/profile/agent model info and no CLI --model at validate time.
-      // Not an error: several harness CLIs (e.g. opencode) tolerate an omitted
-      // --model flag and fall back to their own default at run time.
-      return { id: task.id, worker };
+      const defaultModel = workflowHarnessDefaultModel(worker);
+      if (defaultModel === undefined) return { id: task.id, worker, ...pinFields };
+      return { id: task.id, worker, model: defaultModel, source: "default", ...pinFields };
     }
-    return { id: task.id, worker, model: resolution.model, source: resolution.source };
+    return { id: task.id, worker, model: resolution.model, source: resolution.source, ...pinFields };
   } catch (error) {
-    return { id: task.id, worker, error: error instanceof Error ? error.message : String(error) };
+    return {
+      id: task.id,
+      worker,
+      ...pinFields,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 };
 
@@ -130,12 +154,14 @@ export const paddedTableColumns = (
 export const renderWorkflowModelResolutionTable = (
   rows: ReadonlyArray<WorkflowTaskModelResolutionRow>,
 ): string => {
-  if (rows.length === 0) return "(no statically-declared tasks)";
-  const header = ["task", "worker", "model", "source"] as const;
+  if (rows.length === 0) return "(no probed or statically-declared tasks)";
+  const header = ["task", "worker", "model", "catalog", "effort", "source"] as const;
   const cells = rows.map((row) => [
     row.id,
     row.worker ?? "-",
     row.error !== undefined ? "UNRESOLVED" : row.model ?? "-",
+    row.catalogModel ?? "-",
+    row.effort ?? "-",
     row.error ?? row.source ?? "-",
   ]);
   const { widths, formatRow } = paddedTableColumns(header, cells);
@@ -203,6 +229,7 @@ export const validateWorkflowFile = async (
   const workflow = await loadWorkflowFile(resolved, options);
   const summary = workflowSummary(resolved, workflow);
   const surface = await loadCompiledWorkflowSurface(options.prismHome, options.cwd);
+  const snapshot = loadHarnessTypesSnapshot(options.prismHome ?? resolvePrismHome());
 
   if (summary.dynamic) {
     const source = await readFile(resolved, "utf8");
@@ -217,11 +244,25 @@ export const validateWorkflowFile = async (
         `workflow '${summary.name}' failed phase-agent graph validation for ${findings.length} task binding(s):\n${detail}`,
       );
     }
+    const probed = await probeDynamicWorkflowTasks(workflow as DynamicWorkflowDefinition<string>);
+    const modelResolution = probed.tasks.map((task) => resolveTaskModelRow(task, snapshot));
+    const unresolved = modelResolution.filter((row) => row.error !== undefined);
+    if (unresolved.length > 0) {
+      const detail = unresolved
+        .map((row) => `  - task '${row.id}' (worker '${row.worker ?? "<missing>"}'): ${row.error}`)
+        .join("\n");
+      throw new WorkflowValidationError(
+        `workflow '${summary.name}' failed model resolution for ${unresolved.length} of ${modelResolution.length} probed task(s):\n${detail}\n\n` +
+          renderWorkflowModelResolutionTable(modelResolution),
+      );
+    }
     return {
       ...summary,
-      modelResolution: [],
+      modelResolution,
       staticWorkers: staticallyReferencedWorkers(source),
-      note: DYNAMIC_WORKFLOW_NOTE,
+      note: probed.failed
+        ? `${DYNAMIC_WORKFLOW_NOTE} Probe exited early; listed pins are tasks dispatched before the failure.`
+        : DYNAMIC_WORKFLOW_NOTE,
     };
   }
 
@@ -233,7 +274,7 @@ export const validateWorkflowFile = async (
       `workflow '${summary.name}' failed phase-agent graph validation for ${findings.length} task binding(s):\n${detail}`,
     );
   }
-  const modelResolution = tasks.map(resolveTaskModelRow);
+  const modelResolution = tasks.map((task) => resolveTaskModelRow(task, snapshot));
   const unresolved = modelResolution.filter((row) => row.error !== undefined);
   if (unresolved.length > 0) {
     const detail = unresolved

@@ -712,12 +712,65 @@ const scaffoldWorkflowHeader = (name: string, pluginFree: boolean): string => `/
  *
  * Discover harness models: prism workflow models --worker cursor --query opus
  * Refresh slugs:           prism workflow refresh-harness-types
+ * Authoring skill:         prism workflow skill
 ${pluginFree ? " * Plugin-free — using anonymousWorkflowAgent. Plugins are optional.\n" : " * Plugin refs: prism workflow catalog --ref <ref>\n"} */`;
+
+const renderScaffoldWorker = (pin: { readonly worker: string; readonly model?: string }): string =>
+  pin.model === undefined
+    ? `{ worker: ${JSON.stringify(pin.worker)} }`
+    : `{ worker: ${JSON.stringify(pin.worker)}, model: ${JSON.stringify(pin.model)} }`;
+
+const renderScaffoldTask = (
+  name: string,
+  id: string,
+  pin: { readonly worker: string; readonly model?: string },
+  agentExpr: string,
+): string => `defineTask({
+    id: ${JSON.stringify(id)},
+    agent: ${agentExpr},
+    prompt: ${JSON.stringify(`Run under the ${pin.worker} harness and return a one-line summary in "summary". Set worker="${pin.worker}".`)},
+    output: Result,
+    cacheKey: ${JSON.stringify(`${name}-${pin.worker}-v1`)},
+    worker: ${renderScaffoldWorker(pin)},
+  })`;
+
+const renderScaffoldRun = (
+  name: string,
+  pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>],
+  agentExpr: string,
+): string => {
+  const ids = pins.map((_, index) => (index === 0 ? "a" : "b"));
+  const tasks = pins.map((pin, index) => `      const ${ids[index]} = ${renderScaffoldTask(name, ids[index]!, pin, agentExpr)};`).join("\n");
+  if (pins.length === 1) {
+    return `export const workflow = defineWorkflow({
+  name: "${name}",
+  run: (wf) =>
+    Effect.gen(function* () {
+${tasks}
+      const result = yield* wf.runTask(a);
+      return { results: [result] };
+    }),
+});
+`;
+  }
+  return `export const workflow = defineWorkflow({
+  name: "${name}",
+  run: (wf) =>
+    Effect.gen(function* () {
+${tasks}
+      const results = yield* Effect.all([wf.runTask(a), wf.runTask(b)], { concurrency: "unbounded" });
+      return { results };
+    }),
+});
+`;
+};
 
 /** Plugin-free starter when no compiled refs surface exists. */
 export const scaffoldPluginFreeWorkflowSource = (
   name: string,
-  workers: readonly [string] | readonly [string, string] = ["claude-code"],
+  pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>] = [
+    { worker: "claude-code" },
+  ],
 ): string => {
   const header = `${scaffoldWorkflowHeader(name, true)}
 import { Effect, Schema } from "effect";
@@ -728,41 +781,7 @@ const Result = Schema.Struct({
   summary: Schema.String,
 });
 `;
-  const workerUnion = workers.map((worker) => JSON.stringify(worker)).join(" | ");
-  const probe = `const probe = (id: string, worker: ${workerUnion}) =>
-  defineTask({
-    id,
-    agent: anonymousWorkflowAgent,
-    prompt: \`Run under the \${worker} harness and return a one-line summary in "summary". Set worker="\${worker}".\`,
-    output: Result,
-    cacheKey: \`${name}-\${worker}-v1\`,
-    worker: { worker },
-  });
-`;
-  const run =
-    workers.length === 2
-      ? `export const workflow = defineWorkflow({
-  name: "${name}",
-  run: (wf) =>
-    Effect.gen(function* () {
-      const results = yield* Effect.all(
-        [wf.runTask(probe("a", ${JSON.stringify(workers[0])})), wf.runTask(probe("b", ${JSON.stringify(workers[1])}))],
-        { concurrency: "unbounded" },
-      );
-      return { results };
-    }),
-});
-`
-      : `export const workflow = defineWorkflow({
-  name: "${name}",
-  run: (wf) =>
-    Effect.gen(function* () {
-      const result = yield* wf.runTask(probe("a", ${JSON.stringify(workers[0])}));
-      return { results: [result] };
-    }),
-});
-`;
-  return `${header}\n${probe}\n${run}`;
+  return `${header}\n${renderScaffoldRun(name, pins, "anonymousWorkflowAgent")}`;
 };
 
 /** A complete, validating starter workflow source that uses a real discovered agent ref and installed workers. */

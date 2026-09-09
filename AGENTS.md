@@ -156,6 +156,9 @@ prism workflow refresh-harness-types
 
 # List live harness slugs (plugin-free)
 prism workflow models --worker cursor --query opus
+
+# Embedded workflow authoring skill
+prism workflow skill
 ```
 
 ### Prism home and managed state

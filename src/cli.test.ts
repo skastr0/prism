@@ -224,9 +224,19 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   expect(unknownWorker.exitCode).not.toBe(0);
   expect(unknownWorker.stderr).toContain("Unknown worker");
 
+  const skill = await runCli(["workflow", "skill"], env, { cwd: root });
+  expect(skill.exitCode).toBe(0);
+  expect(skill.stdout).toContain("Plugins are optional");
+  expect(skill.stdout).toContain("prism workflow models");
+
+  const skillWrite = await runCli(["workflow", "skill", "--write"], env, { cwd: root });
+  expect(skillWrite.exitCode).toBe(0);
+  expect(skillWrite.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "SKILL.md"));
+
   const scaffold = await runCli(["workflow", "scaffold", "plugin-free"], env, { cwd: root });
   expect(scaffold.exitCode).toBe(0);
   expect(scaffold.stdout).toContain("anonymousWorkflowAgent");
+  expect(scaffold.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "SKILL.md"));
   const source = await readFile(join(prismHome, "workflows", "plugin-free.workflow.ts"), "utf8");
   expect(source).toContain("anonymousWorkflowAgent");
   expect(source).not.toContain('from "prism/refs"');

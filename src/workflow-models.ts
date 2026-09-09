@@ -203,6 +203,56 @@ export const renderWorkerModelCatalogHuman = (
   return lines.join("\n");
 };
 
+export interface ScaffoldWorkerPin {
+  readonly worker: WorkflowWorkerId;
+  readonly model?: string;
+}
+
+const SCAFFOLD_WORKER_PREFERENCE: readonly WorkflowWorkerId[] = [
+  "cursor",
+  "amp-code",
+  "claude-code",
+  "codex-cli",
+  "opencode",
+];
+
+export const pickScaffoldModel = (
+  catalogs: readonly WorkerModelCatalog[],
+  worker: WorkflowWorkerId,
+): string | undefined => {
+  const entry = catalogs.find((catalog) => catalog.worker === worker);
+  const slugs = entry?.families.flatMap((family) => [...family.slugs]) ?? [];
+  if (slugs.length === 0) return undefined;
+  if (worker === "amp-code") {
+    return slugs.includes("low") ? "low" : slugs.find((slug) => !slug.includes("/")) ?? slugs[0];
+  }
+  return slugs.find((slug) => slug.endsWith("-fast") && !slug.includes("thinking"))
+    ?? slugs.find((slug) => slug.endsWith("-fast"))
+    ?? slugs.find((slug) => slug.endsWith("-low"))
+    ?? slugs[0];
+};
+
+export const pickPluginFreeScaffoldPins = (
+  snapshot: HarnessTypesSnapshot | undefined,
+): readonly [ScaffoldWorkerPin] | readonly [ScaffoldWorkerPin, ScaffoldWorkerPin] => {
+  const catalogs = projectWorkerModelCatalog(snapshot);
+  const withModels = new Set(
+    catalogs.filter((entry) => entry.modelCount > 0).map((entry) => entry.worker),
+  );
+  const ordered = [
+    ...SCAFFOLD_WORKER_PREFERENCE.filter((worker) => withModels.has(worker)),
+    ...catalogs.map((entry) => entry.worker).filter((worker) => withModels.has(worker) && !SCAFFOLD_WORKER_PREFERENCE.includes(worker)),
+  ];
+  const unique = [...new Set(ordered)];
+  const toPin = (worker: WorkflowWorkerId): ScaffoldWorkerPin => {
+    const model = pickScaffoldModel(catalogs, worker);
+    return model === undefined ? { worker } : { worker, model };
+  };
+  if (unique.length >= 2) return [toPin(unique[0]!), toPin(unique[1]!)];
+  if (unique.length === 1) return [toPin(unique[0]!)];
+  return [{ worker: "claude-code" }];
+};
+
 export const buildWorkflowModelCatalog = (
   options: { readonly prismHome?: string; readonly worker?: string; readonly query?: string } = {},
 ): {

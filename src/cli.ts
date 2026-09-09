@@ -96,10 +96,13 @@ import {
 } from "./workflow-catalog.js";
 import {
   buildWorkflowModelCatalog,
+  loadHarnessTypesSnapshot,
   parseWorkflowWorkerId,
+  pickPluginFreeScaffoldPins,
   renderWorkerModelCatalogHuman,
   renderWorkerModelCountsHuman,
 } from "./workflow-models.js";
+import { renderWorkflowAuthoringSkillMarkdown, writeWorkflowAuthoringSkill } from "./workflow-cli/skill.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
 import { runConfigureTui } from "./configure/index.js";
@@ -445,6 +448,24 @@ workflow
   });
 
 workflow
+  .command("skill")
+  .description("Print the embedded workflow-authoring skill (plugin-free)")
+  .option("--write", "Write SKILL.md under PRISM_HOME/runtime/workflow-authoring/")
+  .action(async (options: { readonly write?: boolean }) => {
+    try {
+      if (options.write === true) {
+        const result = await writeWorkflowAuthoringSkill(resolvePrismHome());
+        await writeStdout(`Wrote ${result.path}\n`);
+        return;
+      }
+      await writeStdout(`${renderWorkflowAuthoringSkillMarkdown()}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow skill failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflow
   .command("models")
   .description("List live harness model slugs (plugin-free). Family-grouped; filter with --worker and --query")
   .option("--json", "Emit machine-readable JSON")
@@ -493,11 +514,12 @@ workflow
         workflowDir: prismWorkflowsSourceDir(prismHome),
         harnessTypesPath: result.modelsPath,
       });
+      const skill = await writeWorkflowAuthoringSkill(prismHome);
       if (options.json === true) {
-        await writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+        await writeStdout(`${JSON.stringify({ ...result, skillPath: skill.path }, null, 2)}\n`);
         return;
       }
-      await writeStdout(`${renderHarnessTypesRefreshHuman(result)}\n`);
+      await writeStdout(`${renderHarnessTypesRefreshHuman(result)}\nSkill: ${skill.path}\n`);
     } catch (error) {
       printCliError(error, "Workflow refresh-harness-types failed");
       exitWith(EXIT_CODES.domainFailure);
@@ -528,10 +550,12 @@ workflow
   )
   .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
     try {
+      const prismHome = resolvePrismHome();
       const result = await buildWorkflowCatalog();
+      const pluginFreePins = pickPluginFreeScaffoldPins(loadHarnessTypesSnapshot(prismHome));
       const source =
         result.catalog === null
-          ? scaffoldPluginFreeWorkflowSource(name)
+          ? scaffoldPluginFreeWorkflowSource(name, pluginFreePins)
           : scaffoldWorkflowSource(
             name,
             pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer",
@@ -541,17 +565,18 @@ workflow
         ? "anonymousWorkflowAgent"
         : pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer";
       const workers = result.catalog === null
-        ? (["claude-code"] as const)
+        ? pluginFreePins.map((pin) => pin.worker)
         : pickDefaultWorkers(result.catalog, pickDefaultAgent(result.catalog));
       if (options.print === true) {
         await writeStdout(source);
         return;
       }
-      const outPath = options.out ?? join(prismWorkflowsSourceDir(resolvePrismHome()), `${name}.workflow.ts`);
+      const skill = await writeWorkflowAuthoringSkill(prismHome);
+      const outPath = options.out ?? join(prismWorkflowsSourceDir(prismHome), `${name}.workflow.ts`);
       await ensureDir(dirname(outPath));
       await writeFile(outPath, source, "utf8");
       await writeStdout(
-        `Wrote ${outPath} (agent: ${agentRef}; workers: ${workers.join(", ")}).\nNext: prism workflow validate ${outPath}\n`,
+        `Wrote ${outPath} (agent: ${agentRef}; workers: ${workers.join(", ")}).\nSkill: ${skill.path}\nNext: prism workflow validate ${outPath}\n`,
       );
     } catch (error) {
       printCliError(error, "Workflow scaffold failed");

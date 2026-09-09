@@ -9,6 +9,8 @@ import {
   filterWorkerModelCatalog,
   modelFamilyId,
   parseWorkflowWorkerId,
+  pickPluginFreeScaffoldPins,
+  pickScaffoldModel,
   projectWorkerModelCatalog,
   renderWorkerModelCatalogHuman,
   suggestHarnessSlugs,
@@ -107,6 +109,25 @@ describe("renderWorkerModelCatalogHuman", () => {
     );
     expect(out).toContain("gemini-3.8-flash");
     expect(out).toContain("gemini-3.8-flash-low");
+  });
+});
+
+describe("pickPluginFreeScaffoldPins", () => {
+  test("prefers cursor then amp-code with cheap slugs", () => {
+    const pins = pickPluginFreeScaffoldPins(snapshot);
+    expect(pins).toEqual([
+      { worker: "cursor", model: "composer-2.5-fast" },
+      { worker: "amp-code", model: "low" },
+    ]);
+  });
+
+  test("falls back to claude-code when no snapshot", () => {
+    expect(pickPluginFreeScaffoldPins(undefined)).toEqual([{ worker: "claude-code" }]);
+  });
+
+  test("pickScaffoldModel prefers -fast then -low", () => {
+    const catalogs = projectWorkerModelCatalog(snapshot);
+    expect(pickScaffoldModel(catalogs, "cursor")).toBe("composer-2.5-fast");
   });
 });
 

@@ -276,7 +276,18 @@ describe("scaffoldPluginFreeWorkflowSource", () => {
     expect(src).toContain("anonymousWorkflowAgent");
     expect(src).toContain("refresh-harness-types");
     expect(src).toContain("workflow models");
+    expect(src).toContain("workflow skill");
     expect(src).not.toContain('from "prism/refs"');
+  });
+
+  test("pins a typed worker.model per task", () => {
+    const src = scaffoldPluginFreeWorkflowSource("typed", [
+      { worker: "cursor", model: "composer-2.5-fast" },
+      { worker: "amp-code", model: "low" },
+    ]);
+    expect(src).toContain('worker: { worker: "cursor", model: "composer-2.5-fast" }');
+    expect(src).toContain('worker: { worker: "amp-code", model: "low" }');
+    expect(src).not.toContain("const probe");
   });
 });
 

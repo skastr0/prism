@@ -45,6 +45,7 @@ Workflow **store and refs** are project-scoped. Harness model types are not — 
 ```bash
 prism workflow refresh-harness-types   # global live model unions (no plugin)
 prism workflow models --worker cursor --query opus
+prism workflow skill                   # embedded authoring guide (also written on scaffold)
 prism workflow catalog                 # workers + live slug counts; plugin refs if compiled
 prism workflow catalog --query opus    # searches harness models when no plugin
 prism workflow refs                    # optional plugin refs location + freshness

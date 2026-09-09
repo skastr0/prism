@@ -286,6 +286,23 @@ const parseAmpStreamJsonResult = (stdout: string): string | undefined => {
   return undefined;
 };
 
+export const parseAmpStreamJsonError = (stdout: string): string | undefined => {
+  for (const line of stdout.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed !== "object" || parsed === null) continue;
+      const rec = parsed as { readonly type?: unknown; readonly is_error?: unknown; readonly error?: unknown };
+      if (rec.type !== "result" || rec.is_error !== true) continue;
+      if (typeof rec.error === "string" && rec.error.length > 0) return rec.error;
+    } catch {
+      // Ignore non-JSON progress output.
+    }
+  }
+  return undefined;
+};
+
 export const ampSessionId = (stdout: string, stderr: string): string | undefined =>
   stableSessionIdFromJsonLines(`${stdout}\n${stderr}`, ["session_id", "sessionId", "sessionID", "threadId", "thread_id"])
     ?? stableSessionIdFromRegex(`${stdout}\n${stderr}`, [
@@ -335,9 +352,10 @@ export const runAmpWorkflowTask = async (
       workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
     );
   }
-  if (exitCode !== 0) {
+  const streamError = parseAmpStreamJsonError(stdout);
+  if (exitCode !== 0 || streamError !== undefined) {
     throw new AmpWorkflowWorkerError(
-      `amp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      `amp exited with ${exitCode}: ${streamError ?? (stderr.trim() || stdout.trim())}`,
       workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
     );
   }

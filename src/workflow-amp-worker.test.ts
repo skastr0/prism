@@ -8,6 +8,7 @@ import {
   AMP_WORKFLOW_CATALOG_PIN_MODE,
   AmpWorkflowWorkerError,
   ampCatalogPinPluginPath,
+  parseAmpStreamJsonError,
   renderAmpCatalogPinPlugin,
   resolveAmpCatalogPinPlan,
   runAmpWorkflowTask,
@@ -67,6 +68,13 @@ describe("Amp catalog pin plan", () => {
   test("plugin mode plus catalogModel fails closed", () => {
     expect(() => resolveAmpCatalogPinPlan({ mode: "grok45", catalogModel: "anthropic/claude-opus-5" }))
       .toThrow(/cannot combine with plugin mode 'grok45'/);
+  });
+
+  test("reads Amp stream-json execution errors", () => {
+    expect(parseAmpStreamJsonError([
+      '{"type":"system","subtype":"init"}',
+      '{"type":"result","subtype":"error_during_execution","is_error":true,"error":"Reasoning effort \\"low\\" is not supported"}',
+    ].join("\n"))).toBe('Reasoning effort "low" is not supported');
   });
 
   test("rendered pin plugin carries the catalog slug and effort", () => {

@@ -82,6 +82,8 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runAmpWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "amp-code", fallbackModel: options.model }),
+      catalogModel: task.worker?.worker === "amp-code" ? task.worker.catalogModel : undefined,
+      effort: task.worker?.worker === "amp-code" ? task.worker.effort : undefined,
       resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,

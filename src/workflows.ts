@@ -93,9 +93,27 @@ export type WorkflowWorkerId =
  */
 export interface WorkflowHarnessModelMap {}
 
+/**
+ * Amp catalog `provider/model` ids from `show-agent-options`. Empty in core;
+ * refresh augments `"amp-code"` for `worker.catalogModel`.
+ */
+export interface WorkflowHarnessCatalogModelMap {}
+
+/**
+ * Amp reasoning-effort ladders from the catalog. Empty in core; refresh
+ * augments `"amp-code"` for `worker.effort`.
+ */
+export interface WorkflowHarnessEffortMap {}
+
 export type WorkflowHarnessModel<W extends WorkflowWorkerId> =
   | (W extends keyof WorkflowHarnessModelMap ? WorkflowHarnessModelMap[W] : string)
   | WorkflowModelProfileRef;
+
+export type WorkflowHarnessCatalogModel<W extends WorkflowWorkerId> =
+  W extends keyof WorkflowHarnessCatalogModelMap ? WorkflowHarnessCatalogModelMap[W] : string;
+
+export type WorkflowHarnessEffort<W extends WorkflowWorkerId> =
+  W extends keyof WorkflowHarnessEffortMap ? WorkflowHarnessEffortMap[W] : string;
 
 /** Plugin-free agent stub so a workflow can dispatch a worker without `prism/refs`. */
 export const anonymousWorkflowAgent = {
@@ -160,23 +178,31 @@ type WorkflowTaskWorkerOptionsCommon<W extends WorkflowWorkerId = WorkflowWorker
 };
 
 type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
-  W extends "antigravity-cli"
+  W extends "amp-code"
     ? WorkflowTaskWorkerOptionsCommon<W> & {
-      readonly worker: "antigravity-cli";
-      readonly permission?: AntigravityWorkflowPermissionMode;
+      readonly worker: "amp-code";
+      readonly permission?: WorkflowPermissionMode;
       readonly sessionPersistence?: never;
+      readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code">;
+      readonly effort?: WorkflowHarnessEffort<"amp-code">;
     }
-    : W extends WorkflowSessionPersistenceWorkerId
+    : W extends "antigravity-cli"
       ? WorkflowTaskWorkerOptionsCommon<W> & {
-        readonly worker: W;
-        readonly permission?: WorkflowPermissionMode;
-        readonly sessionPersistence?: WorkflowSessionPersistence;
-      }
-      : WorkflowTaskWorkerOptionsCommon<W> & {
-        readonly worker: W;
-        readonly permission?: WorkflowPermissionMode;
+        readonly worker: "antigravity-cli";
+        readonly permission?: AntigravityWorkflowPermissionMode;
         readonly sessionPersistence?: never;
-      };
+      }
+      : W extends WorkflowSessionPersistenceWorkerId
+        ? WorkflowTaskWorkerOptionsCommon<W> & {
+          readonly worker: W;
+          readonly permission?: WorkflowPermissionMode;
+          readonly sessionPersistence?: WorkflowSessionPersistence;
+        }
+        : WorkflowTaskWorkerOptionsCommon<W> & {
+          readonly worker: W;
+          readonly permission?: WorkflowPermissionMode;
+          readonly sessionPersistence?: never;
+        };
 
 export type WorkflowTaskWorkerOptions =
   | (WorkflowTaskWorkerOptionsCommon & {

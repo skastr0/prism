@@ -184,7 +184,60 @@ describe("renderHarnessModelsModule", () => {
     expect(source).toContain('"amp-code": "grok45" | "low"');
     expect(source).toContain("ampCodeCatalogSlugs");
     expect(source).toContain("anthropic/claude-opus-5");
-    expect(source).not.toMatch(/"amp-code": .*"anthropic\/claude-opus-5"/);
+    expect(source).toMatch(/interface WorkflowHarnessModelMap \{\s*"amp-code": "grok45" \| "low";/s);
+    expect(source).not.toMatch(/interface WorkflowHarnessModelMap \{[^}]*anthropic\/claude-opus-5/s);
+    expect(source).toContain("interface WorkflowHarnessCatalogModelMap");
+    expect(source).toMatch(/WorkflowHarnessCatalogModelMap \{[^}]*"amp-code": "anthropic\/claude-opus-5"/s);
+  });
+
+  test("plugin-free worker.catalogModel accepts catalog slugs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "prism-harness-catalog-"));
+    const harnessPath = join(dir, "harness-models.ts");
+    const workflowPath = join(dir, "flow.workflow.ts");
+    await writeFile(harnessPath, renderHarnessModelsModule({
+      generatedAt: "2026-09-09T00:00:00.000Z",
+      harnesses: [{
+        harness: "amp-code",
+        models: [
+          { id: "low", kind: "dial", label: "Low" },
+          { id: "anthropic/claude-opus-5", kind: "model", label: "Claude Opus 5", provider: "anthropic", efforts: ["low", "max"] },
+        ],
+        source: "command",
+      }],
+    }), "utf8");
+    await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+
+export const workflow = defineWorkflow({
+  name: "typed-catalog",
+  tasks: [defineTask({
+    id: "amp",
+    agent: anonymousWorkflowAgent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    worker: { worker: "amp-code", model: "low", catalogModel: "anthropic/claude-opus-5", effort: "max" },
+  })],
+});
+`, "utf8");
+    const { options, errors } = ts.convertCompilerOptionsFromJson({
+      target: "ESNext",
+      module: "ESNext",
+      moduleResolution: "bundler",
+      strict: true,
+      skipLibCheck: true,
+      noEmit: true,
+      paths: {
+        prism: [join(srcDir, "workflows.ts")],
+        "prism/harnesses": [harnessPath],
+        effect: [effectDts],
+      },
+    }, dir);
+    expect(errors).toEqual([]);
+    const program = ts.createProgram([workflowPath, harnessPath], options);
+    expect(ts.getPreEmitDiagnostics(program).map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+    )).toEqual([]);
   });
 
   test("plugin-free worker.model accepts live slugs and rejects unknown ones", async () => {
@@ -264,7 +317,9 @@ describe("refreshHarnessTypes", () => {
     expect(source).toContain("anthropic/claude-opus-5");
     expect(source).toContain("ampCodeEfforts");
     expect(source).toContain('"amp-code": "grok45" | "high" | "low" | "medium" | "ultra"');
-    expect(source).not.toMatch(/"amp-code": .*"anthropic\/claude-opus-5"/);
+    expect(source).not.toMatch(/interface WorkflowHarnessModelMap \{[^}]*anthropic\/claude-opus-5/s);
+    expect(source).toContain("interface WorkflowHarnessCatalogModelMap");
+    expect(source).toContain("interface WorkflowHarnessEffortMap");
   });
 });
 

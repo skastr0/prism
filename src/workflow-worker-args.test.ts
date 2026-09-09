@@ -661,6 +661,18 @@ describe("amp-code permission arg mapping", () => {
   test("legacy emits no settings override", () => {
     const args = buildAmpArgs({ prompt: "p", permission: "legacy" });
     expect(args).not.toContain("--settings-file");
+    expect(args).not.toContain("--plugin-ready-timeout");
+  });
+
+  test("catalog pin waits for the plugin mode to register", () => {
+    const args = buildAmpArgs({
+      prompt: "p",
+      permission: "legacy",
+      mode: "prism-pin",
+      pluginReadyTimeout: true,
+    });
+    expect(args.slice(args.indexOf("--mode"), args.indexOf("--mode") + 2)).toEqual(["--mode", "prism-pin"]);
+    expect(args).toContain("--plugin-ready-timeout");
   });
 
   test("permissive uses a settings file override when provided", () => {

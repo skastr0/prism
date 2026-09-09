@@ -48,7 +48,7 @@ Kimi Code is part of the `coding-harness` preset with compile-phase generated pl
 
 Amp Code is part of the `coding-harness` preset with compile-phase native TypeScript plugin support. Prism emits one generated plugin under `.amp/plugins/prism-generated-<source-plugin>.ts` for project scope or `<amp-root>/plugins/prism-generated-<source-plugin>.ts` for global/system scope, lowers markdown commands with Amp's `registerCommand` API by appending the command prompt to the active thread, registers canonical tools with Amp's `registerTool` API, and lowers supported Prism hooks through Amp's `amp.on(...)` plugin events. Prism maps `tool.before -> tool.call`, `tool.after -> tool.result`, and `session.start -> session.start`; `session.end` fails closed because Amp does not expose a native session-end event. Compiled agents still lower as generated role skills rather than experimental custom Amp agent modes.
 
-Cursor is part of the `coding-harness` preset with tools-only compile support plus a workflow worker. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts lower into a generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json` and `commands/` component discovery. Cursor Agent Skills are docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into Prism's CLI tool runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); invoke with `prism tools invoke`. The workflow worker runs `agent --print --output-format stream-json --trust` (default model `composer-2.5-fast`), resumes via `--resume`, and injects agent identity in the prompt because Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
+Cursor is part of the `coding-harness` preset with compile-phase plugin-bundle support plus a workflow worker. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts, compiled agents, concrete orbit skills, and Prism hooks lower into one generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json`, `commands/`, `agents/`, `skills/`, and `hooks/hooks.json`. Compiled agents are Cursor plugin subagents (`name` / `description` / optional `model`); the Agent CLI has no `--agent` selector, so the workflow worker still prompt-injects identity. Cursor plugin hooks are Claude-shaped command scripts, not an SDK. Cursor Agent Skills stay docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Canonical tools lower into Prism's CLI tool runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`. The workflow worker runs `agent --print --output-format stream-json --trust` (default model `composer-2.5-fast`) and resumes via `--resume`. Per-agent skill permission visibility remains unsupported.
 
 Devin CLI is part of the `coding-harness` preset. Install-phase rules append to `~/.config/devin/AGENTS.md` (project: root/project `AGENTS.md` via Devin's native discovery). Shared skills install into `~/.config/devin/skills/` or project `.devin/skills/`. Compile-phase concrete orbit skills lower as skills; hooks lower to Claude-compatible `hooks.v1.json` plus Prism-owned wrapper scripts under `hooks/`. Prism does **not** whole-file own `~/.config/devin/config.json` (user prefs and herdr hooks live there). PR1 does not manage primary agents or `devin plugins install`. Workflow worker runs `devin -p` with `--model` (default `swe-1-7`), `--permission-mode`, optional `--agent-config`, `--export` ATIF session capture, and `-r` resume.
 
@@ -602,11 +602,12 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
-    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
+    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
     "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
-    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"]
+    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "hooks": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"]
   }
 }
 ```
@@ -723,10 +724,14 @@ prism plan ./my-plugin --harness claude-code
 
 #### Cursor
 
+- Writes one generated local plugin per compiled source plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/`
+- Writes compiled agents into the generated plugin's `agents/<name>.md` as Cursor subagents (`name`, `description`, optional `model`)
+- Writes concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Installs command artifacts through the same generated plugin's `commands/`
+- Emits `hooks/hooks.json` plus bundled hook wrappers using Cursor plugin hook event names (`preToolUse`, `sessionStart`, …). These are command scripts, not an SDK.
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); invoke via `prism tools invoke`
-- Installs command artifacts through generated local Cursor plugins under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/commands/`
 - Keeps install-phase skills direct because Cursor documents Agent Skills under `.cursor/skills/` and `~/.cursor/skills/`
-- Fails closed for compiled agents, orbits, hooks, and per-agent skill permission visibility
+- Fails closed for per-agent skill permission visibility. The workflow worker still prompt-injects identity because `agent` has no `--agent` selector.
 
 #### Pi
 

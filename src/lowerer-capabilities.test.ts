@@ -191,10 +191,10 @@ test("capability profiles distinguish product-native plugin surfaces from CLI to
   });
   expect(LOWERER_CAPABILITIES.openclaw.surfaces.skills.kind).toBe("direct-file");
   expect(LOWERER_CAPABILITIES.cursor.compile).toEqual({
-    agents: "unsupported",
+    agents: "supported",
     agentModelBindings: "ignored",
     generatedCanonicalTools: "executable",
-    hooks: "unsupported",
+    hooks: "supported",
     skillPermissions: "unsupported",
   });
   expect(LOWERER_CAPABILITIES.cursor.surfaces.pluginBundle).toMatchObject({

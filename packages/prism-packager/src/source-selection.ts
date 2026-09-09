@@ -50,6 +50,7 @@ const COMPILE_SOURCE_HARNESSES = [
   "pi",
   "omp",
   "kimi-code",
+  "cursor",
   "devin",
 ] as const satisfies ReadonlyArray<HarnessId>;
 

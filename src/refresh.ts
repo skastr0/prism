@@ -21,7 +21,10 @@ import type {
   PluginTargetId,
 } from "./types.js";
 import { expandPath, readFile } from "./fs.js";
-import { normalizeGeneratedPluginName } from "./compile/generated-plugin.js";
+import {
+  generatedCursorPluginId,
+  renderCursorGeneratedPluginManifest,
+} from "./compile/generated-plugin.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./sync/desired.js";
 import type { SyncOpFailure, SyncOpListener, SyncReport } from "./sync/apply.js";
 import { blockedTargetErrors, syncDesiredRoot } from "./sync/run.js";
@@ -469,34 +472,10 @@ const addRulesForHarness = async (options: {
   }
 };
 
-const normalizeCursorPluginNameSegment = (pluginName: string): string => {
-  const normalized = normalizeGeneratedPluginName(pluginName)
-    .replace(/_/g, "-")
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/^[.-]+|[.-]+$/g, "");
-  return normalized.length > 0 ? normalized : "plugin";
-};
-
-const cursorGeneratedPluginName = (pluginName: string): string =>
-  `prism-generated-${normalizeCursorPluginNameSegment(pluginName)}`;
-
 const cursorGeneratedCommandPluginRoot = (
   root: string,
   pluginName: string,
-): string => join(root, "plugins", "local", cursorGeneratedPluginName(pluginName));
-
-const renderCursorGeneratedCommandPluginManifest = (
-  manifest: PluginManifest,
-): string => `${JSON.stringify(
-  {
-    name: cursorGeneratedPluginName(manifest.name),
-    version: manifest.version,
-    description: `Prism-generated Cursor commands for ${manifest.name}.`,
-    commands: "commands/",
-  },
-  null,
-  2,
-)}\n`;
+): string => join(root, "plugins", "local", generatedCursorPluginId(pluginName));
 
 const addCommandsForHarness = async (options: {
   readonly builder: DesiredRootBuilder;
@@ -517,7 +496,11 @@ const addCommandsForHarness = async (options: {
     const pluginRoot = cursorGeneratedCommandPluginRoot(root, options.manifest.name);
     options.builder.addFile(options.harness.id, root, {
       targetPath: join(pluginRoot, ".cursor-plugin", "plugin.json"),
-      content: renderCursorGeneratedCommandPluginManifest(options.manifest),
+      content: renderCursorGeneratedPluginManifest({
+        pluginId: generatedCursorPluginId(options.manifest.name),
+        version: options.manifest.version,
+        sourcePluginName: options.manifest.name,
+      }),
       plugin: options.plugin,
     });
     for (const file of commandFiles) {

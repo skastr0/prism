@@ -1517,7 +1517,7 @@ test("validate rejects agent targets for harnesses without compile lowerers", as
       {
         name: "unsupported-agent-target",
         version: "0.1.0",
-        targets: { agents: ["opencode", "cursor"] },
+        targets: { agents: ["opencode", "openclaw"] },
       },
       null,
       2,

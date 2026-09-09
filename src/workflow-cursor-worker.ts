@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
+import { generatedCursorPluginId } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import {
@@ -41,7 +41,7 @@ export interface CursorGeneratedPluginDiscovery {
 export const discoverCursorGeneratedPlugin = (
   task: AnyWorkflowTask,
 ): CursorGeneratedPluginDiscovery => {
-  const pluginDir = join(cursorRoot(), "plugins", "local", generatedPluginIdForOwner(task.agent.plugin));
+  const pluginDir = join(cursorRoot(), "plugins", "local", generatedCursorPluginId(task.agent.plugin));
   if (!existsSync(pluginDir)) return {};
   return { pluginDir };
 };

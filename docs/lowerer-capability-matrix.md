@@ -70,7 +70,7 @@ The `mcpConfig` surface is `unsupported` on every harness.
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` (live dispatch verified, smoke fixture pending) |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | CLI runtime + skill inject | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
-| Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | CLI runtime | unsupported | none for tools | `compile-verified` (workflow worker live-dispatchable) |
+| Cursor | `native-plugin-bundle` for commands, agents, hooks | plugin subagents | direct skills + plugin orbit skills | CLI runtime | plugin command hooks | none for tools | `compile-verified` (workflow worker live-dispatchable) |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | CLI runtime | plugin hooks | none for generated bundle | `compile-verified` |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |
 | Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none | `live-proven` (live dispatch verified, smoke fixture pending) |
@@ -79,8 +79,8 @@ The `mcpConfig` surface is `unsupported` on every harness.
 
 Factory Droid remains closed at `compile-verified` with no workflow worker.
 Cursor now has a prompt-injected Agent CLI workflow worker (`agent --print
---output-format stream-json`); compile remains tools-only (no agents, orbits,
-or hooks).
+--output-format stream-json`). Compile emits plugin subagents, orbit skills,
+and Claude-shaped plugin command hooks into `plugins/local/prism-generated-*`.
 
 Gemini CLI is not a supported target. Antigravity CLI is the replacement target.
 Active Antigravity outputs still live under Antigravity's official
@@ -180,17 +180,16 @@ writes skills into that profile root. Tools are CLI-only under shared
 collision/non-goal notes: Prism does not lower SOUL/personality files, runtime
 delegation, or native Hermes Python plugins.
 
-Cursor compile support is tools-only for catalog/runtime emission. Prism does
-not manage Cursor tool config files. Cursor documents local plugins under
-`~/.cursor/plugins/local/<plugin>` with `.cursor-plugin/plugin.json` and default
-`commands/` component discovery, so Prism installs Cursor command artifacts into
-a generated local plugin bundle instead of direct `~/.cursor/commands/` files.
+Cursor compile emits a local plugin bundle under
+`~/.cursor/plugins/local/prism-generated-<plugin>/` with `.cursor-plugin/plugin.json`,
+`commands/`, `agents/` (subagent markdown), concrete orbit `skills/`, and
+Claude-shaped plugin command hooks (`hooks/hooks.json` + wrappers). Prism does
+not manage Cursor tool config files or whole-file-own `~/.cursor/hooks.json`.
 Cursor documents Agent Skills under `.cursor/skills/` and `~/.cursor/skills/`,
-so Prism keeps Cursor skills as install-phase direct-file artifacts. Prism does
-not compile Cursor agents, hooks, or per-agent skill permissions yet. The
-workflow worker dispatches Agent CLI `agent --print --output-format stream-json`
-with prompt-injected identity, `--resume` for exact session continuation, and
-permission flags mapped from Prism modes (`--force`, `--sandbox`, `--approve-mcps`).
+so Prism keeps install-phase skills as direct-file artifacts. Per-agent skill
+permissions remain unsupported. The Agent CLI has no `--agent` selector, so the
+workflow worker still prompt-injects identity, resumes with `--resume`, and maps
+permission flags (`--force`, `--sandbox`, `--approve-mcps`).
 
 ## Source Pointers
 

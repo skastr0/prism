@@ -969,7 +969,7 @@ const DEFAULT_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS = 2_000;
 type WorkflowExecutorFailureClass = "transient" | "terminal";
 
 // Every worker adapter throws this message shape verbatim for a non-zero exit
-// (see workflow-{codex,opencode,claude,grok,kimi,amp,hermes,devin,omp}-worker.ts).
+// (see workflow-{codex,opencode,claude,cursor,grok,kimi,amp,hermes,devin,omp}-worker.ts).
 // Anything else — WorkflowPermissionError, model-resolution errors, adapter-specific config/parse
 // errors — does not match and stays terminal by construction; no denylist needed.
 const WORKFLOW_EXECUTOR_NONZERO_EXIT_PATTERN = /\bexited with -?\d+:/u;

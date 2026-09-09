@@ -373,7 +373,7 @@ export const cursorCatalog: HarnessCatalog = {
       "Read ~/.cursor/mcp.json, hooks.json, and sandbox.json if present",
       "Compare https://cursor.com/docs/cli/reference/configuration and https://cursor.com/docs/cli/reference/parameters",
       "List ~/.cursor/plugins/local/prism-generated-* and ~/.cursor/skills/",
-      "Re-check src/harnesses.ts, src/lowerer-capabilities.ts, src/compile/lowerers/cursor.ts, src/refresh.ts cursor paths",
+      "Re-check src/harnesses.ts, src/lowerer-capabilities.ts, src/compile/lowerers/cursor.ts, src/refresh.ts, src/workflow-cursor-worker.ts, src/workflow-harness-detection.ts",
       "Update fields[] and lastResearched",
     ],
     sources: [
@@ -391,6 +391,8 @@ export const cursorCatalog: HarnessCatalog = {
       "src/lowerer-capabilities.ts",
       "src/compile/lowerers/cursor.ts",
       "src/refresh.ts",
+      "src/workflow-cursor-worker.ts",
+      "src/workflow-harness-detection.ts",
     ],
   },
   notes: [

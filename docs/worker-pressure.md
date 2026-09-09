@@ -49,7 +49,7 @@ stdout/stderr chunk and already fires a per-chunk callback
 (`src/workflow-worker-process.ts:115-132`). Today that callback carries only the
 stream name (`"stdout" | "stderr"`) and the text is dropped. Passing the chunk
 text through is a one-line signature change that yields a **live** event feed for
-all ten harnesses at once — no per-adapter work to get the tap.
+all eleven harnesses at once — no per-adapter work to get the tap.
 
 **Per-harness event parsing already exists.** This is not greenfield; each
 adapter already walks its own stream:
@@ -57,6 +57,7 @@ adapter already walks its own stream:
 | worker | stream format | existing parser |
 |---|---|---|
 | `claude-code` | `--output-format stream-json --verbose`, JSONL | `parseClaudeStream` — already collects every `tool_use` name and the `result` envelope (`workflow-claude-worker.ts:93`) |
+| `cursor` | `--output-format stream-json`, Claude-shaped `{type:"result", session_id}` | `parseCursorStream` (`workflow-cursor-worker.ts`) |
 | `codex-cli` | JSONL, typed events (`session_meta`, …) | `codexSessionId` line walk (`workflow-codex-worker.ts:127`) |
 | `opencode` | JSONL, `{type, sessionID, part}` | `parseOpenCodeJsonStream` (`workflow-opencode-worker.ts:107`) |
 | `omp` | JSONL, `{type: "session" \| "message_end", …}` | `parseOmpJsonStream` (`workflow-omp-worker.ts:157`) |
@@ -81,7 +82,7 @@ attempt row. Notably this only became viable in `b8a8635`: the 64 KiB
 attempt-metadata cap removed in that commit is precisely what would have
 rejected pressure telemetry.
 
-**Conclusion:** the tap is one line, the parsers exist in seven of ten adapters,
+**Conclusion:** the tap is one line, the parsers exist in eight of eleven adapters,
 and the storage is already there. The genuinely new work is the normalizer, the
 analyzer, and the surfacing.
 

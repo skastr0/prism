@@ -362,7 +362,14 @@ export const parseKimiProviderList = (stdout: string): HarnessModelOption[] => {
   return [{ id: slug }];
 };
 
-/** Built-in `--mode` values from `amp --help` (`low, medium, high, ultra, or a plugin mode…`). */
+const AMP_DIAL_LABELS: Readonly<Record<string, string>> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  ultra: "Ultra",
+};
+
+/** Built-in `--mode` dial from `amp --help` (`low, medium, high, ultra, or a plugin mode…`). */
 export const parseAmpModeHelp = (stdout: string): HarnessModelOption[] => {
   const match = stdout.match(/agent mode \(([^)]+)\)/i);
   if (!match?.[1]) return [];
@@ -375,7 +382,11 @@ export const parseAmpModeHelp = (stdout: string): HarnessModelOption[] => {
         .filter((part) => /^[A-Za-z][A-Za-z0-9-]*$/.test(part)),
     ),
   ];
-  return ids.map((id) => ({ id }));
+  return ids.map((id) => ({
+    id,
+    kind: "dial",
+    label: AMP_DIAL_LABELS[id] ?? id,
+  }));
 };
 
 /** Plugin-registered `--mode` keys from `amp plugins list` (`agent mode: grok45`). */
@@ -385,22 +396,86 @@ export const parseAmpPluginListModes = (stdout: string): HarnessModelOption[] =>
     const match = line.match(/agent mode:\s+(\S+)/i);
     if (match?.[1]) ids.push(match[1]);
   }
-  return [...new Set(ids)].sort((left, right) => left.localeCompare(right)).map((id) => ({ id }));
+  return [...new Set(ids)].sort((left, right) => left.localeCompare(right)).map((id) => ({
+    id,
+    kind: "plugin-mode",
+  }));
 };
 
-const discoverAmpModes = async (run: HarnessTypesCommandRunner): Promise<DiscoveredHarnessModels> => {
-  const [help, plugins] = await Promise.all([run("amp", ["--help"]), run("amp", ["plugins", "list"])]);
+/** Curated `provider/model` catalog from `amp plugins show-agent-options --json`. */
+export const parseAmpAgentOptions = (
+  raw: string,
+): { readonly models: HarnessModelOption[]; readonly error?: string } => {
+  try {
+    const doc = JSON.parse(raw) as { models?: unknown };
+    if (!Array.isArray(doc.models)) {
+      return { models: [], error: "show-agent-options missing models array" };
+    }
+    const models: HarnessModelOption[] = [];
+    const seen = new Set<string>();
+    for (const row of doc.models) {
+      if (!row || typeof row !== "object") continue;
+      const rec = row as Record<string, unknown>;
+      const id = typeof rec.id === "string" ? rec.id : undefined;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const capabilities =
+        rec.capabilities && typeof rec.capabilities === "object"
+          ? (rec.capabilities as Record<string, unknown>)
+          : undefined;
+      const effortsRaw = capabilities?.efforts;
+      const efforts = Array.isArray(effortsRaw)
+        ? effortsRaw.filter((value): value is string => typeof value === "string")
+        : undefined;
+      models.push({
+        id,
+        kind: "model",
+        label:
+          typeof rec.displayName === "string"
+            ? rec.displayName
+            : typeof rec.name === "string"
+              ? rec.name
+              : id,
+        ...(typeof rec.provider === "string" ? { provider: rec.provider } : {}),
+        ...(efforts !== undefined && efforts.length > 0 ? { efforts } : {}),
+      });
+    }
+    return { models };
+  } catch (err) {
+    return { models: [], error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
+const mergeAmpInventory = (entries: readonly HarnessModelOption[]): HarnessModelOption[] => {
   const seen = new Set<string>();
   const models: HarnessModelOption[] = [];
-  for (const model of [...parseAmpModeHelp(help), ...parseAmpPluginListModes(plugins)]) {
+  for (const model of entries) {
     if (seen.has(model.id)) continue;
     seen.add(model.id);
     models.push(model);
   }
+  return models;
+};
+
+const discoverAmpModes = async (run: HarnessTypesCommandRunner): Promise<DiscoveredHarnessModels> => {
+  const [help, plugins, optionsJson] = await Promise.all([
+    run("amp", ["--help"]),
+    run("amp", ["plugins", "list"]),
+    run("amp", ["plugins", "show-agent-options", "--json"]),
+  ]);
+  const curated = parseAmpAgentOptions(optionsJson);
+  const models = mergeAmpInventory([
+    ...parseAmpModeHelp(help),
+    ...parseAmpPluginListModes(plugins),
+    ...curated.models,
+  ]);
   if (models.length === 0) {
-    return empty("amp-code", "amp --help / amp plugins list produced no --mode values");
+    return empty(
+      "amp-code",
+      curated.error ?? "amp --help / plugins list / show-agent-options produced no modes or models",
+    );
   }
-  return result("amp-code", models, "command");
+  return result("amp-code", models, "command", curated.error);
 };
 
 const fromCommand = async (

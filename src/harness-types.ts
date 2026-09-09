@@ -34,6 +34,8 @@ export interface HarnessModelOption {
   readonly label?: string;
   readonly efforts?: readonly string[];
   readonly provider?: string;
+  /** Amp: dial / plugin-mode / curated model. Other harnesses omit this. */
+  readonly kind?: "dial" | "plugin-mode" | "model";
 }
 
 export interface DiscoveredHarnessModels {

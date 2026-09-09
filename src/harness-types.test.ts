@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type * as TypeScript from "typescript";
 import {
   parseAgyModelsList,
+  parseAmpAgentOptions,
   parseAmpModeHelp,
   parseAmpPluginListModes,
   parseClaudeModelCache,
@@ -112,9 +113,33 @@ describe("harness model parsers", () => {
       .toEqual([{ id: "kimi-code/kimi-for-coding" }]);
     expect(parseAmpModeHelp(
       "  -m, --mode <value>\n      Set the agent mode (low, medium, high, ultra, or a plugin mode by key or label)\n",
-    ).map((model) => model.id)).toEqual(["low", "medium", "high", "ultra"]);
-    expect(parseAmpPluginListModes("✓ plugin\n  agent mode: grok45\n  agent mode: gpt-6-astra-low\n").map((model) => model.id))
-      .toEqual(["gpt-6-astra-low", "grok45"]);
+    )).toEqual([
+      { id: "low", kind: "dial", label: "Low" },
+      { id: "medium", kind: "dial", label: "Medium" },
+      { id: "high", kind: "dial", label: "High" },
+      { id: "ultra", kind: "dial", label: "Ultra" },
+    ]);
+    expect(parseAmpPluginListModes("✓ plugin\n  agent mode: grok45\n  agent mode: gpt-6-astra-low\n"))
+      .toEqual([
+        { id: "gpt-6-astra-low", kind: "plugin-mode" },
+        { id: "grok45", kind: "plugin-mode" },
+      ]);
+    const curated = parseAmpAgentOptions(JSON.stringify({
+      models: [{
+        provider: "anthropic",
+        name: "claude-opus-5",
+        id: "anthropic/claude-opus-5",
+        displayName: "Claude Opus 5",
+        capabilities: { efforts: ["low", "high", "max"] },
+      }],
+    }));
+    expect(curated.models).toEqual([{
+      id: "anthropic/claude-opus-5",
+      kind: "model",
+      label: "Claude Opus 5",
+      provider: "anthropic",
+      efforts: ["low", "high", "max"],
+    }]);
   });
 });
 
@@ -176,8 +201,18 @@ describe("refreshHarnessTypes", () => {
         if (command === "amp" && args[0] === "--help") {
           return "Set the agent mode (low, medium, high, ultra, or a plugin mode by key)\n";
         }
-        if (command === "amp" && args[0] === "plugins") {
+        if (command === "amp" && args[0] === "plugins" && args[1] === "list") {
           return "  agent mode: grok45\n";
+        }
+        if (command === "amp" && args[0] === "plugins" && args[1] === "show-agent-options") {
+          return JSON.stringify({
+            models: [{
+              provider: "anthropic",
+              id: "anthropic/claude-opus-5",
+              displayName: "Claude Opus 5",
+              capabilities: { efforts: ["low", "max"] },
+            }],
+          });
         }
         if (command === "opencode" && args[0] === "models") return "openai/gpt-5.4\n";
         return "";
@@ -186,12 +221,28 @@ describe("refreshHarnessTypes", () => {
     const opencode = result.snapshot.harnesses.find((entry) => entry.harness === "opencode");
     expect(opencode?.models.map((model) => model.id)).toEqual(["openai/gpt-5.4"]);
     const amp = result.snapshot.harnesses.find((entry) => entry.harness === "amp-code");
-    expect(amp?.models.map((model) => model.id)).toEqual(["low", "medium", "high", "ultra", "grok45"]);
+    expect(amp?.models.map((model) => model.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "ultra",
+      "grok45",
+      "anthropic/claude-opus-5",
+    ]);
+    expect(amp?.models.find((model) => model.id === "anthropic/claude-opus-5")).toEqual({
+      id: "anthropic/claude-opus-5",
+      kind: "model",
+      label: "Claude Opus 5",
+      provider: "anthropic",
+      efforts: ["low", "max"],
+    });
     const source = await readFile(result.modelsPath, "utf8");
     expect(source).toContain("openCodeModelSlugs");
     expect(source).toContain("openai/gpt-5.4");
     expect(source).toContain("ampCodeModelSlugs");
     expect(source).toContain("grok45");
+    expect(source).toContain("anthropic/claude-opus-5");
+    expect(source).toContain("ampCodeEfforts");
   });
 });
 

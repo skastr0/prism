@@ -138,6 +138,13 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     probeArgs: ["--version"],
     defaultModel: "gpt-5.4-mini",
   },
+  cursor: {
+    harness: "cursor",
+    command: "agent",
+    envVar: "PRISM_WORKFLOW_CURSOR_BIN",
+    probeArgs: ["--version"],
+    defaultModel: "composer-2.5-fast",
+  },
   grok: {
     harness: "grok",
     command: "grok",

@@ -111,8 +111,8 @@ Agents may also carry an agent-level modelspace ref (`agent.model`), which parti
 
 ```ts
 type WorkflowWorkerId =
-  | "amp-code" | "antigravity-cli" | "claude-code" | "codex-cli" | "devin"
-  | "grok" | "hermes" | "kimi-code" | "opencode" | "omp";
+  | "amp-code" | "antigravity-cli" | "claude-code" | "codex-cli" | "cursor"
+  | "devin" | "grok" | "hermes" | "kimi-code" | "opencode" | "omp";
 ```
 
 ```ts

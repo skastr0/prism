@@ -1349,8 +1349,8 @@ const main = async (): Promise<void> => {
   const livePrismHome = resolve(process.env.PRISM_HOME ?? join(homedir(), ".prism"));
   const qaCleanupHarnesses = new Set<Harness | "cursor">(entries.map((entry) => entry.harness));
   if (shouldRunModelSelection) qaCleanupHarnesses.add("opencode");
-  // The QA plugin targets cursor for the single-config live proof; its
-  // server entry must be cleaned even though cursor runs no workflow leg.
+  // The QA plugin targets cursor for the single-config live proof; keep
+  // cleaning that generated plugin even when this matrix has no cursor smoke.
   qaCleanupHarnesses.add("cursor");
 
   if (hasFlag("--cleanup-qa-only")) {

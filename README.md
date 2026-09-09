@@ -315,9 +315,9 @@ shows what is happening while it happens.
 
 Transient worker failures retry with bounded attempts and backoff; config errors and cancellations never do. Each task pins one of seven permission modes, from `sandbox-read-only` to `full-access` — enforced per worker.
 
-### Ten workers
+### Eleven workers
 
-`amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `omp`
+`amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `cursor` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `omp`
 
 ### Start in four moves
 

@@ -117,6 +117,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
         "antigravity-cli",
         "claude-code",
         "codex-cli",
+        "cursor",
         "devin",
         "grok",
         "hermes",
@@ -131,7 +132,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
     const unflagged = Object.values(LOWERER_CAPABILITIES)
       .filter((profile) => !profile.workflowWorker)
       .map((profile): string => profile.harness);
-    expect(unflagged.sort()).toEqual(["cursor", "factory-droid", "openclaw", "pi"].sort());
+    expect(unflagged.sort()).toEqual(["factory-droid", "openclaw", "pi"].sort());
     for (const harness of unflagged) {
       expect(WORKFLOW_WORKERS as readonly string[]).not.toContain(harness);
     }
@@ -227,15 +228,21 @@ const catalogWithInstalls = (installs: ReadonlyArray<string>, workers: ReadonlyA
 
 describe("pickDefaultWorkers", () => {
   test("picks two workers when the agent is installed on 2+ workflow-worker harnesses", () => {
-    const catalog = catalogWithInstalls(["claude-code", "grok", "cursor"], ["claude-code", "grok", "codex-cli"]);
+    const catalog = catalogWithInstalls(["claude-code", "grok", "factory-droid"], ["claude-code", "grok", "codex-cli"]);
     const agent = pickDefaultAgent(catalog);
     expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "grok"]);
   });
 
+  test("picks cursor when it is an installed workflow worker", () => {
+    const catalog = catalogWithInstalls(["cursor", "factory-droid"], ["claude-code", "cursor"]);
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["cursor"]);
+  });
+
   test("degrades to one worker when only one install is a workflow-worker harness (PQ-176 footgun #2)", () => {
-    // cursor is a real harness but has no workflow-worker module — it must
+    // factory-droid is a real harness but has no workflow-worker module — it must
     // never be picked, and the agent isn't installed on any other worker.
-    const catalog = catalogWithInstalls(["claude-code", "cursor"], ["claude-code", "grok", "codex-cli"]);
+    const catalog = catalogWithInstalls(["claude-code", "factory-droid"], ["claude-code", "grok", "codex-cli"]);
     const agent = pickDefaultAgent(catalog);
     expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code"]);
   });

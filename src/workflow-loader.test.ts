@@ -751,7 +751,7 @@ export default defineWorkflow({
 
     await expect(validateWorkflowFile(file)).rejects.toThrow(WorkflowValidationError);
     await expect(validateWorkflowFile(file)).rejects.toThrow(
-      /unsupported workflow worker 'not-a-real-worker'\. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, devin, grok, hermes, kimi-code, omp, opencode/,
+      /unsupported workflow worker 'not-a-real-worker'\. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, cursor, devin, grok, hermes, kimi-code, omp, opencode/,
     );
   });
 
@@ -1455,7 +1455,7 @@ export default defineWorkflow({
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, devin, grok, hermes, kimi-code, omp, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, cursor, devin, grok, hermes, kimi-code, omp, opencode");
   });
 
   test("CLI runs a workflow through the Antigravity worker adapter", async () => {

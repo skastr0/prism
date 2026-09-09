@@ -77,6 +77,7 @@ export type WorkflowWorkerId =
   | "antigravity-cli"
   | "claude-code"
   | "codex-cli"
+  | "cursor"
   | "devin"
   | "grok"
   | "hermes"

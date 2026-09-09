@@ -424,7 +424,7 @@ export const LOWERER_CAPABILITIES = {
   cursor: {
     harness: "cursor",
     family: "coding-harness",
-    workflowWorker: false,
+    workflowWorker: true,
     compile: compileSupported({
       agents: "unsupported",
       agentModelBindings: "ignored",
@@ -463,6 +463,7 @@ export const LOWERER_CAPABILITIES = {
     },
     notes: [
       "Cursor compile support is tools-only for now; compiled agents, orbits, hooks, and skill permission visibility remain unsupported.",
+      "Workflow worker dispatches the Agent CLI (`agent`) with --print --output-format stream-json --trust; identity is prompt-injected because Cursor has no compiled-agent surface.",
       "Cursor command artifacts install through a local plugin bundle under ~/.cursor/plugins/local so Prism uses Cursor's native command discovery instead of direct command files.",
       "Cursor Agent Skills are docs-backed under .cursor/skills and ~/.cursor/skills, so Prism keeps install-phase skills direct.",
       "Cursor canonical tools are CLI-only (`prism tools invoke`); no mcp.json patch is emitted.",

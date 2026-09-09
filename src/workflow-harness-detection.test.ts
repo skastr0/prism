@@ -117,13 +117,14 @@ describe("workflow harness detection", () => {
   });
 
   test("rejects unsupported runtime harness ids explicitly", async () => {
-    await expect(detectWorkflowHarness("cursor" as never)).rejects.toThrow(WorkflowUnsupportedHarnessError);
+    await expect(detectWorkflowHarness("factory-droid" as never)).rejects.toThrow(WorkflowUnsupportedHarnessError);
   });
 
   test("filters general harness ids down to workflow harness ids", () => {
-    expect(workflowHarnessIdsForHarnesses(["cursor", "opencode", "pi", "codex-cli"])).toEqual([
+    expect(workflowHarnessIdsForHarnesses(["factory-droid", "opencode", "pi", "codex-cli", "cursor"])).toEqual([
       "opencode",
       "codex-cli",
+      "cursor",
     ]);
   });
 

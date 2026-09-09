@@ -43,7 +43,7 @@ worker is healthy.
 
 Every claim below is a file:line in this repository, not an assumption.
 
-**One chokepoint sees every harness.** All ten worker adapters spawn through
+**One chokepoint sees every harness.** All eleven worker adapters spawn through
 `runWorkflowWorkerProcess`, whose `readStream` loop already receives every
 stdout/stderr chunk and already fires a per-chunk callback
 (`src/workflow-worker-process.ts:115-132`). Today that callback carries only the

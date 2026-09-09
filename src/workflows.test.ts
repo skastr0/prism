@@ -96,6 +96,12 @@ describe("workflow authoring primitives", () => {
     expect(liveWorker).toBe("antigravity-cli");
   });
 
+  test("workflow worker id includes cursor", () => {
+    const worker = "cursor";
+    const liveWorker: WorkflowWorkerId = worker;
+    expect(liveWorker).toBe("cursor");
+  });
+
   test("antigravity worker options reject unsupported permissions at type level", () => {
     const ok: WorkflowTaskWorkerOptions = { worker: "antigravity-cli", permission: "full-access" };
     expect(ok.permission).toBe("full-access");

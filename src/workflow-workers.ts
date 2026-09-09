@@ -10,6 +10,7 @@ import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { resolveAntigravityPermission, runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
+import { runCursorWorkflowTask } from "./workflow-cursor-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
 import { runDevinWorkflowTask } from "./workflow-devin-worker.js";
@@ -129,6 +130,17 @@ const workflowWorkerAdapters = {
         repair: options.context?.repair,
       });
     },
+  },
+  cursor: {
+    id: "cursor",
+    runTask: (task, options) => runCursorWorkflowTask(task, {
+      cwd: options.cwd,
+      model: resolveWorkflowTaskModel(task, { worker: "cursor", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
+      abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
+      repair: options.context?.repair,
+    }),
   },
   grok: {
     id: "grok",

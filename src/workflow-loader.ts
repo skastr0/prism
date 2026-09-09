@@ -31,7 +31,12 @@ import {
   type WorkflowTaskModelResolutionSource,
   type WorkflowValidationSummary,
 } from "./workflows.js";
-import { supportedWorkflowWorkers, UnsupportedWorkflowWorkerError } from "./workflow-workers.js";
+import {
+  assertWorkflowWorkerPermission,
+  resolveWorkflowTaskPermission,
+  supportedWorkflowWorkers,
+  UnsupportedWorkflowWorkerError,
+} from "./workflow-workers.js";
 
 export {
   checkWorkflowRefsFreshness,
@@ -116,6 +121,21 @@ const resolveTaskModelRow = (
   const ampError = validateAmpCatalogPins(task, snapshot);
   if (ampError !== undefined) {
     return { id: task.id, worker, ...pinFields, error: ampError };
+  }
+
+  try {
+    assertWorkflowWorkerPermission(
+      worker,
+      resolveWorkflowTaskPermission(task),
+      task.worker?.restrictedTools,
+    );
+  } catch (error) {
+    return {
+      id: task.id,
+      worker,
+      ...pinFields,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 
   try {

@@ -257,7 +257,7 @@ const prepareAmpCatalogPin = async (
   };
 };
 
-const assertAmpPermission = (mode: WorkflowPermissionMode): void => {
+export const assertAmpPermission = (mode: WorkflowPermissionMode): void => {
   switch (mode) {
     case "legacy":
     case "permissive":

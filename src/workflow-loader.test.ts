@@ -744,6 +744,44 @@ export default defineWorkflow({
     ]);
   });
 
+  test("validate fails closed when claude-code is pinned to sandbox-read-only", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const builder = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["claude-code"],
+};
+
+export default defineWorkflow({
+  name: "claude-sandbox-pin",
+  tasks: [defineTask({
+    id: "claude",
+    agent: builder,
+    prompt: "go",
+    output: Schema.Struct({ ok: Schema.Boolean }),
+    worker: { worker: "claude-code", permission: "sandbox-read-only" },
+  })],
+});
+`);
+
+    await expect(validateWorkflowFile(file, { skipTypecheck: true })).rejects.toThrow(WorkflowValidationError);
+    await expect(validateWorkflowFile(file, { skipTypecheck: true })).rejects.toThrow(
+      /Claude Code exposes no built-in sandbox flag/,
+    );
+    await expect(validateWorkflowFile(file, { skipTypecheck: true })).rejects.toThrow(
+      /Choose 'permissive' or 'legacy' instead/,
+    );
+  });
+
   test("validate fails with the allowed worker id list for an unknown worker (WDX-009)", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

@@ -133,7 +133,7 @@ worker: {
 }
 ```
 
-**Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own sandbox/approval flags. `antigravity-cli` accepts only `legacy` / `permissive` / `full-access` — the type system enforces it.
+**Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own flags. The type is per-worker: Codex may use `sandbox-read-only`; Claude, Grok, Amp, and OMP may not. `prism workflow validate` fails closed with the same remediation as run. Do not copy a Codex sandbox pin onto another harness.
 
 **Retry** (executor-level, WFE-009): only *classified-transient* executor failures retry — an unclassified non-zero worker exit. Config/load errors and cancellation-barrier outcomes never retry. `maxAttempts` counts total attempts (default 2, i.e. one retry); `backoffMs` spaces them.
 

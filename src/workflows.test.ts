@@ -462,6 +462,20 @@ describe("workflow authoring primitives", () => {
     expect(invalid).toBeDefined();
   });
 
+  test("claude-code rejects sandbox-read-only at the type", () => {
+    defineTask({
+      id: "claude-sandbox-type",
+      agent: builder,
+      prompt: "test",
+      output: PatchReport,
+      worker: {
+        worker: "claude-code",
+        // @ts-expect-error Claude Code has no sandbox permission flag
+        permission: "sandbox-read-only",
+      },
+    });
+  });
+
   test("workflow permission mode type includes all expected values", () => {
     const modes: WorkflowPermissionMode[] = [
       "legacy", "permissive", "restricted", "interactive",

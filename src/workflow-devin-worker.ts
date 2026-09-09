@@ -85,7 +85,6 @@ export const buildDevinArgs = (input: {
   readonly model?: string;
   readonly permission?: WorkflowPermissionMode;
   readonly sessionId?: string;
-  readonly agentConfigPath?: string;
   readonly promptFilePath: string;
   readonly exportPath: string;
 }): ReadonlyArray<string> => {
@@ -95,24 +94,11 @@ export const buildDevinArgs = (input: {
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(permissionMode !== undefined ? ["--permission-mode", permissionMode] : []),
     ...(input.sessionId !== undefined ? ["-r", input.sessionId] : []),
-    ...(input.agentConfigPath !== undefined ? ["--agent-config", input.agentConfigPath] : []),
     "--prompt-file",
     input.promptFilePath,
     "--export",
     input.exportPath,
   ];
-};
-
-const buildAgentConfigYaml = (systemInstructions: ReadonlyArray<string>): string => {
-  const lines = ["system_instructions:"];
-  for (const instruction of systemInstructions) {
-    // YAML block scalar per instruction entry (sequence of strings).
-    lines.push("  - |");
-    for (const line of instruction.split("\n")) {
-      lines.push(`    ${line}`);
-    }
-  }
-  return `${lines.join("\n")}\n`;
 };
 
 const extractAgentTextFromAtif = (exportJson: unknown): string => {
@@ -179,24 +165,14 @@ export const runDevinWorkflowTask = async (
   const workDir = await mkdtemp(join(tmpdir(), "prism-devin-workflow-"));
   const promptFilePath = join(workDir, "prompt.md");
   const exportPath = join(workDir, "export.atif.json");
-  const agentConfigPath = join(workDir, "agent-config.yaml");
 
   try {
     await writeFile(promptFilePath, basePrompt, "utf8");
-    await writeFile(
-      agentConfigPath,
-      buildAgentConfigYaml([
-        `Prism workflow agent: ${task.agent.plugin}/${task.agent.name}.`,
-        "Follow the task prompt exactly. Prefer structured JSON when instructed.",
-      ]),
-      "utf8",
-    );
 
     const args = buildDevinArgs({
       model: options.model,
       permission: options.resolvedPermission,
       sessionId,
-      agentConfigPath,
       promptFilePath,
       exportPath,
     });

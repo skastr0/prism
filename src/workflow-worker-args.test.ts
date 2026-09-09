@@ -356,6 +356,11 @@ describe("claude-code permission arg mapping", () => {
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
+  test("omits --agent when no compiled Claude agent is selected", () => {
+    const args = buildClaudeArgs({ prompt: "p", permission: "legacy" });
+    expect(args).not.toContain("--agent");
+  });
+
   test("permissive emits --dangerously-skip-permissions --print --output-format stream-json", () => {
     const args = buildClaudeArgs({ agent: "a", prompt: "p", permission: "permissive" });
     expect(args).toContain("--dangerously-skip-permissions");

@@ -14,6 +14,8 @@ test("embedded workflow skill teaches the plugin-free path", () => {
   expect(markdown).toContain("anonymousWorkflowAgent");
   expect(markdown).toContain("catalogModel");
   expect(markdown).toContain("gemini-3.8-flash-low");
+  expect(markdown).toContain("sandbox-read-only");
+  expect(markdown).toContain("claude-code");
 });
 
 test("writeWorkflowAuthoringSkill materializes SKILL.md under PRISM_HOME", async () => {

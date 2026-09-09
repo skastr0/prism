@@ -56,6 +56,15 @@ export const workflow = defineWorkflow({
 - Cursor slugs are effort-suffixed. \`gemini-3.8-flash\` is not a slug; use \`gemini-3.8-flash-low|medium|high\`.
 - Amp: \`worker.model\` is a \`--mode\` dial (\`low|medium|high|ultra\`) or plugin key. Catalog slugs go in \`worker.catalogModel\`. Reasoning goes in \`worker.effort\`. Example: \`{ worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }\`.
 - Discover slugs: \`prism workflow models --worker <id> --query <text>\`.
+- \`worker.permission\` is harness-bound. Do not copy Codex \`sandbox-read-only\` onto Claude, Grok, Amp, or OMP.
+
+| Worker | Allowed \`permission\` |
+|---|---|
+| \`claude-code\` | \`legacy\` \`permissive\` \`restricted\` (+ \`restrictedTools\`) \`full-access\` |
+| \`codex-cli\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-read-only\` \`sandbox-workspace-write\` |
+| \`cursor\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-workspace-write\` |
+| \`devin\` \`omp\` | \`legacy\` \`permissive\` \`restricted\` \`full-access\` |
+| \`amp-code\` \`antigravity-cli\` \`grok\` \`hermes\` \`kimi-code\` \`opencode\` | \`legacy\` \`permissive\` \`full-access\` |
 
 ## Commands (all plugin-free)
 
@@ -66,7 +75,7 @@ export const workflow = defineWorkflow({
 | \`scaffold <name>\` | Starter in \`~/.prism/workflows/\` with typed pins when a snapshot exists |
 | \`refresh-harness-types\` | Write \`prism/harnesses\` unions from installed CLIs |
 | \`typecheck <file>\` | Generated tsconfig + shipped declarations |
-| \`validate <file>\` | Every probed pin: worker, model, catalog, effort |
+| \`validate <file>\` | Every probed pin: worker, model, catalog, effort, permission |
 | \`run <file>\` | Dispatch. Add \`--mock-output\` to rehearse |
 | \`skill\` | Print this guide |
 | \`refs\` | Optional compiled plugin refs |
@@ -83,7 +92,7 @@ If typecheck rejects a family name, the error should list the effort-suffixed sl
 
 ## Validate before you spend
 
-\`prism workflow validate <file> --table\` lists every task the \`run:\` graph dispatches, including Amp catalog/effort. Illegal Amp efforts fail closed when the snapshot lists that catalog row.
+\`prism workflow validate <file> --table\` lists every task the \`run:\` graph dispatches, including Amp catalog/effort. Illegal Amp efforts and illegal \`worker.permission\` values fail closed with the same remediation as run.
 
 ## Full DSL
 

@@ -710,12 +710,9 @@ export const LOWERER_CAPABILITIES = {
         summary:
           "Project scope writes hooks.v1.json; global scope upserts Prism entries into config.json hooks without whole-file adopt. Wrappers under hooks/.",
       },
-      agentConfig: {
-        kind: "direct-file",
-        path: "ephemeral --agent-config for workflow runs",
-        summary:
-          "Workflow worker writes temporary agent-config (system_instructions, allowed_tools); not a durable install surface.",
-      },
+      agentConfig: unsupported(
+        "Devin CLI has no --agent-config. Workflow identity is injected in the prompt file.",
+      ),
     },
     notes: [
       "Never whole-file adopt ~/.config/devin/config.json — herdr hooks and user prefs live there.",

@@ -126,6 +126,11 @@ export const anonymousWorkflowAgent = {
   installs: [] as const,
 } as const satisfies WorkflowAgentRef;
 
+export const isAnonymousWorkflowAgent = (agent: {
+  readonly plugin: string;
+  readonly name: string;
+}): boolean => agent.plugin === "prism" && agent.name === "anonymous";
+
 export type WorkflowPermissionMode =
   | "legacy"
   | "permissive"
@@ -135,7 +140,46 @@ export type WorkflowPermissionMode =
   | "sandbox-workspace-write"
   | "full-access";
 
-export type AntigravityWorkflowPermissionMode = Extract<WorkflowPermissionMode, "legacy" | "permissive" | "full-access">;
+/** Workers with no sandbox flag and no per-invocation allowlist. */
+export type WorkflowDialPermissionMode = Extract<
+  WorkflowPermissionMode,
+  "legacy" | "permissive" | "full-access"
+>;
+
+export type AntigravityWorkflowPermissionMode = WorkflowDialPermissionMode;
+
+export type ClaudeWorkflowPermissionMode = Extract<
+  WorkflowPermissionMode,
+  "legacy" | "permissive" | "restricted" | "full-access"
+>;
+
+export type CodexWorkflowPermissionMode = Extract<
+  WorkflowPermissionMode,
+  "legacy" | "permissive" | "full-access" | "sandbox-read-only" | "sandbox-workspace-write"
+>;
+
+export type CursorWorkflowPermissionMode = Extract<
+  WorkflowPermissionMode,
+  "legacy" | "permissive" | "full-access" | "sandbox-workspace-write"
+>;
+
+export type DevinWorkflowPermissionMode = Extract<
+  WorkflowPermissionMode,
+  "legacy" | "permissive" | "restricted" | "full-access"
+>;
+
+export type OmpWorkflowPermissionMode = Extract<
+  WorkflowPermissionMode,
+  "legacy" | "permissive" | "restricted" | "full-access"
+>;
+
+export type WorkflowWorkerPermissionMode<W extends WorkflowWorkerId> =
+  W extends "claude-code" ? ClaudeWorkflowPermissionMode
+    : W extends "codex-cli" ? CodexWorkflowPermissionMode
+      : W extends "cursor" ? CursorWorkflowPermissionMode
+        : W extends "devin" ? DevinWorkflowPermissionMode
+          : W extends "omp" ? OmpWorkflowPermissionMode
+            : WorkflowDialPermissionMode;
 
 export const WORKFLOW_SESSION_PERSISTENCE_WORKERS = [
   "claude-code",
@@ -178,31 +222,18 @@ type WorkflowTaskWorkerOptionsCommon<W extends WorkflowWorkerId = WorkflowWorker
 };
 
 type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
-  W extends "amp-code"
-    ? WorkflowTaskWorkerOptionsCommon<W> & {
-      readonly worker: "amp-code";
-      readonly permission?: WorkflowPermissionMode;
+  WorkflowTaskWorkerOptionsCommon<W> & {
+    readonly worker: W;
+    readonly permission?: WorkflowWorkerPermissionMode<W>;
+  } & (W extends "amp-code"
+    ? {
       readonly sessionPersistence?: never;
       readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code">;
       readonly effort?: WorkflowHarnessEffort<"amp-code">;
     }
-    : W extends "antigravity-cli"
-      ? WorkflowTaskWorkerOptionsCommon<W> & {
-        readonly worker: "antigravity-cli";
-        readonly permission?: AntigravityWorkflowPermissionMode;
-        readonly sessionPersistence?: never;
-      }
-      : W extends WorkflowSessionPersistenceWorkerId
-        ? WorkflowTaskWorkerOptionsCommon<W> & {
-          readonly worker: W;
-          readonly permission?: WorkflowPermissionMode;
-          readonly sessionPersistence?: WorkflowSessionPersistence;
-        }
-        : WorkflowTaskWorkerOptionsCommon<W> & {
-          readonly worker: W;
-          readonly permission?: WorkflowPermissionMode;
-          readonly sessionPersistence?: never;
-        };
+    : W extends WorkflowSessionPersistenceWorkerId
+      ? { readonly sessionPersistence?: WorkflowSessionPersistence }
+      : { readonly sessionPersistence?: never });
 
 export type WorkflowTaskWorkerOptions =
   | (WorkflowTaskWorkerOptionsCommon & {

@@ -151,9 +151,9 @@ export const devinCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-11",
+    lastResearched: "2026-09-09",
     procedure: [
-      "Run `devin --help` / `devin help` and note -p, --model, --permission-mode, -r, --agent-config, --export, plugins, auth",
+      "Run `devin --help` / `devin help` and note -p, --model, --permission-mode, --prompt-file, -r, --export, plugins, auth",
       "Read ~/.config/devin/config.json top-level keys (redact devin.org_id and any tokens)",
       "List hooks event names under config.json#hooks and any herdr vs prism-generated command paths",
       "Confirm AGENTS.md prism:file-router marker regions; project rules target repo AGENTS.md",
@@ -181,7 +181,7 @@ export const devinCatalog: HarnessCatalog = {
     "Project scope: hooks load from .devin/hooks.v1.json (Prism may whole-file own that path per plugin claim). Global: config.json#hooks + wrappers under hooks/prism-generated-<plugin>/*.mjs.",
     "Install skills → ~/.config/devin/skills/ or project .devin/skills/; compile orbits lower as skills. No agents/commands/tools/plugins in PR1.",
     "Rules: global markers in ~/.config/devin/AGENTS.md; project markers on repo-root AGENTS.md (not under .devin/). Also discovers AGENT.md, CLAUDE.md, AGENTS.local.md.",
-    "Workflow: `devin -p` + --model (default swe-1-7) + --permission-mode + optional --agent-config (ephemeral YAML system_instructions) + --export ATIF + -r resume. Auth via `devin auth login`.",
+    "Workflow: `devin -p` + --model (default swe-1-7) + --permission-mode + --prompt-file + --export ATIF + -r resume. Devin CLI has no --agent-config. Auth via `devin auth login`.",
     "Plugins are beta (`devin plugins install`); Prism does not manage them.",
     "cli/ dir present under global root on disk — inventory only; not a Prism write surface.",
   ],

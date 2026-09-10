@@ -71,6 +71,28 @@ const fixture: GeneratedSurface = {
       },
     },
   },
+  sops: {
+    forge: {
+      beacon: {
+        plugin: "forge",
+        name: "beacon",
+        phases: {
+          explore: {
+            name: "explore",
+            purpose: "Map the space before committing.",
+            acceptanceCriteria: ["Hypothesis is falsifiable"],
+            escalation: "Ask a human when the audience is unclear",
+            input: { type: "object", properties: { brief: { type: "string" } } },
+          },
+          build: {
+            name: "build",
+            purpose: "Build the thing the phase contract describes.",
+            acceptanceCriteria: [],
+          },
+        },
+      },
+    },
+  },
   models: {
     "agent-foundations": { "empirical-modelspaces": { "coding-frontier": {} } },
   },
@@ -187,6 +209,7 @@ const catalogWith = (refs: ReadonlyArray<string>): WorkflowCatalog => ({
       namespace: "x",
       orbit: null,
       orbitDetail: null,
+      sops: [],
       agents: refs.map((ref) => ({
         ref,
         plugin: "x",
@@ -216,6 +239,7 @@ const catalogWithInstalls = (installs: ReadonlyArray<string>, workers: ReadonlyA
       namespace: "x",
       orbit: null,
       orbitDetail: null,
+      sops: [],
       agents: [
         { ref: "agents.x.builder", plugin: "x", name: "builder", description: "", installs, modelByHarness: {} },
       ],
@@ -300,10 +324,10 @@ describe("projectCompactIndex", () => {
   const catalog = projectCatalog(fixture);
   const index = projectCompactIndex(catalog, "/surface/dir");
 
-  test("summarizes each namespace with agent count and orbit ref, dropping per-agent detail", () => {
+  test("summarizes each namespace with agent count and orbit/sop refs, dropping per-agent detail", () => {
     expect(index.namespaces).toEqual([
-      { namespace: "forge", orbitRef: "orbits.forge.forge", agentCount: 1 },
-      { namespace: "gleaner", orbitRef: null, agentCount: 1 },
+      { namespace: "forge", orbitRef: "orbits.forge.forge", sopRefs: ["sops.forge.beacon"], agentCount: 1 },
+      { namespace: "gleaner", orbitRef: null, sopRefs: [], agentCount: 1 },
     ]);
   });
 
@@ -320,7 +344,7 @@ describe("renderCompactIndexHuman", () => {
   const out = renderCompactIndexHuman(index);
 
   test("lists one line per namespace with agent count and orbit ref", () => {
-    expect(out).toContain("forge  (1 agent, orbit ref: orbits.forge.forge)");
+    expect(out).toContain("forge  (1 agent, orbit ref: orbits.forge.forge, sop refs: sops.forge.beacon)");
     expect(out).toContain("gleaner  (1 agent)");
   });
 
@@ -467,6 +491,19 @@ describe("renderRefDetailHuman", () => {
     expect(out).toContain("modelspace: empirical-modelspaces");
     expect(out).toContain("profile: coding-frontier");
   });
+
+  test("renders sop and sop-phase detail", () => {
+    const { entity } = lookupCatalogRef(catalog, "sops.forge.beacon");
+    expect(entity?.kind).toBe("sop");
+    expect(renderRefDetailHuman(entity!)).toContain("sops.forge.beacon");
+
+    const phase = lookupCatalogRef(catalog, "sops.forge.beacon.phases.explore");
+    expect(phase.entity?.kind).toBe("sop-phase");
+    const phaseOut = renderRefDetailHuman(phase.entity!);
+    expect(phaseOut).toContain("Map the space before committing.");
+    expect(phaseOut).toContain("input=yes output=no");
+    expect(phaseOut).toContain("Hypothesis is falsifiable");
+  });
 });
 
 describe("renderRefNotFoundMessage", () => {
@@ -499,6 +536,13 @@ describe("searchCatalog", () => {
     expect(hits.map((h) => h.ref)).toContain("models.agent-foundations.empirical-modelspaces.coding-frontier");
   });
 
+  test("matches sop refs and phase purposes", () => {
+    const refs = searchCatalog(catalog, "sops.forge").map((h) => h.ref);
+    expect(refs).toContain("sops.forge.beacon");
+    const purposeHits = searchCatalog(catalog, "falsifiable");
+    expect(purposeHits.map((h) => h.ref)).toContain("sops.forge.beacon.phases.explore");
+  });
+
   test("zero hits for a non-matching query", () => {
     expect(searchCatalog(catalog, "nonexistent-xyz")).toEqual([]);
   });
@@ -508,6 +552,7 @@ describe("searchCatalog", () => {
     const surface: GeneratedSurface = {
       agents: { ns: { a: { plugin: "p", name: "a", description: longDescription } } },
       orbits: {},
+      sops: {},
       models: {},
     };
     const hits = searchCatalog(projectCatalog(surface), "xxx");

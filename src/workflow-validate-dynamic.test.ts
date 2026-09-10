@@ -45,6 +45,7 @@ const surface: GeneratedSurface = {
       },
     },
   },
+  sops: {},
   models: {},
 };
 
@@ -70,6 +71,7 @@ const emptyAgentsSurface: GeneratedSurface = {
       },
     },
   },
+  sops: {},
   models: {},
 };
 
@@ -134,6 +136,7 @@ describe("validatePhaseAgentBindings", () => {
     const legacySurface: GeneratedSurface = {
       agents: surface.agents,
       orbits: { forge: { forge: { plugin: "forge", name: "forge" } } },
+      sops: {},
       models: {},
     };
     expect(validatePhaseAgentBindings([

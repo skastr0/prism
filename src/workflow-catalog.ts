@@ -71,6 +71,19 @@ interface RawOrbit {
   readonly sequence?: ReadonlyArray<string>;
   readonly phases?: Readonly<Record<string, RawOrbitPhase>>;
 }
+interface RawSopPhase {
+  readonly name: string;
+  readonly purpose: string;
+  readonly input?: unknown;
+  readonly output?: unknown;
+  readonly acceptanceCriteria: ReadonlyArray<string>;
+  readonly escalation?: string;
+}
+interface RawSop {
+  readonly plugin: string;
+  readonly name: string;
+  readonly phases?: Readonly<Record<string, RawSopPhase>>;
+}
 type RawGroup<T> = Readonly<Record<string, Readonly<Record<string, T>>>>;
 
 const isTypedOrbit = (orbit: RawOrbit): orbit is RawOrbit & { readonly phases: Readonly<Record<string, RawOrbitPhase>> } =>
@@ -79,6 +92,7 @@ const isTypedOrbit = (orbit: RawOrbit): orbit is RawOrbit & { readonly phases: R
 export interface GeneratedSurface {
   readonly agents: RawGroup<RawAgent>;
   readonly orbits: RawGroup<RawOrbit>;
+  readonly sops: RawGroup<RawSop>;
   readonly models: Readonly<Record<string, Record<string, Record<string, unknown>>>>;
 }
 
@@ -114,6 +128,25 @@ export interface CatalogOrbitDetail extends CatalogOrbit {
   readonly phases: ReadonlyArray<CatalogPhaseSummary>;
   readonly phaseDetails: ReadonlyArray<CatalogPhaseDetail>;
 }
+export interface CatalogSop {
+  readonly ref: string;
+  readonly plugin: string;
+  readonly name: string;
+}
+export interface CatalogSopPhaseDetail {
+  readonly ref: string;
+  readonly key: string;
+  readonly name: string;
+  readonly purpose: string;
+  readonly acceptanceCriteriaCount: number;
+  readonly hasInputContract: boolean;
+  readonly hasOutputContract: boolean;
+  readonly escalation?: string;
+  readonly acceptanceCriteria: ReadonlyArray<string>;
+}
+export interface CatalogSopDetail extends CatalogSop {
+  readonly phases: ReadonlyArray<CatalogSopPhaseDetail>;
+}
 export interface CatalogPhaseDetail extends CatalogPhaseSummary {
   readonly orbit: string;
   readonly plugin: string;
@@ -128,6 +161,7 @@ export interface CatalogNamespace {
   readonly namespace: string;
   readonly orbit: CatalogOrbit | null;
   readonly orbitDetail: CatalogOrbitDetail | null;
+  readonly sops: ReadonlyArray<CatalogSopDetail>;
   readonly agents: ReadonlyArray<CatalogAgent>;
 }
 export interface CatalogModelProfile {
@@ -245,6 +279,40 @@ const projectOrbitDetail = (
   };
 };
 
+const projectSopPhaseDetail = (
+  namespace: string,
+  sopKey: string,
+  phaseKey: string,
+  phase: RawSopPhase,
+): CatalogSopPhaseDetail => ({
+  ref: `sops.${namespace}.${sopKey}.phases.${phaseKey}`,
+  key: phaseKey,
+  name: phase.name,
+  purpose: phase.purpose,
+  acceptanceCriteriaCount: phase.acceptanceCriteria.length,
+  hasInputContract: phase.input !== undefined,
+  hasOutputContract: phase.output !== undefined,
+  ...(phase.escalation !== undefined ? { escalation: phase.escalation } : {}),
+  acceptanceCriteria: [...phase.acceptanceCriteria],
+});
+
+const projectSopDetails = (
+  sops: RawGroup<RawSop>,
+  namespace: string,
+): CatalogSopDetail[] =>
+  Object.entries(sops[namespace] ?? {})
+    .map(([sopKey, sop]) => ({
+      ref: `sops.${namespace}.${sopKey}`,
+      plugin: sop.plugin,
+      name: sop.name,
+      phases: Object.entries(sop.phases ?? {})
+        .map(([phaseKey, phase]) =>
+          projectSopPhaseDetail(namespace, sopKey, phaseKey, phase)
+        )
+        .sort((left, right) => left.key.localeCompare(right.key)),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+
 /** Pure projection: generated surface objects -> author-facing catalog. */
 export const projectCatalog = (surface: GeneratedSurface): WorkflowCatalog => {
   const namespaces: CatalogNamespace[] = Object.keys(surface.agents)
@@ -264,6 +332,7 @@ export const projectCatalog = (surface: GeneratedSurface): WorkflowCatalog => {
         namespace,
         orbit: orbitForNamespace(surface.orbits, namespace),
         orbitDetail: projectOrbitDetail(surface.orbits, namespace),
+        sops: projectSopDetails(surface.sops, namespace),
         agents,
       };
     });
@@ -287,14 +356,16 @@ export const loadGeneratedSurface = async (dir: string): Promise<GeneratedSurfac
     const path = join(dir, file);
     return existsSync(path) ? ((await import(path)) as Record<string, unknown>) : {};
   };
-  const [agentsMod, orbitsMod, modelsMod] = await Promise.all([
+  const [agentsMod, orbitsMod, sopsMod, modelsMod] = await Promise.all([
     load("agents.ts"),
     load("orbits.ts"),
+    load("sops.ts"),
     load("models.ts"),
   ]);
   return {
     agents: (agentsMod.agents ?? {}) as GeneratedSurface["agents"],
     orbits: (orbitsMod.orbits ?? {}) as GeneratedSurface["orbits"],
+    sops: (sopsMod.sops ?? {}) as GeneratedSurface["sops"],
     models: (modelsMod.models ?? {}) as GeneratedSurface["models"],
   };
 };
@@ -334,7 +405,7 @@ export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: str
   let shown = 0;
   for (const ns of result.catalog.namespaces) {
     if (filterOrbit && ns.namespace !== filterOrbit) continue;
-    if (ns.agents.length === 0 && ns.orbit === null) continue;
+    if (ns.agents.length === 0 && ns.orbit === null && ns.sops.length === 0) continue;
     shown += 1;
     lines.push(ns.orbit ? `${ns.namespace}  (orbit ref: ${ns.orbit.ref})` : `${ns.namespace}`);
     if (ns.orbitDetail && ns.orbitDetail.phases.length > 0) {
@@ -345,6 +416,17 @@ export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: str
         const contract = phase.hasContract ? "yes" : "no";
         lines.push(
           `    ${phase.name}  agents: ${agentNames}  criteria: ${phase.criteriaCount}  contract: ${contract}`,
+        );
+        lines.push(`      ref: ${phase.ref}`);
+      }
+      lines.push(``);
+    }
+    for (const sop of ns.sops) {
+      lines.push(`  sop ref: ${sop.ref}`);
+      for (const phase of sop.phases) {
+        const contract = phase.hasInputContract || phase.hasOutputContract ? "yes" : "no";
+        lines.push(
+          `    ${phase.name}  purpose: ${phase.purpose}  criteria: ${phase.acceptanceCriteriaCount}  contract: ${contract}`,
         );
         lines.push(`      ref: ${phase.ref}`);
       }
@@ -380,6 +462,7 @@ export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: str
 export interface CompactNamespaceEntry {
   readonly namespace: string;
   readonly orbitRef: string | null;
+  readonly sopRefs: ReadonlyArray<string>;
   readonly agentCount: number;
 }
 
@@ -396,8 +479,13 @@ export const projectCompactIndex = (catalog: WorkflowCatalog, surfaceDir: string
   surfaceDir,
   present: true,
   namespaces: catalog.namespaces
-    .filter((ns) => ns.agents.length > 0 || ns.orbit !== null)
-    .map((ns) => ({ namespace: ns.namespace, orbitRef: ns.orbit?.ref ?? null, agentCount: ns.agents.length })),
+    .filter((ns) => ns.agents.length > 0 || ns.orbit !== null || ns.sops.length > 0)
+    .map((ns) => ({
+      namespace: ns.namespace,
+      orbitRef: ns.orbit?.ref ?? null,
+      sopRefs: ns.sops.map((sop) => sop.ref),
+      agentCount: ns.agents.length,
+    })),
   workers: catalog.workers,
   modelProfileCount: catalog.modelProfiles.length,
 });
@@ -406,7 +494,12 @@ export const renderCompactIndexHuman = (index: CompactCatalogIndex): string => {
   const lines: string[] = [`Workflow surface (compact index — import refs from \`prism/refs\`):`, `  ${index.surfaceDir}`, ``];
   for (const ns of index.namespaces) {
     const agentCount = `${ns.agentCount} agent${ns.agentCount === 1 ? "" : "s"}`;
-    lines.push(ns.orbitRef ? `${ns.namespace}  (${agentCount}, orbit ref: ${ns.orbitRef})` : `${ns.namespace}  (${agentCount})`);
+    const details = [
+      agentCount,
+      ns.orbitRef ? `orbit ref: ${ns.orbitRef}` : null,
+      ns.sopRefs.length > 0 ? `sop refs: ${ns.sopRefs.join(", ")}` : null,
+    ].filter((part): part is string => part !== null);
+    lines.push(`${ns.namespace}  (${details.join(", ")})`);
   }
   lines.push(``);
   lines.push(`workers: ${index.workers.join(", ")}`);
@@ -439,11 +532,52 @@ export const lookupOrbitNamespace = (catalog: WorkflowCatalog, orbitName: string
   };
 };
 
+export interface SopLookupResult {
+  readonly found: boolean;
+  readonly namespace: string | null;
+  readonly sop: CatalogSopDetail | null;
+  readonly phases: ReadonlyArray<CatalogSopPhaseDetail>;
+  readonly available: ReadonlyArray<string>;
+}
+
+/**
+ * Pure lookup backing `--sop <name>`. Accepts a bare sop name (`beacon`), a
+ * namespace-qualified name (`beacon.beacon`), or a full ref
+ * (`sops.beacon.beacon`).
+ */
+export const lookupSop = (catalog: WorkflowCatalog, query: string): SopLookupResult => {
+  for (const ns of catalog.namespaces) {
+    for (const sop of ns.sops) {
+      const matches =
+        sop.name === query ||
+        sop.ref === query ||
+        `${ns.namespace}.${sop.name}` === query;
+      if (!matches) continue;
+      return {
+        found: true,
+        namespace: ns.namespace,
+        sop,
+        phases: sop.phases,
+        available: catalog.namespaces.flatMap((entry) => entry.sops.map((entrySop) => entrySop.ref)),
+      };
+    }
+  }
+  return {
+    found: false,
+    namespace: null,
+    sop: null,
+    phases: [],
+    available: catalog.namespaces.flatMap((ns) => ns.sops.map((sop) => sop.ref)),
+  };
+};
+
 /** A single catalog entity resolved by ref, tagged with its kind so `--ref` output stays a discriminated union. */
 export type CatalogEntity =
   | ({ readonly kind: "agent" } & CatalogAgent)
   | ({ readonly kind: "orbit" } & CatalogOrbitDetail)
   | ({ readonly kind: "phase" } & CatalogPhaseDetail)
+  | ({ readonly kind: "sop" } & CatalogSopDetail)
+  | ({ readonly kind: "sop-phase" } & CatalogSopPhaseDetail)
   | ({ readonly kind: "model" } & CatalogModelProfile);
 
 export interface RefLookupResult {
@@ -461,6 +595,10 @@ const catalogEntities = (catalog: WorkflowCatalog): ReadonlyArray<CatalogEntity>
       for (const phase of ns.orbitDetail.phaseDetails) entities.push({ kind: "phase", ...phase });
     } else if (ns.orbit) {
       entities.push({ kind: "orbit", ...ns.orbit, sequence: [], phases: [], phaseDetails: [] });
+    }
+    for (const sop of ns.sops) {
+      entities.push({ kind: "sop", ...sop });
+      for (const phase of sop.phases) entities.push({ kind: "sop-phase", ...phase });
     }
     for (const agent of ns.agents) entities.push({ kind: "agent", ...agent });
   }
@@ -535,6 +673,31 @@ export const renderRefDetailHuman = (entity: CatalogEntity): string => {
       ...(framingLines.length > 0 ? [`  framing:`, ...framingLines] : []),
     ].join("\n");
   }
+  if (entity.kind === "sop") {
+    const lines = [`${entity.ref}`, `  plugin: ${entity.plugin}`, `  name: ${entity.name}`];
+    if (entity.phases.length > 0) {
+      lines.push(`  phases:`);
+      for (const phase of entity.phases) {
+        const contract = phase.hasInputContract || phase.hasOutputContract ? "yes" : "no";
+        lines.push(
+          `    ${phase.name}  criteria: ${phase.acceptanceCriteriaCount}  contract: ${contract}`,
+        );
+        lines.push(`      purpose: ${phase.purpose}`);
+        lines.push(`      ref: ${phase.ref}`);
+      }
+    }
+    return lines.join("\n");
+  }
+  if (entity.kind === "sop-phase") {
+    return [
+      `${entity.ref}`,
+      `  name: ${entity.name}`,
+      `  purpose: ${entity.purpose}`,
+      `  contract: input=${entity.hasInputContract ? "yes" : "no"} output=${entity.hasOutputContract ? "yes" : "no"}`,
+      `  acceptance criteria (${entity.acceptanceCriteria.length}): ${entity.acceptanceCriteria.length > 0 ? entity.acceptanceCriteria.join("; ") : "(none)"}`,
+      ...(entity.escalation !== undefined ? [`  escalation: ${entity.escalation}`] : []),
+    ].join("\n");
+  }
   return [`${entity.ref}`, `  plugin: ${entity.plugin}`, `  modelspace: ${entity.modelspace}`, `  profile: ${entity.profile}`].join("\n");
 };
 
@@ -562,6 +725,16 @@ export const searchCatalog = (catalog: WorkflowCatalog, query: string): Readonly
       for (const phase of ns.orbitDetail.phaseDetails) {
         if (matches(phase.ref, phase.name)) {
           hits.push({ ref: phase.ref, name: phase.name, descriptionExcerpt: "" });
+        }
+      }
+    }
+    for (const sop of ns.sops) {
+      if (matches(sop.ref, sop.name)) {
+        hits.push({ ref: sop.ref, name: sop.name, descriptionExcerpt: "" });
+      }
+      for (const phase of sop.phases) {
+        if (matches(phase.ref, phase.name, phase.purpose, phase.acceptanceCriteria.join(" "), phase.escalation ?? "")) {
+          hits.push({ ref: phase.ref, name: phase.name, descriptionExcerpt: excerpt(phase.purpose) });
         }
       }
     }

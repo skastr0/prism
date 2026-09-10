@@ -79,6 +79,7 @@ import {
   buildWorkflowCatalog,
   lookupCatalogRef,
   lookupOrbitNamespace,
+  lookupSop,
   pickDefaultAgent,
   pickDefaultWorkers,
   projectCompactIndex,
@@ -321,26 +322,28 @@ workflow
 workflow
   .command("catalog")
   .description(
-    "Discover refs (agents.*/orbits.*/models.*) compiled for this project. Default: compact index. " +
-      "--orbit <ns> for one namespace, --ref <ref> for one entity, --query <text> to search, --full for the complete dump.",
+    "Discover refs (agents.*/orbits.*/sops.*/models.*) compiled for this project. Default: compact index. " +
+      "--orbit <ns> for one namespace, --sop <name> for one SOP, --ref <ref> for one entity, --query <text> to search, --full for the complete dump.",
   )
   .option("--json", "Emit machine-readable JSON")
   .option("--orbit <name>", "Full detail for one orbit/namespace")
+  .option("--sop <name>", "Full detail for one SOP (bare name, namespace-qualified, or full ref)")
   .option("--ref <ref>", "Full detail for exactly one entity by ref")
   .option("--query <text>", "Case-insensitive substring search across refs, names, and descriptions")
   .option("--full", "Print the complete catalog dump")
   .action(async (options: {
     readonly json?: boolean;
     readonly orbit?: string;
+    readonly sop?: string;
     readonly ref?: string;
     readonly query?: string;
     readonly full?: boolean;
   }) => {
     try {
-      const modeCount = [options.orbit !== undefined, options.ref !== undefined, options.query !== undefined, options.full === true]
+      const modeCount = [options.orbit !== undefined, options.sop !== undefined, options.ref !== undefined, options.query !== undefined, options.full === true]
         .filter(Boolean).length;
       if (modeCount > 1) {
-        throw new CliUsageError("--orbit, --ref, --query, and --full are mutually exclusive — pass at most one");
+        throw new CliUsageError("--orbit, --sop, --ref, --query, and --full are mutually exclusive — pass at most one");
       }
 
       const result = await buildWorkflowCatalog();
@@ -379,6 +382,23 @@ workflow
         const output = options.json === true
           ? JSON.stringify({ surfaceDir: result.surfaceDir, present: true, ...lookup }, null, 2)
           : renderCatalogHuman(result, options.orbit);
+        await writeStdout(`${output}\n`);
+        return;
+      }
+
+      if (options.sop !== undefined) {
+        const lookup = lookupSop(catalog, options.sop);
+        if (!lookup.found || lookup.sop === null) {
+          const available = lookup.available.length > 0
+            ? ` Available SOPs: ${lookup.available.join(", ")}`
+            : " No SOPs are compiled for this project.";
+          printCliError(new Error(`no SOP matching "${options.sop}".${available}`), "Workflow catalog failed");
+          exitWith(EXIT_CODES.domainFailure);
+          return;
+        }
+        const output = options.json === true
+          ? JSON.stringify({ surfaceDir: result.surfaceDir, present: true, ...lookup }, null, 2)
+          : renderRefDetailHuman({ kind: "sop", ...lookup.sop });
         await writeStdout(`${output}\n`);
         return;
       }

@@ -2,10 +2,11 @@
 
 import { join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
+import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
@@ -18,6 +19,7 @@ import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   pushDesiredFile,
   renderGeneratedOrbitSkill,
+  renderGeneratedSopSkill,
   type LowerOutput,
   bundleGeneratedHookWrapper,
   matcherForResolvedToolHook,
@@ -42,6 +44,7 @@ export interface HermesLowerTarget {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -70,6 +73,12 @@ const renderHermesOrbitSkillMarkdown = (
   renderGeneratedOrbitSkill({
     orbit,
     registry,
+    trailingNewline: true,
+  });
+
+const renderHermesSopSkillMarkdown = (sop: Sop): string =>
+  renderGeneratedSopSkill({
+    sop,
     trailingNewline: true,
   });
 
@@ -228,6 +237,25 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
         targetPath: join(
           hermesSkillsRoot(input.target),
           `${orbit.name}/references/${reference.filename}`,
+        ),
+        content: reference.content,
+        plugin,
+      });
+    }
+  }
+
+  for (const sop of input.sops) {
+    pushDesiredFile(files, {
+      targetPath: join(hermesSkillsRoot(input.target), `${sop.name}/SKILL.md`),
+      content: renderHermesSopSkillMarkdown(sop),
+      plugin,
+    });
+
+    for (const reference of renderDerivedSopPhaseReferences(sop)) {
+      pushDesiredFile(files, {
+        targetPath: join(
+          hermesSkillsRoot(input.target),
+          `${sop.name}/references/${reference.filename}`,
         ),
         content: reference.content,
         plugin,

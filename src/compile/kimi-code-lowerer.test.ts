@@ -87,6 +87,7 @@ const prepareRegistryForLowering = async (pluginRoot: string) => {
     registry,
     agents,
     orbits,
+    sops: [...registry.sops.values()],
     tools: [...registry.tools.values()],
     skills: [...registry.skills.values()],
     hooks: [...registry.hooks.values()],
@@ -98,12 +99,13 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   const outputRoot = join(root, ".kimi-code");
   const pluginRoot = join(process.cwd(), "examples", "prism-harness-qa");
 
-  const { registry, agents, orbits, tools, skills, hooks } =
+  const { registry, agents, orbits, sops, tools, skills, hooks } =
     await prepareRegistryForLowering(pluginRoot);
 
   const { files, regions } = await planLowering({
     agents,
     orbits,
+    sops,
     tools,
     skills,
     hooks,

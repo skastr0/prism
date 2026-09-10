@@ -1332,6 +1332,7 @@ export default defineWorkflow({
     const { files: generatedFiles } = await planLowering({
       agents: [consumerAgent],
       orbits: [],
+      sops: [],
       skills: [],
       hooks: [],
       registry: undefined,

@@ -18,6 +18,10 @@ import {
   renderDerivedOrbitPhaseReferences,
   renderDerivedOrbitSkillBody,
 } from "../derived-orbit-skill.js";
+import {
+  renderDerivedSopPhaseReferences,
+  renderDerivedSopSkillBody,
+} from "../derived-sop-skill.js";
 import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { ResolvedHookMatch } from "../hooks.js";
@@ -25,7 +29,7 @@ import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import { prepareHookBundleSource } from "../load.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   makeTempBuildRoot,
   removeTempBuildRoot,
@@ -124,6 +128,34 @@ export const renderStandardOrbitSkill = (
   renderGeneratedOrbitSkill({
     orbit,
     registry,
+    trailingNewline: false,
+  });
+
+export const renderGeneratedSopSkill = (options: {
+  readonly sop: Sop;
+  readonly trailingNewline: boolean;
+  readonly renderFrontmatter?: (values: {
+    readonly name: string;
+    readonly description: string;
+  }) => string;
+}): string => {
+  const frontmatter = {
+    name: options.sop.name,
+    description: options.sop.description,
+  };
+  const lines: string[] = [
+    options.renderFrontmatter?.(frontmatter) ?? serializeSimpleFrontmatter(frontmatter),
+    "",
+    renderDerivedSopSkillBody(options.sop),
+  ];
+
+  const rendered = lines.join("\n");
+  return options.trailingNewline ? `${rendered.trimEnd()}\n` : rendered;
+};
+
+export const renderStandardSopSkill = (sop: Sop): string =>
+  renderGeneratedSopSkill({
+    sop,
     trailingNewline: false,
   });
 
@@ -499,6 +531,7 @@ export type GeneratedPluginWritePusher<Target extends GeneratedPluginPlanTarget>
 export interface GeneratedPluginPlanInput<Target extends GeneratedPluginPlanTarget> {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -606,6 +639,48 @@ export const planStandardGeneratedPluginOrbitSkillWrites = async <
     ...options,
     renderOrbitSkill: (orbit) =>
       renderStandardOrbitSkill(orbit, options.input.registry),
+  });
+};
+
+export const planGeneratedPluginSopSkillWrites = async <
+  Target extends GeneratedPluginPlanTarget,
+>(options: {
+  readonly input: GeneratedPluginPlanInput<Target>;
+  readonly state: GeneratedPluginPlanState;
+  readonly pushWrite: GeneratedPluginWritePusher<Target>;
+  readonly renderSopSkill: (sop: Sop) => string;
+}): Promise<void> => {
+  for (const sop of options.input.sops) {
+    options.pushWrite(
+      options.state.files,
+      options.state.desiredRelativePaths,
+      options.input.target,
+      `skills/${sop.name}/SKILL.md`,
+      options.renderSopSkill(sop),
+    );
+
+    for (const reference of renderDerivedSopPhaseReferences(sop)) {
+      options.pushWrite(
+        options.state.files,
+        options.state.desiredRelativePaths,
+        options.input.target,
+        `skills/${sop.name}/references/${reference.filename}`,
+        reference.content,
+      );
+    }
+  }
+};
+
+export const planStandardGeneratedPluginSopSkillWrites = async <
+  Target extends GeneratedPluginPlanTarget,
+>(options: {
+  readonly input: GeneratedPluginPlanInput<Target>;
+  readonly state: GeneratedPluginPlanState;
+  readonly pushWrite: GeneratedPluginWritePusher<Target>;
+}): Promise<void> => {
+  await planGeneratedPluginSopSkillWrites({
+    ...options,
+    renderSopSkill: (sop) => renderStandardSopSkill(sop),
   });
 };
 

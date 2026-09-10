@@ -9,9 +9,10 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
+import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
@@ -28,6 +29,7 @@ import {
   pushDesiredFile,
   regexEscape,
   renderGeneratedOrbitSkill,
+  renderGeneratedSopSkill,
   renderPrePostSessionHookWrapperEntry,
   uniqueSorted,
   type LowerOutput,
@@ -47,6 +49,7 @@ export interface DevinLowerTarget {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -315,6 +318,28 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
         targetPath: join(
           skillsRoot(input.target),
           `${orbit.name}/references/${reference.filename}`,
+        ),
+        content: reference.content,
+        plugin,
+      });
+    }
+  }
+
+  for (const sop of input.sops) {
+    pushDesiredFile(files, {
+      targetPath: join(skillsRoot(input.target), `${sop.name}/SKILL.md`),
+      content: renderGeneratedSopSkill({
+        sop,
+        trailingNewline: true,
+      }),
+      plugin,
+    });
+
+    for (const reference of renderDerivedSopPhaseReferences(sop)) {
+      pushDesiredFile(files, {
+        targetPath: join(
+          skillsRoot(input.target),
+          `${sop.name}/references/${reference.filename}`,
         ),
         content: reference.content,
         plugin,

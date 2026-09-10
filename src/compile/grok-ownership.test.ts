@@ -52,6 +52,7 @@ test("two plugins compiling a same-named Grok project agent fail closed, naming 
     planLowering({
       agents: [agentNamed(sourcePluginName)],
       orbits: [],
+      sops: [],
       skills: [],
       hooks: [],
       target: {

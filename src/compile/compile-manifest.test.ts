@@ -183,6 +183,67 @@ describe("compile manifest writer", () => {
     expect(JSON.stringify(withOrbits.tools)).not.toContain("sourcePath");
   });
 
+  test("sop projection always replaces the plugin's sop entries, including with the empty set", () => {
+    const base = {
+      ...emptyCompileManifest(),
+      sops: {
+        "other:legacy": { plugin: "other", name: "legacy", phases: [] },
+        "forge:stale": { plugin: "forge", name: "stale", phases: [] },
+      },
+    };
+
+    const projected = buildCompileManifestForTarget({
+      base,
+      registry: registry(),
+      target: "opencode",
+      scope: "project",
+      composed: [agent("builder", "a".repeat(64))],
+      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
+      sops: [
+        {
+          name: "beacon",
+          phases: [
+            {
+              name: "explore",
+              purpose: "Map the space.",
+              acceptanceCriteria: ["Falsifiable"],
+              escalation: "Ask a human.",
+              input: { type: "object" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(Object.keys(projected.sops).sort()).toEqual(["forge:beacon", "other:legacy"]);
+    expect(projected.sops["forge:beacon"]).toEqual({
+      plugin: "forge",
+      name: "beacon",
+      phases: [
+        {
+          name: "explore",
+          purpose: "Map the space.",
+          acceptanceCriteria: ["Falsifiable"],
+          escalation: "Ask a human.",
+          input: { type: "object" },
+        },
+      ],
+    });
+    expect(verifyCompileManifestHash(projected)).toBe(true);
+    expect(JSON.stringify(projected.sops)).not.toContain("sourcePath");
+
+    const cleared = buildCompileManifestForTarget({
+      base: projected,
+      registry: registry(),
+      target: "opencode",
+      scope: "project",
+      composed: [agent("builder", "a".repeat(64))],
+      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
+      sops: [],
+    });
+    expect(Object.keys(cleared.sops)).toEqual(["other:legacy"]);
+  });
+
   test("includes every loaded modelspace profile, not only agent-bound profiles", () => {
     const manifest = buildCompileManifestForTarget({
       base: emptyCompileManifest(),

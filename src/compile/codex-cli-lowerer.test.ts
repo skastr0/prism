@@ -76,6 +76,7 @@ const planRulesRegions = async (options: {
   const lowered = await planLowering({
     agents: [],
     orbits: [],
+    sops: [],
     tools: [],
     skills: [],
     hooks: [],
@@ -260,6 +261,7 @@ export default {
       },
     ],
     orbits: [],
+    sops: [],
     tools: [],
     skills: [...registry.skills.values()],
     hooks: [hook, afterHook, sessionEndHook],
@@ -571,6 +573,7 @@ export default {
   const lowered = await planLowering({
     agents: [],
     orbits: [],
+    sops: [],
     tools: [],
     skills: [],
     hooks: [...registry.hooks.values()],
@@ -654,6 +657,7 @@ test("codex-cli lowerer fails closed for unsupported model config keys", async (
         },
       ],
       orbits: [],
+      sops: [],
       tools: [],
       skills: [],
       hooks: [],
@@ -767,6 +771,7 @@ export default {
   const lowered = await planLowering({
     agents: [],
     orbits: [],
+    sops: [],
     tools: [],
     skills: [],
     hooks: [stopHook, subagentStopHook, compactBeforeHook, subagentStartHook, compactAfterHook],

@@ -89,6 +89,7 @@ test("pi lowerer owner-qualifies foreign tool bindings and extension only regist
   const { files: operations } = await planLowering({
     agents: [consumerAgent],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [],
     registry: undefined,
@@ -147,6 +148,7 @@ test("two plugins compiling a same-named agent to Pi's direct agent surface fail
       // in src/sync/plan.ts). This is the realistic shape the law targets.
       agents: [agentNamed("builder", sourcePluginName)],
       orbits: [],
+      sops: [],
       skills: [],
       hooks: [],
       registry: undefined,

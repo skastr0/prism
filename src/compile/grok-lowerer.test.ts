@@ -307,6 +307,7 @@ export default {
       },
     ],
     orbits: [],
+    sops: [],
     skills: [...registry.skills.values()],
     hooks: [hook, canonicalHook, sessionEndHook, promptSubmitHook, subagentStopHook, notificationHook],
     registry,
@@ -488,6 +489,7 @@ test("grok project lowerer emits agents and skills directly without a shadow plu
       toolBindings: [],
     }],
     orbits: [...registry.orbits.values()],
+    sops: [],
     skills: [...registry.skills.values()],
     hooks: [],
     registry,
@@ -527,6 +529,7 @@ test("grok global lowerer omits an empty hooks map", async () => {
       toolBindings: [],
     }],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [],
     target: {
@@ -569,6 +572,7 @@ test("grok project lowerer rejects non-empty hooks with an actionable exactly-on
   await expect(planLowering({
     agents: [],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [hook],
     registry,
@@ -585,6 +589,7 @@ test("grok project lowerer rejects non-empty hooks with an actionable exactly-on
   await expect(planLowering({
     agents: [],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [hook],
     registry,
@@ -640,6 +645,7 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
       },
     ],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [],
     target: {
@@ -724,6 +730,7 @@ export default {
     planLowering({
       agents: [],
       orbits: [],
+      sops: [],
       skills: [],
       hooks: [hook],
       registry,
@@ -758,6 +765,7 @@ test("grok lowerer reproduces the reported typefully-cli overflow and keeps it c
       },
     ],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [],
     target: {
@@ -809,6 +817,7 @@ test("grok lowerer no longer emits generated tool wire names in agent frontmatte
       },
     ],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [],
     target: {

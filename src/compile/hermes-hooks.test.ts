@@ -162,6 +162,7 @@ export default {
     const lowered = await planLowering({
       agents: [],
       orbits: [],
+      sops: [],
       tools: [],
       skills: [],
       hooks: [auditShell!, auditSubmit!, sessionEnded!],
@@ -266,7 +267,7 @@ export default {
 
     const registry = await Effect.runPromise(loadPlugin(pluginRoot));
     const lowered = await planLowering({
-      agents: [], orbits: [], tools: [], skills: [],
+      agents: [], orbits: [], sops: [], tools: [], skills: [],
       hooks: [registry.hooks.get("audit-a")!, registry.hooks.get("audit-b")!],
       registry,
       target: {

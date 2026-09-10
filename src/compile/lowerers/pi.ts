@@ -11,7 +11,7 @@ import {
 } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   bindingsFromCanonicalTools,
   bindingsOwnedByPlugin,
@@ -32,8 +32,10 @@ import {
   nativeHookEventName,
   normalizeBundleSegment,
   planGeneratedPluginOrbitSkillWrites,
+  planGeneratedPluginSopSkillWrites,
   pushDesiredFile,
   renderGeneratedOrbitSkill,
+  renderGeneratedSopSkill,
   renderPrePostSessionHookWrapperEntry,
   serializeSimpleFrontmatter as serializeFrontmatter,
   stringArray,
@@ -55,6 +57,7 @@ export interface PiLowerTarget {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -191,6 +194,12 @@ const renderPiOrbitSkillMarkdown = (
   renderGeneratedOrbitSkill({
     orbit,
     registry,
+    trailingNewline: true,
+  });
+
+const renderPiSopSkillMarkdown = (sop: Sop): string =>
+  renderGeneratedSopSkill({
+    sop,
     trailingNewline: true,
   });
 
@@ -552,6 +561,7 @@ const hasPackageOutput = (
     input.agents,
   ).length > 0 ||
   input.orbits.length > 0 ||
+  input.sops.length > 0 ||
   (input.tools?.length ?? 0) > 0 ||
   (input.skills?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0 ||
@@ -611,6 +621,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     pushWrite,
     renderOrbitSkill: (orbit) =>
       renderPiOrbitSkillMarkdown(orbit, input.registry),
+  });
+  await planGeneratedPluginSopSkillWrites({
+    input,
+    state,
+    pushWrite,
+    renderSopSkill: (sop) => renderPiSopSkillMarkdown(sop),
   });
   await planCommandPromptWrites(input, state.files, state.desiredRelativePaths);
   const plannedHooks = await planHookWrappers(input, state.files, state.desiredRelativePaths);

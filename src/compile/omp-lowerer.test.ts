@@ -79,6 +79,7 @@ test("OMP lowerer emits native agents, skills, and extension without Pi surfaces
   const lowered = await planLowering({
     agents: [agent],
     orbits: [],
+    sops: [],
     skills: [{ name: "grounded", sourcePath: skillPath }],
     hooks: [],
     registry: undefined,

@@ -35,9 +35,10 @@ import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
+import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
-import type { CanonicalTool, Contract, Hook, Orbit } from "../sources.js";
+import type { CanonicalTool, Contract, Hook, Orbit, Sop } from "../sources.js";
 import type { PluginRegistry } from "../registry.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
@@ -74,6 +75,7 @@ import {
   nativeHookEventName,
   pushDesiredFile,
   renderGeneratedOrbitSkill,
+  renderGeneratedSopSkill,
   type LowerOutput,
 } from "./shared.js";
 import {
@@ -1370,6 +1372,7 @@ const planGeneratedPluginFiles = async (options: {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly hooks?: ReadonlyArray<Hook>;
   readonly registry?: PluginRegistry;
@@ -1545,6 +1548,34 @@ const planOrbitSkillWrites = (
         targetPath: join(
           input.target.root,
           `skills/${orbit.name}/references/${reference.filename}`,
+        ),
+        content: reference.content,
+        plugin: input.target.sourcePluginName,
+      });
+    }
+  }
+};
+
+const planSopSkillWrites = (
+  input: LowerInput,
+  files: DesiredFile[],
+): void => {
+  for (const sop of input.sops) {
+    pushDesiredFile(files, {
+      targetPath: join(input.target.root, "skills", sop.name, "SKILL.md"),
+      content: renderGeneratedSopSkill({
+        sop,
+        trailingNewline: false,
+        renderFrontmatter: (values) => serializeFrontmatter(values, {}),
+      }),
+      plugin: input.target.sourcePluginName,
+    });
+
+    for (const reference of renderDerivedSopPhaseReferences(sop)) {
+      pushDesiredFile(files, {
+        targetPath: join(
+          input.target.root,
+          `skills/${sop.name}/references/${reference.filename}`,
         ),
         content: reference.content,
         plugin: input.target.sourcePluginName,
@@ -1750,6 +1781,7 @@ export const planLowering = async (
 
   planAgentMarkdownWrites(input, runtime.inventory, files);
   planOrbitSkillWrites(input, files);
+  planSopSkillWrites(input, files);
   files.push(...(await planGeneratedRuntimePlugins(input, runtime, generatedRuntimeState)));
 
   const regions: DesiredRegion[] = [

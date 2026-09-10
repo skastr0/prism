@@ -103,6 +103,7 @@ export default {
     planLowering({
       agents: [],
       orbits: [],
+      sops: [],
       skills: [],
       hooks: [hook],
       registry,
@@ -201,6 +202,7 @@ export default {
   const { files: operations } = await planLowering({
     agents: [],
     orbits: [],
+    sops: [],
     skills: [],
     hooks: [promptHook, permHook, stopHook],
     registry,
@@ -329,3 +331,73 @@ export default {
   });
 });
 
+test("claude-code lowerer emits sop SKILL.md and per-phase reference downloads", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".claude");
+  const pluginRoot = join(root, "sop-lowerer-fixture");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({ name: "sop-lowerer-fixture", version: "0.1.0", targets: { sops: ["claude-code"] } }, null, 2)}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "sops", "beacon.sop.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import type { SopSource } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "beacon",
+  description: "Marketing method.",
+  phases: [
+    {
+      name: "explore",
+      purpose: "Map the audience.",
+      input: Schema.Struct({ brief: Schema.String }),
+      acceptance_criteria: ["Positioning hypothesis is falsifiable"],
+      escalation: "Ask a human when the audience is unnamed.",
+      body: "Read the brief.",
+    },
+    {
+      name: "build",
+      purpose: "Build the artifact.",
+      body: "Write it.",
+    },
+  ],
+} satisfies SopSource;
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const { files } = await planLowering({
+    agents: [],
+    orbits: [],
+    sops: [...registry.sops.values()],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "sop-lowerer-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const skill = findContentOperation(files, join("skills", "beacon", "SKILL.md"));
+  if (!skill) throw new Error("sop SKILL.md missing");
+  expect(skill.content).toContain('name: "beacon"');
+  expect(skill.content).toContain("Map the audience.");
+  expect(skill.content).toContain("[`references/explore.md`](references/explore.md)");
+
+  const explore = findContentOperation(files, join("skills", "beacon", "references", "explore.md"));
+  if (!explore) throw new Error("explore reference missing");
+  expect(explore.content).toContain("Positioning hypothesis is falsifiable");
+  expect(explore.content).toContain('Schema.Struct({ "brief": Schema.String })');
+  expect(explore.content).toContain("Ask a human when the audience is unnamed.");
+
+  const build = findContentOperation(files, join("skills", "beacon", "references", "build.md"));
+  if (!build) throw new Error("build reference missing");
+  expect(build.content).toContain("Write it.");
+  expect(build.content).not.toContain("## Input");
+});

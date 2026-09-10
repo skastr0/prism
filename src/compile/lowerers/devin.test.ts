@@ -10,6 +10,7 @@ describe("devin lowerer", () => {
       planLowering({
         agents: [{ name: "x" } as never],
         orbits: [],
+        sops: [],
         tools: [],
         target: {
           scope: "global",
@@ -33,6 +34,7 @@ describe("devin lowerer", () => {
     const output = await planLowering({
       agents: [],
       orbits: [],
+      sops: [],
       tools: [],
       registry: {
         pluginPath,

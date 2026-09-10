@@ -3,13 +3,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Schema } from "effect";
 import type { ComposedAgent } from "./compose.js";
 import { planLowering } from "./lowerers/opencode.js";
 import { applySync } from "../sync/apply.js";
 import { planSync } from "../sync/plan.js";
 import { emptySnapshotManifest } from "../state/snapshot.js";
 import type { ResolvedContractBinding } from "./resolve.js";
-import { Contract } from "./sources.js";
+import { Contract, Sop } from "./sources.js";
 
 const tempRoots: string[] = [];
 
@@ -62,6 +63,7 @@ test("opencode planLowering is pure desired state: agent files plus per-key conf
       }),
     ],
     orbits: [],
+    sops: [],
     tools: [],
     target: {
       scope: "global",
@@ -113,6 +115,7 @@ test("opencode config regions preserve hand-authored opencode.json content", asy
   const lowered = await planLowering({
     agents: [createComposedAgent([], { model: { model: "anthropic/claude" } })],
     orbits: [],
+    sops: [],
     tools: [],
     target: {
       scope: "global",
@@ -157,6 +160,7 @@ test("opencode orphaned regions are removed without touching neighbors", async (
     planLowering({
       agents,
       orbits: [],
+      sops: [],
       tools: [],
       target: {
         scope: "global",
@@ -225,6 +229,7 @@ test("opencode generated plugin registration is a plugin-array membership region
       ]),
     ],
     orbits: [],
+    sops: [],
     tools: [],
     target: {
       scope: "global",
@@ -307,6 +312,7 @@ test("opencode planLowering reports generated contract mirror collisions", async
         ]),
       ],
       orbits: [],
+      sops: [],
       tools: [],
       target: {
         scope: "project",
@@ -317,4 +323,64 @@ test("opencode planLowering reports generated contract mirror collisions", async
   ).rejects.toThrow(
     "generated contract name collision at mirror-demo:contracts/submit.contract.ts",
   );
+});
+test("opencode lowerer emits sop SKILL.md and per-phase reference downloads", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".opencode");
+
+  const beacon = new Sop({
+    name: "beacon",
+    sourcePath: join(root, "sops", "beacon.sop.ts"),
+    description: "Marketing method.",
+    phases: [
+      {
+        name: "explore",
+        purpose: "Map the audience.",
+        output: Schema.Struct({ summary: Schema.String }),
+        acceptanceCriteria: ["Positioning hypothesis is falsifiable"],
+        body: "Read the brief.",
+      },
+      {
+        name: "build",
+        purpose: "Build the artifact.",
+        acceptanceCriteria: [],
+        body: "Write it.",
+      },
+    ],
+    body: "Cross-phase frame.",
+  });
+
+  const lowered = await planLowering({
+    agents: [],
+    orbits: [],
+    sops: [beacon],
+    tools: [],
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "opencode-sop-fixture",
+    },
+  });
+
+  const skill = lowered.files.find((file) =>
+    file.targetPath.endsWith(join("skills", "beacon", "SKILL.md")),
+  );
+  if (!skill) throw new Error("sop SKILL.md missing");
+  expect(skill.content).toContain("description: Marketing method.");
+  expect(skill.content).toContain("[`references/explore.md`](references/explore.md)");
+  expect(skill.content).toContain("Cross-phase frame.");
+
+  const explore = lowered.files.find((file) =>
+    file.targetPath.endsWith(join("skills", "beacon", "references", "explore.md")),
+  );
+  if (!explore) throw new Error("explore reference missing");
+  expect(explore.content).toContain("Positioning hypothesis is falsifiable");
+  expect(explore.content).toContain('Schema.Struct({ "summary": Schema.String })');
+
+  const build = lowered.files.find((file) =>
+    file.targetPath.endsWith(join("skills", "beacon", "references", "build.md")),
+  );
+  if (!build) throw new Error("build reference missing");
+  expect(build.content).toContain("Write it.");
+  expect(build.content).not.toContain("## Output");
 });

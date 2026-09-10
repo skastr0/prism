@@ -41,12 +41,6 @@ export const CompileManifestTargetSchema = Schema.Struct({
 });
 export type CompileManifestTarget = typeof CompileManifestTargetSchema.Type;
 
-export const CompileManifestTraitSchema = Schema.Struct({
-  id: Schema.String,
-  ref: Schema.String,
-});
-export type CompileManifestTrait = typeof CompileManifestTraitSchema.Type;
-
 export const CompileManifestOrbitAgentSchema = Schema.Struct({
   plugin: Schema.String,
   name: Schema.String,
@@ -117,19 +111,6 @@ export const CompileManifestCanonicalToolSchema = Schema.Struct({
 });
 export type CompileManifestCanonicalTool = typeof CompileManifestCanonicalToolSchema.Type;
 
-export const CompileManifestToolspaceToolSchema = Schema.Struct({
-  plugin: Schema.String,
-  toolspace: Schema.String,
-  name: Schema.String,
-});
-export type CompileManifestToolspaceTool = typeof CompileManifestToolspaceToolSchema.Type;
-
-export const CompileManifestGrantsSchema = Schema.Struct({
-  tools: Schema.Array(Schema.String),
-  skills: Schema.Array(Schema.String),
-});
-export type CompileManifestGrants = typeof CompileManifestGrantsSchema.Type;
-
 export const CompileManifestModelBindingsSchema = Schema.Struct({
   modelspace: Schema.optional(Schema.String),
   profile: Schema.optional(Schema.String),
@@ -170,9 +151,6 @@ const JsonRecordSchema = Schema.Record({ key: Schema.String, value: Schema.Unkno
 export const CompileManifestPerTargetSchema = Schema.Struct({
   scope: HarnessScopeSchema,
   model: Schema.NullOr(JsonRecordSchema),
-  toolGrants: Schema.Array(Schema.String),
-  allowedTools: Schema.Array(Schema.String),
-  allowedSkills: Schema.Array(Schema.String),
 });
 export type CompileManifestPerTarget = typeof CompileManifestPerTargetSchema.Type;
 
@@ -181,10 +159,8 @@ export const CompileManifestAgentSchema = Schema.Struct({
   plugin: Schema.String,
   description: Schema.String,
   sourceHash: Schema.String,
-  traits: Schema.Array(CompileManifestTraitSchema),
   skills: Schema.Array(Schema.String),
   composed: Schema.Struct({
-    grants: CompileManifestGrantsSchema,
     modelBindings: CompileManifestModelBindingsSchema,
     perTarget: Schema.Record({ key: Schema.String, value: CompileManifestPerTargetSchema }),
   }),
@@ -199,8 +175,7 @@ const CompileManifestV1Schema = Schema.Struct({
   agents: Schema.Record({ key: Schema.String, value: CompileManifestAgentSchema }),
   modelspaces: Schema.Record({ key: Schema.String, value: CompileManifestModelspaceSchema }),
   skills: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestManagedSkillSchema, CompileManifestSkillspaceSchema) }),
-  tools: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestToolspaceToolSchema, CompileManifestCanonicalToolSchema) }),
-  traits: Schema.Record({ key: Schema.String, value: CompileManifestTraitSchema }),
+  tools: Schema.Record({ key: Schema.String, value: CompileManifestCanonicalToolSchema }),
   orbits: Schema.Record({ key: Schema.String, value: CompileManifestOrbitSchema }),
   manifestHash: Schema.String,
 });
@@ -266,13 +241,6 @@ const sortTargets = (targets: ReadonlyArray<CompileManifestTarget>): CompileMani
       : left.harness < right.harness ? -1 : 1,
   );
 
-const sortTraits = (traits: ReadonlyArray<CompileManifestTrait>): CompileManifestTrait[] =>
-  [...traits].sort((left, right) =>
-    left.id === right.id
-      ? (left.ref === right.ref ? 0 : left.ref < right.ref ? -1 : 1)
-      : left.id < right.id ? -1 : 1,
-  );
-
 const sortOrbitAgents = (
   agents: ReadonlyArray<CompileManifestOrbitAgent>,
 ): CompileManifestOrbitAgent[] =>
@@ -323,37 +291,23 @@ const sortOrbits = (orbits: ReadonlyArray<CompileManifestOrbit>): CompileManifes
       : compareCodePoint(left.plugin, right.plugin),
   );
 
-const sortTools = (tools: ReadonlyArray<CompileManifestCanonicalTool | CompileManifestToolspaceTool>): (CompileManifestCanonicalTool | CompileManifestToolspaceTool)[] =>
+const sortTools = (
+  tools: ReadonlyArray<CompileManifestCanonicalTool>,
+): CompileManifestCanonicalTool[] =>
   [...tools].sort((left, right) =>
     left.plugin === right.plugin
-      ? ("toolspace" in left && left.toolspace !== undefined
-          ? ("toolspace" in right && right.toolspace !== undefined
-              ? (left.toolspace === right.toolspace
-                  ? compareCodePoint(left.name, right.name)
-                  : compareCodePoint(left.toolspace, right.toolspace))
-              : -1)
-          : ("toolspace" in right && right.toolspace !== undefined
-              ? 1
-              : compareCodePoint(left.name, right.name)))
+      ? compareCodePoint(left.name, right.name)
       : compareCodePoint(left.plugin, right.plugin),
   );
 
 const normalizeAgentForEncoding = (agent: CompileManifestAgent): CompileManifestAgent => ({
   ...agent,
-  traits: sortTraits(agent.traits),
   skills: sortStrings(agent.skills),
   composed: {
-    grants: {
-      tools: sortStrings(agent.composed.grants.tools),
-      skills: sortStrings(agent.composed.grants.skills),
-    },
     modelBindings: stableJsonValue(agent.composed.modelBindings as StableJsonValue) as CompileManifestModelBindings,
     perTarget: sortRecord(agent.composed.perTarget, (slice) => ({
       ...slice,
       model: slice.model === null ? null : stableJsonValue(slice.model as StableJsonValue) as Record<string, unknown>,
-      toolGrants: sortStrings(slice.toolGrants),
-      allowedTools: sortStrings(slice.allowedTools),
-      allowedSkills: sortStrings(slice.allowedSkills),
     })),
   },
 });
@@ -387,19 +341,7 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
           name: (entry as { readonly name: string }).name,
         },
   ),
-  tools: sortRecord(manifest.tools, (entry) =>
-    "toolspace" in entry && entry.toolspace !== undefined
-      ? {
-          plugin: entry.plugin,
-          toolspace: entry.toolspace,
-          name: (entry as { readonly name: string }).name,
-        }
-      : {
-          plugin: entry.plugin,
-          name: (entry as { readonly name: string }).name,
-        },
-  ),
-  traits: sortRecord(manifest.traits, (trait) => trait),
+  tools: sortRecord(manifest.tools, (entry) => entry),
   orbits: sortRecord(manifest.orbits, normalizeOrbitForEncoding),
   manifestHash: manifest.manifestHash,
 });
@@ -457,7 +399,6 @@ export const emptyCompileManifest = (): CompileManifest => {
     modelspaces: {},
     skills: {},
     tools: {},
-    traits: {},
     orbits: {},
     manifestHash: "",
   };

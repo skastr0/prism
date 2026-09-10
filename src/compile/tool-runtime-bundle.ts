@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BundleBuildError } from "../errors.js";
-import type { Contract } from "./sources.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import {
   collectRelativeImportSpecifiers,
@@ -42,24 +41,14 @@ interface PluginMirror {
   readonly files: ReadonlyArray<MirrorFile>;
 }
 
-type ToolAdapterSpec =
-  | {
-      readonly kind: "tool";
-      /** Generated identity used in runtime maps / native registration. */
-      readonly name: string;
-      readonly logicalName: string;
-      readonly pluginName: string;
-      readonly toolName: string;
-      readonly sourcePath: string;
-    }
-  | {
-      readonly kind: "synthetic";
-      readonly name: string;
-      readonly logicalName: string;
-      readonly pluginName: string;
-      readonly contractName: string;
-      readonly contractRelativePath: string;
-    };
+interface ToolAdapterSpec {
+  /** Generated identity used in runtime maps / native registration. */
+  readonly name: string;
+  readonly logicalName: string;
+  readonly pluginName: string;
+  readonly toolName: string;
+  readonly sourcePath: string;
+}
 
 export interface AmpPluginBundleOptions {
   readonly sourcePluginName: string;
@@ -96,10 +85,8 @@ export interface PiExtensionBundle {
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
 
 /** Generated tool name for a binding (canonical). */
-export const cliToolNameForBinding = (
-  sourcePluginName: string,
-  binding: ResolvedContractBinding,
-): string => generatedToolNameForBinding(sourcePluginName, binding);
+export const cliToolNameForBinding = (binding: ResolvedContractBinding): string =>
+  generatedToolNameForBinding(binding);
 
 export const ampPluginToolNameForBinding = cliToolNameForBinding;
 
@@ -157,20 +144,11 @@ const collectMirrorRuntimeClosure = async (
 const pluginRootFromToolSource = (toolSourcePath: string): string =>
   dirname(dirname(toolSourcePath));
 
-const pluginRootFromContractSource = (contractSourcePath: string): string => {
-  const [sourcePath] = contractSourcePath.split("#");
-  if (!sourcePath) {
-    throw new Error(`contract source path '${contractSourcePath}' cannot be mapped to a plugin root`);
-  }
-  return dirname(dirname(sourcePath));
-};
-
 interface PluginMirrorCollectionState {
   readonly byPlugin: Map<
     string,
     { pluginRoot: string; entries: Map<string, MirrorFile> }
   >;
-  readonly generatedFiles: Map<string, Map<string, string>>;
 }
 
 const createPluginMirrorCollectionState = (
@@ -182,7 +160,7 @@ const createPluginMirrorCollectionState = (
     : dependencyPluginRoots) {
     byPlugin.set(pluginName, { pluginRoot, entries: new Map() });
   }
-  return { byPlugin, generatedFiles: new Map() };
+  return { byPlugin };
 };
 
 const getOrCreateMirrorPluginEntries = (
@@ -198,38 +176,9 @@ const getOrCreateMirrorPluginEntries = (
   return current.entries;
 };
 
-const addGeneratedContractFiles = (
-  state: PluginMirrorCollectionState,
-  contract: Contract,
-): void => {
-  if (!contract.generatedFiles || contract.generatedFiles.length === 0) return;
-  const files = state.generatedFiles.get(contract.pluginName) ?? new Map<string, string>();
-  for (const file of contract.generatedFiles) {
-    const existing = files.get(file.relativePath);
-    if (existing && existing !== file.content) {
-      throw new Error(
-        `generated contract name collision at ${contract.pluginName}:${file.relativePath}`,
-      );
-    }
-    files.set(file.relativePath, file.content);
-  }
-  state.generatedFiles.set(contract.pluginName, files);
-};
-
-const contractPluginRootForBinding = (
-  contract: Contract,
-  sourcePluginName?: string,
-  sourcePluginRoot?: string,
-): string =>
-  contract.pluginName === sourcePluginName && sourcePluginRoot
-    ? sourcePluginRoot
-    : pluginRootFromContractSource(contract.sourcePath);
-
 const registerBindingMirrorInputs = (
   state: PluginMirrorCollectionState,
   binding: ResolvedContractBinding,
-  sourcePluginName?: string,
-  sourcePluginRoot?: string,
 ): void => {
   const toolRoot = pluginRootFromToolSource(binding.toolSourcePath);
   getOrCreateMirrorPluginEntries(state, binding.toolPluginName, toolRoot).set(
@@ -239,46 +188,14 @@ const registerBindingMirrorInputs = (
       sourcePath: binding.toolSourcePath,
     },
   );
-
-  if (binding.kind !== "synthetic") return;
-  if (!binding.contract) {
-    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
-  }
-
-  // Prefer the host plugin's root when the contract is attributed to it.
-  // contract.sourcePath traces back to the trait file's location, which
-  // may live in a *different* plugin from the contract's owning plugin
-  // (e.g. cross-plugin trait + slot binding). Falling back to deriving
-  // from contract.sourcePath would map the host plugin to the trait
-  // plugin's root, which is wrong.
-  getOrCreateMirrorPluginEntries(
-    state,
-    binding.contract.pluginName,
-    contractPluginRootForBinding(binding.contract, sourcePluginName, sourcePluginRoot),
-  );
-  addGeneratedContractFiles(state, binding.contract);
 };
 
 const registerBindingsMirrorInputs = (
   state: PluginMirrorCollectionState,
   bindings: ReadonlyArray<ResolvedContractBinding>,
-  sourcePluginName?: string,
-  sourcePluginRoot?: string,
 ): void => {
   for (const binding of bindings) {
-    registerBindingMirrorInputs(state, binding, sourcePluginName, sourcePluginRoot);
-  }
-};
-
-const applyGeneratedFilesToMirrorEntries = (
-  state: PluginMirrorCollectionState,
-): void => {
-  for (const [pluginName, generated] of state.generatedFiles) {
-    const plugin = state.byPlugin.get(pluginName);
-    if (!plugin) continue;
-    for (const [relativePath, content] of generated) {
-      plugin.entries.set(relativePath, { relativePath, content });
-    }
+    registerBindingMirrorInputs(state, binding);
   }
 };
 
@@ -365,26 +282,15 @@ const buildPluginMirrorsFromState = async (
     });
   }
 
-  for (const [pluginName, files] of state.generatedFiles) {
-    if (mirrors.some((mirror) => mirror.pluginName === pluginName)) continue;
-    mirrors.push({
-      pluginName,
-      files: [...files.entries()].map(([relativePath, content]) => ({ relativePath, content })),
-    });
-  }
-
   return mirrors.sort((left, right) => left.pluginName.localeCompare(right.pluginName));
 };
 
 const collectMirrorsForBindings = async (
   bindings: ReadonlyArray<ResolvedContractBinding>,
-  sourcePluginName?: string,
-  sourcePluginRoot?: string,
   dependencyPluginRoots: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]> = [],
 ): Promise<PluginMirror[]> => {
   const state = createPluginMirrorCollectionState(dependencyPluginRoots);
-  registerBindingsMirrorInputs(state, bindings, sourcePluginName, sourcePluginRoot);
-  applyGeneratedFilesToMirrorEntries(state);
+  registerBindingsMirrorInputs(state, bindings);
   await expandSamePluginRuntimeClosures(state);
   await collectCrossPluginRuntimeClosure(state);
   return buildPluginMirrorsFromState(state);
@@ -466,31 +372,19 @@ const normalizeMirroredPluginSource = async (options: {
 };
 
 const adapterSpecsForBindings = (
-  sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): ToolAdapterSpec[] => {
   const byName = new Map<string, ToolAdapterSpec>();
   const specs: ToolAdapterSpec[] = [];
   for (const binding of bindings) {
-    const name = cliToolNameForBinding(sourcePluginName, binding);
-    const spec: ToolAdapterSpec =
-      binding.kind === "permission"
-        ? {
-            kind: "tool",
-            name,
-            logicalName: binding.logicalName,
-            pluginName: binding.toolPluginName,
-            toolName: binding.toolName,
-            sourcePath: binding.toolSourcePath,
-          }
-        : {
-            kind: "synthetic",
-            name,
-            logicalName: binding.logicalName,
-            pluginName: binding.contract!.pluginName,
-            contractName: binding.contract!.name,
-            contractRelativePath: `contracts/${binding.contract!.name}.contract`,
-          };
+    const name = cliToolNameForBinding(binding);
+    const spec: ToolAdapterSpec = {
+      name,
+      logicalName: binding.logicalName,
+      pluginName: binding.toolPluginName,
+      toolName: binding.toolName,
+      sourcePath: binding.toolSourcePath,
+    };
 
     const existing = byName.get(name);
     if (existing) {
@@ -505,31 +399,14 @@ const adapterSpecsForBindings = (
   return specs.sort((left, right) => left.name.localeCompare(right.name));
 };
 
-const toolAdapterSpecsEqual = (left: ToolAdapterSpec, right: ToolAdapterSpec): boolean => {
-  if (left.kind !== right.kind || left.name !== right.name) return false;
-  if (left.kind === "tool" && right.kind === "tool") {
-    return (
-      left.pluginName === right.pluginName &&
-      left.toolName === right.toolName &&
-      left.sourcePath === right.sourcePath
-    );
-  }
-  if (left.kind === "synthetic" && right.kind === "synthetic") {
-    return (
-      left.pluginName === right.pluginName &&
-      left.contractName === right.contractName &&
-      left.contractRelativePath === right.contractRelativePath
-    );
-  }
-  return false;
-};
+const toolAdapterSpecsEqual = (left: ToolAdapterSpec, right: ToolAdapterSpec): boolean =>
+  left.name === right.name &&
+  left.pluginName === right.pluginName &&
+  left.toolName === right.toolName &&
+  left.sourcePath === right.sourcePath;
 
-const describeToolAdapterSpec = (spec: ToolAdapterSpec): string => {
-  if (spec.kind === "tool") {
-    return `tool ${spec.pluginName}/${spec.toolName} as ${spec.name}`;
-  }
-  return `synthetic ${spec.pluginName}/${spec.contractName} as ${spec.name}`;
-};
+const describeToolAdapterSpec = (spec: ToolAdapterSpec): string =>
+  `tool ${spec.pluginName}/${spec.toolName} as ${spec.name}`;
 
 const safeIdentifier = (value: string): string =>
   value.replace(/[^a-zA-Z0-9_$]/g, "_").replace(/^[^a-zA-Z_$]/, "_$&");
@@ -845,12 +722,8 @@ interface RenderedToolSurfaceBindings {
   readonly entries: string;
 }
 
-const renderToolSurfaceImport = (ident: string, spec: ToolAdapterSpec): string => {
-  if (spec.kind === "tool") {
-    return `import ${ident} from ${JSON.stringify(`./plugins/${spec.pluginName}/tools/${spec.toolName}.tool`)};`;
-  }
-  return `import * as ${ident} from ${JSON.stringify(`./plugins/${spec.pluginName}/${spec.contractRelativePath}`)};`;
-};
+const renderToolSurfaceImport = (ident: string, spec: ToolAdapterSpec): string =>
+  `import ${ident} from ${JSON.stringify(`./plugins/${spec.pluginName}/tools/${spec.toolName}.tool`)};`;
 
 const renderToolSurfaceBindings = (
   specs: ReadonlyArray<ToolAdapterSpec>,
@@ -1003,10 +876,8 @@ const normalizeBuiltPiExtensionBundle = stripBundlerPathComments;
 
 /** Sorted, deduped tool names (generated identity) for a binding set. */
 export const cliToolNamesForBindings = (
-  sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
-): string[] =>
-  adapterSpecsForBindings(sourcePluginName, bindings).map((spec) => spec.name);
+): string[] => adapterSpecsForBindings(bindings).map((spec) => spec.name);
 
 export interface ToolCliRuntimeBundleOptions {
   readonly sourcePluginName: string;
@@ -1110,12 +981,10 @@ export const generateToolCliRuntimeBundle = async (
   options: ToolCliRuntimeBundleOptions,
 ): Promise<ToolCliRuntimeBundle> => {
   const version = options.version ?? "0.1.0";
-  const specs = adapterSpecsForBindings(options.sourcePluginName, options.bindings);
+  const specs = adapterSpecsForBindings(options.bindings);
   const toolNames = specs.map((spec) => spec.logicalName);
   const mirrors = await collectMirrorsForBindings(
     options.bindings,
-    options.sourcePluginName,
-    options.sourcePluginRoot,
     options.dependencyPluginRoots,
   );
   const importPluginRoots = new Map<string, string>();
@@ -1168,12 +1037,10 @@ export const generateAmpPluginBundle = async (
   options: AmpPluginBundleOptions,
 ): Promise<AmpPluginBundle> => {
   const version = options.version ?? "0.1.0";
-  const specs = adapterSpecsForBindings(options.sourcePluginName, options.bindings);
+  const specs = adapterSpecsForBindings(options.bindings);
   const toolNames = specs.map((spec) => spec.name);
   const mirrors = await collectMirrorsForBindings(
     options.bindings,
-    options.sourcePluginName,
-    options.sourcePluginRoot,
     options.dependencyPluginRoots,
   );
   const importPluginRoots = new Map<string, string>();
@@ -1229,12 +1096,10 @@ export const generatePiExtensionBundle = async (
   options: PiExtensionBundleOptions,
 ): Promise<PiExtensionBundle> => {
   const version = options.version ?? "0.1.0";
-  const specs = adapterSpecsForBindings(options.sourcePluginName, options.bindings);
+  const specs = adapterSpecsForBindings(options.bindings);
   const toolNames = specs.map((spec) => spec.name);
   const mirrors = await collectMirrorsForBindings(
     options.bindings,
-    options.sourcePluginName,
-    options.sourcePluginRoot,
     options.dependencyPluginRoots,
   );
   const importPluginRoots = new Map<string, string>();

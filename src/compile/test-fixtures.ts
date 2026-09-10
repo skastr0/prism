@@ -26,11 +26,7 @@ const GOLDEN_TARGET_HARNESSES = [
 interface CanonicalCompileFixtureOptions {
   pluginRoot: string;
   projectRoot: string;
-  invalidOrbit?: boolean;
-  invalidOrbitPermissionAgent?: boolean;
-  inlineSlotSchema?: boolean;
-  undeclaredSlot?: boolean;
-  mixedTraitRefsBeforeSlotBinding?: boolean;
+  /** Retained for callers; canonical tools are plugin-level surfaces now. */
   withCanonicalToolBindings?: boolean;
 }
 
@@ -64,15 +60,14 @@ const writeFixtureManifests = async (
   targetHarnesses: readonly string[],
   options?: {
     readonly includeSkillsAndHooks?: boolean;
-    readonly protocolRuntimeConfig?: Record<string, unknown>;
   },
 ): Promise<void> => {
   const pluginTargets: Record<string, string[]> = {
     agents: [...targetHarnesses],
     orbits: [...targetHarnesses],
     tools: [...targetHarnesses],
-    toolspaces: [...targetHarnesses],
     modelspaces: [...targetHarnesses],
+    skillspaces: [...targetHarnesses],
   };
   if (options?.includeSkillsAndHooks) {
     pluginTargets.skills = [...targetHarnesses];
@@ -92,91 +87,18 @@ const writeFixtureManifests = async (
     name: "agent-core",
     version: "0.1.0",
     targets: {
-      toolspaces: [...targetHarnesses],
       modelspaces: [...targetHarnesses],
       skillspaces: [...targetHarnesses],
     },
   });
 
-  const protocolManifest: Record<string, unknown> = {
+  await writeJsonFixture(join(protocolRoot, "plugin.json"), {
     name: "protocol-core",
     version: "0.1.0",
     targets: {
       tools: [...targetHarnesses],
     },
-  };
-  if (options?.protocolRuntimeConfig !== undefined) {
-    protocolManifest.runtime = options.protocolRuntimeConfig;
-  }
-  await writeJsonFixture(join(protocolRoot, "plugin.json"), protocolManifest);
-};
-
-const opencodeToolNames: Record<string, string> = {
-  read_repo: "read",
-  search_repo: "grep",
-  run_shell: "bash",
-};
-
-const claudeCodeToolNames: Record<string, string> = {
-  read_repo: "Read",
-  search_repo: "Grep",
-  run_shell: "Bash",
-};
-
-const nativeToolName = (harness: string, tool: string): string => {
-  if (harness === "opencode") return opencodeToolNames[tool] ?? tool;
-  if (harness === "claude-code") return claudeCodeToolNames[tool] ?? tool;
-  return tool;
-};
-
-const renderToolTargets = (targetHarnesses: readonly string[], tool: string): string =>
-  targetHarnesses
-    .map((harness) => `        ${JSON.stringify(harness)}: { name: ${JSON.stringify(nativeToolName(harness, tool))} },`)
-    .join("\n");
-
-const writeWorkspaceToolspace = async (
-  { coreRoot }: CanonicalFixturePaths,
-  targetHarnesses: readonly string[],
-): Promise<void> => {
-  await writeText(
-    join(coreRoot, "toolspaces", "workspace-tools.toolspace.ts"),
-    `import { toolRef, type ToolspaceSource } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "workspace-tools",
-  description: "Logical tool vocabulary shared across compile fixtures",
-  tools: {
-    read_repo: {
-      description: "Read repository files",
-      targets: {
-${renderToolTargets(targetHarnesses, "read_repo")}
-      },
-    },
-    search_repo: {
-      description: "Search repository contents",
-      targets: {
-${renderToolTargets(targetHarnesses, "search_repo")}
-      },
-    },
-    run_shell: {
-      description: "Run shell commands",
-      targets: {
-${renderToolTargets(targetHarnesses, "run_shell")}
-      },
-    },
-  },
-  groups: {
-    repo_inspection: {
-      description: "Read and search the repository",
-      tools: [
-        toolRef("workspace-tools", "read_repo"),
-        toolRef("workspace-tools", "search_repo"),
-      ],
-    },
-  },
-} satisfies ToolspaceSource;
-`
-  );
+  });
 };
 
 const builderModelBlock = (harness: string): string => {
@@ -283,7 +205,6 @@ const writeFixtureSpaces = async (
   paths: CanonicalFixturePaths,
   targetHarnesses: readonly string[],
 ): Promise<void> => {
-  await writeWorkspaceToolspace(paths, targetHarnesses);
   await writeDefaultModelspace(paths, targetHarnesses);
   await writeCoreSkillspace(paths, targetHarnesses);
 };
@@ -310,18 +231,6 @@ description: Review specialist for canonical compile tests
 # Reviewer
 
 You assess completed work and report whether it is ready to ship.
-`
-  );
-};
-
-const writeProtocolSchema = async ({ protocolRoot }: CanonicalFixturePaths): Promise<void> => {
-  await writeText(
-    join(protocolRoot, "schemas", "review-evidence.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export const ProtocolReviewEvidence = Schema.Struct({
-  source: Schema.String,
-});
 `
   );
 };
@@ -375,32 +284,20 @@ const writeLocalTool = async (
   );
 };
 
-const writeSubmitWorkTool = async (pluginRoot: string): Promise<void> => {
+const writeLocalTools = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeLocalTool(pluginRoot, {
     name: "submit-work",
     description: "Submit completed work",
   });
-};
-
-const writeCommitWorkTool = async (pluginRoot: string): Promise<void> => {
   await writeLocalTool(pluginRoot, {
     name: "commit-work",
     description: "Commit validated implementation work",
   });
-};
-
-const writeSubmitReviewTool = async (pluginRoot: string): Promise<void> => {
   await writeLocalTool(pluginRoot, {
     name: "submit-review",
     description: "Submit review findings",
     reviewSlot: true,
   });
-};
-
-const writeLocalTools = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
-  await writeSubmitWorkTool(pluginRoot);
-  await writeCommitWorkTool(pluginRoot);
-  await writeSubmitReviewTool(pluginRoot);
 };
 
 const writeProtocolTools = async ({ protocolRoot }: CanonicalFixturePaths): Promise<void> => {
@@ -456,136 +353,16 @@ const writeFixtureTools = async (paths: CanonicalFixturePaths): Promise<void> =>
   await writeProtocolTools(paths);
 };
 
-const writeSubmissionTraits = async ({
-  pluginRoot,
-  withCanonicalToolBindings,
-}: CanonicalFixturePaths): Promise<void> => {
-  await writeText(
-    join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "submittable",
-  description: "Can submit completed work",
-  instructions: "Submit completed work through the typed submission surface before handing off."${withCanonicalToolBindings ? `,
-  tools: {
-    submit_work: {
-      ref: "protocol-core:external-submit",
-    },
-  },
-  require: {
-    tools: ["submit_work"],
-  }` : ""},
-} satisfies TraitSource;
-`
-  );
-
-  await writeText(
-    join(pluginRoot, "traits", "committable.trait.ts"),
-    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "committable",
-  description: "Can create implementation commits",
-  instructions: "Commit owned implementation changes only after the submitted work is complete."${withCanonicalToolBindings ? `,
-  tools: {
-    commit_work: {
-      ref: "commit-work",
-    },
-  },
-  require: {
-    tools: ["commit_work"],
-  }` : ""},
-} satisfies TraitSource;
-`
-  );
-};
-
-const writeReviewTraits = async ({
-  pluginRoot,
-  withCanonicalToolBindings,
-}: CanonicalFixturePaths): Promise<void> => {
-  await writeText(
-    join(pluginRoot, "traits", "reviewable.trait.ts"),
-    `import { toolGroupRef, type TraitSource } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "reviewable",
-  description: "Can submit review findings",
-  access: {
-    toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
-  }${withCanonicalToolBindings ? `,
-  tools: {
-    submit_review: {
-      ref: "submit-review",
-    },
-  },
-  require: {
-    tools: ["submit_review"],
-  }` : ""},
-} satisfies TraitSource;
-`
-  );
-
-  await writeText(
-    join(pluginRoot, "traits", "self-assessing.trait.ts"),
-    `import { toolGroupRef, type TraitSource } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "self-assessing",
-  description: "Runs validation before handing work off",
-  instructions: "Run the relevant validation before final response or handoff.",
-  access: {
-    toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
-  },
-} satisfies TraitSource;
-`
-  );
-};
-
-const writeReviewSlotSchema = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
-  await writeText(
-    join(pluginRoot, "schemas", "review-slots.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { ProtocolReviewEvidence } from "../deps/protocol-core/schemas/review-evidence.ts";
-
-export const ReviewFindingsSlot = Schema.Struct({
-  verdict: Schema.Literal("approve", "request_changes"),
-  evidence: Schema.optional(ProtocolReviewEvidence),
-});
-
-export const SecurityReviewSlot = Schema.Struct({
-  severity: Schema.Literal("low", "medium", "high"),
-  findings: Schema.Array(Schema.String),
-});
-`
-  );
-};
-
-const writeFixtureTraits = async (paths: CanonicalFixturePaths): Promise<void> => {
-  await writeSubmissionTraits(paths);
-  await writeReviewSlotSchema(paths);
-  await writeReviewTraits(paths);
-};
-
 const writeBuilderAgent = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { modelProfileRef, skillspaceRef, toolRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
+    `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "builder",
   description: "Builder agent for canonical compile integration tests",
   identity: "builder",
   model: modelProfileRef("agent-core", "default-models", "builder"),
-  traits: [
-    "submittable",
-    "committable",
-    "self-assessing",
-  ],
-  access: {
-    tools: [toolRef("agent-core", "workspace-tools", "run_shell")],
-  },
   skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
     opencode: {
@@ -602,49 +379,17 @@ export default {
 };
 
 const writeReviewerAgent = async (
-  paths: CanonicalFixturePaths,
-  options: CanonicalCompileFixtureOptions,
+  { pluginRoot }: CanonicalFixturePaths,
 ): Promise<void> => {
-  const { pluginRoot, withCanonicalToolBindings } = paths;
-  const reviewerSlotReference = options.inlineSlotSchema
-    ? `Schema.Struct({
-              verdict: Schema.Literal("approve", "request_changes"),
-            })`
-    : "ReviewFindingsSlot";
-  const reviewerSlotName = options.undeclaredSlot ? "unknown_verdict" : "verdict";
-  const reviewerTraitsHead = options.mixedTraitRefsBeforeSlotBinding
-    ? `"submittable",`
-    : `{ trait: "submittable" },`;
-  const reviewerSchemaImport =
-    withCanonicalToolBindings && !options.inlineSlotSchema
-      ? `import { ReviewFindingsSlot } from "../schemas/review-slots.ts";`
-      : "";
-
   await writeText(
     join(pluginRoot, "agents", "reviewer.agent.ts"),
     `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
-${options.inlineSlotSchema ? `import { Schema } from ${JSON.stringify(effectImportPath)};` : ""}
-${reviewerSchemaImport}
 
 export default {
   name: "reviewer",
   description: "Reviewer agent for canonical compile integration tests",
   identity: "reviewer",
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
-  traits: [
-    ${reviewerTraitsHead}
-    ${withCanonicalToolBindings ? `{
-      trait: "reviewable",
-      tools: {
-        submit_review: {
-          slots: {
-            ${reviewerSlotName}: ${reviewerSlotReference},
-          },
-        },
-      },
-    }` : `"reviewable"`},
-    "self-assessing",
-  ],
   skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
     opencode: {
@@ -661,32 +406,16 @@ export default {
 
 const writeSecurityReviewerAgent = async ({
   pluginRoot,
-  withCanonicalToolBindings,
 }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "agents", "security-reviewer.agent.ts"),
     `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
-${withCanonicalToolBindings ? `import { SecurityReviewSlot } from "../schemas/review-slots.ts";` : ""}
 
 export default {
   name: "security-reviewer",
-  description: "Security reviewer variant using the same reviewable trait",
+  description: "Security reviewer variant of the reviewer role",
   identity: "reviewer",
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
-  traits: [
-    "submittable",
-    ${withCanonicalToolBindings ? `{
-      trait: "reviewable",
-      tools: {
-        submit_review: {
-          slots: {
-            verdict: SecurityReviewSlot,
-          },
-        },
-      },
-    }` : `"reviewable"`},
-    "self-assessing",
-  ],
   skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
     opencode: {
@@ -701,61 +430,21 @@ export default {
   );
 };
 
-const writeFixtureAgents = async (
-  paths: CanonicalFixturePaths,
-  options: CanonicalCompileFixtureOptions,
-): Promise<void> => {
+const writeFixtureAgents = async (paths: CanonicalFixturePaths): Promise<void> => {
   await writeBuilderAgent(paths);
-  await writeReviewerAgent(paths, options);
+  await writeReviewerAgent(paths);
   await writeSecurityReviewerAgent(paths);
 };
 
-const deliveryReviewAgentRefs = (options: CanonicalCompileFixtureOptions): string =>
-  (options.invalidOrbit ? ["builder"] : ["reviewer"])
-    .map((agent) => `agentRef(${JSON.stringify(agent)})`)
-    .join(", ");
-
-const deliveryOrbitOrchestratorAgent = (
-  options: CanonicalCompileFixtureOptions,
-): string => options.invalidOrbitPermissionAgent ? "ghost-orchestrator" : "builder";
-
-const deliveryOrbitOrchestratorBlock = (
-  paths: CanonicalFixturePaths,
-  options: CanonicalCompileFixtureOptions,
-): string => {
-  if (!paths.withCanonicalToolBindings) return "";
-  return `,
-  orchestrator: {
-    agent: agentRef(${JSON.stringify(deliveryOrbitOrchestratorAgent(options))}),
-    tools: [
-      {
-        ref: "protocol-core:create_glyph",
-        as: "create_glyph",
-      },
-    ],
-  }`;
-};
-
-const deliveryOrbitSource = (
-  paths: CanonicalFixturePaths,
-  options: CanonicalCompileFixtureOptions,
-): string => {
-  const reviewAgents = deliveryReviewAgentRefs(options);
-
-  return `import { agentRef, traitRef, type OrbitSource } from ${JSON.stringify(prismImportPath)};
+const deliveryOrbitSource = (): string => `import { agentRef, type OrbitSource } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery-contract",
-  description: "Validate that work moves through the right trait-conforming agents",
+  description: "Validate that work moves through the right agents",
   phases: [
     {
       name: "Implement change",
       agents: [agentRef("builder")],
-      requires: [
-        {
-          all: [traitRef("committable"), traitRef("self-assessing")],
-        },
-      ],
       notes: {
         "Input": "Work item is ready to build",
         "Done": "Implementation is ready for review",
@@ -763,12 +452,7 @@ export default {
     },
     {
       name: "Review change",
-      agents: [${reviewAgents}],
-      requires: [
-        {
-          all: [traitRef("reviewable"), traitRef("self-assessing")],
-        },
-      ],
+      agents: [agentRef("reviewer")],
       notes: {
         "Input": "Implementation is ready for review",
         "Done": "Review findings are recorded",
@@ -777,30 +461,23 @@ export default {
     {
       name: "Hand off work",
       agents: [agentRef("builder"), agentRef("reviewer")],
-      requires: [
-        {
-          all: [traitRef("submittable")],
-          min: 2,
-        },
-      ],
       notes: {
         "Input": "Build and review are complete",
         "Done": "Work has been handed off cleanly",
       },
     },
-  ]${deliveryOrbitOrchestratorBlock(paths, options)},
+  ],
+  orchestrator: {
+    agent: agentRef("builder"),
+  },
   body: "Use this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.",
 } satisfies OrbitSource;
 `;
-};
 
-const writeDeliveryOrbit = async (
-  paths: CanonicalFixturePaths,
-  options: CanonicalCompileFixtureOptions,
-): Promise<void> => {
+const writeDeliveryOrbit = async (paths: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(paths.pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    deliveryOrbitSource(paths, options),
+    deliveryOrbitSource(),
   );
 };
 
@@ -813,11 +490,9 @@ export const createCanonicalCompileFixture = async (
   await writeFixtureManifests(paths, [...DEFAULT_TARGET_HARNESSES]);
   await writeFixtureSpaces(paths, [...DEFAULT_TARGET_HARNESSES]);
   await writeFixtureIdentities(paths);
-  await writeProtocolSchema(paths);
   await writeFixtureTools(paths);
-  await writeFixtureTraits(paths);
-  await writeFixtureAgents(paths, options);
-  await writeDeliveryOrbit(paths, options);
+  await writeFixtureAgents(paths);
+  await writeDeliveryOrbit(paths);
 
   return { pluginRoot: paths.pluginRoot, projectRoot: paths.projectRoot };
 };
@@ -837,14 +512,6 @@ export default {
 } satisfies HookSource;
 `,
   );
-};
-
-const goldenProtocolRuntimeConfig = (): Record<string, unknown> => {
-  const mcp: Record<string, { port: number; transport: string }> = {};
-  for (const [index, harness] of GOLDEN_TARGET_HARNESSES.entries()) {
-    mcp[harness] = { port: 11000 + index, transport: "streamable-http" };
-  }
-  return { mcp };
 };
 
 const writeGoldenSkill = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
@@ -871,15 +538,12 @@ export const createGoldenCompileFixture = async (options: {
 
   await writeFixtureManifests(paths, GOLDEN_TARGET_HARNESSES, {
     includeSkillsAndHooks: true,
-    protocolRuntimeConfig: goldenProtocolRuntimeConfig(),
   });
   await writeFixtureSpaces(paths, GOLDEN_TARGET_HARNESSES);
   await writeFixtureIdentities(paths);
-  await writeProtocolSchema(paths);
   await writeFixtureTools(paths);
-  await writeFixtureTraits(paths);
-  await writeFixtureAgents(paths, { pluginRoot: options.pluginRoot, projectRoot: options.projectRoot });
-  await writeDeliveryOrbit(paths, { pluginRoot: options.pluginRoot, projectRoot: options.projectRoot });
+  await writeFixtureAgents(paths);
+  await writeDeliveryOrbit(paths);
   await writeGoldenHook(paths);
   await writeGoldenSkill(paths);
 

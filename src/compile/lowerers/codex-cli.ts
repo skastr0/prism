@@ -12,7 +12,6 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
@@ -130,8 +129,8 @@ const composeModelConfig = (agent: ComposedAgent): Record<string, unknown> => {
 };
 
 const renderAgentToml = (agent: ComposedAgent): string => {
-  const developerInstructions = agent.allowedSkills.length > 0
-    ? `${agent.body}\n\n## Prism Skills\nUse these installed skills when they match the task: ${uniqueSorted(agent.allowedSkills).join(", ")}.`
+  const developerInstructions = agent.skills.length > 0
+    ? `${agent.body}\n\n## Prism Skills\nUse these installed skills when they match the task: ${uniqueSorted(agent.skills).join(", ")}.`
     : agent.body;
   const lines = [
     `name = ${quote(agent.name)}`,
@@ -144,14 +143,6 @@ const renderAgentToml = (agent: ComposedAgent): string => {
   )) {
     const scalar = renderTomlScalar(key, value);
     if (scalar) lines.push(scalar);
-  }
-
-  if (agent.allowedTools.length > 0) {
-    lines.push(
-      "",
-      "# prism diagnostic: Codex has no direct equivalent for harness-native per-role tool allowlists.",
-      `# Native tool bindings requested by source traits: ${agent.allowedTools.join(", ")}`,
-    );
   }
 
   return `${lines.join("\n")}\n`;
@@ -208,13 +199,11 @@ const codexNativeHookEvent = (event: Hook["event"]): string => {
 };
 
 const collectCanonicalToolNames = (
-  sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): ReadonlyMap<string, string> =>
-  collectBindingNameMap(bindings, (binding) => {
-    const owner = ownerPluginForBinding(sourcePluginName, binding);
-    return cliToolNameForBinding(owner, binding);
-  });
+  collectBindingNameMap(bindings, (binding) =>
+    cliToolNameForBinding(binding),
+  );
 
 const hookMatcher = (
   nativeEvent: string,
@@ -314,12 +303,7 @@ const planHooks = async (
   if (!input.registry) return [];
 
   const canonicalToolNames = collectCanonicalToolNames(
-    input.target.sourcePluginName,
-    mcpBindingsForAgentsAndTools(
-      input.target.sourcePluginName,
-      input.tools,
-      input.agents,
-    ),
+    mcpBindingsForAgentsAndTools(input.target.sourcePluginName, input.tools),
   );
   const plannedHooks: PlannedHook[] = [];
 

@@ -16,7 +16,6 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
 import {
@@ -124,13 +123,11 @@ const grokOverrideForAgent = (agent: ComposedAgent): Record<string, unknown> | u
   agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
 
 const composeGrokTools = (
-  agent: ComposedAgent,
   override: Record<string, unknown> | undefined,
 ): string[] =>
   uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
-    ...agent.allowedTools,
   ]);
 
 const composeGrokDisallowedTools = (
@@ -175,7 +172,7 @@ const composeAgentFrontmatter = (
     reasoning_effort: stringValue(override?.reasoning_effort),
     temperature: firstDefined(numberValue(override?.temperature), numberValue(model.temperature)),
     top_p: firstDefined(numberValue(override?.top_p), numberValue(model.top_p)),
-    tools: composeGrokTools(agent, override),
+    tools: composeGrokTools(override),
     disallowedTools: composeGrokDisallowedTools(override),
     // Never emit skills into Grok agent frontmatter. Grok non-interactive sessions
     // preload FULL skill bodies for every frontmatter skill entry (2026-07-11:
@@ -228,10 +225,7 @@ const renderHooksJson = async (
   const groupedHooks: Record<string, unknown[]> = {};
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => {
-      const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return cliToolNameForBinding(owner, binding);
-    },
+    (binding) => cliToolNameForBinding(binding),
   );
 
   for (const hook of hooks) {

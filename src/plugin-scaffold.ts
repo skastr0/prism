@@ -4,7 +4,6 @@ import {
   createTypescriptPackageJson,
   oxlintConfigJson,
   oxfmtConfigJson,
-  prismOxlintPluginJs,
   typescriptTsconfigJson,
 } from "./init-templates.js";
 import type { PluginManifestTargets } from "./types.js";
@@ -203,13 +202,11 @@ const writeTypescriptGuardrails = async (
   await writeFile(join(input.targetDir, "tsconfig.json"), typescriptTsconfigJson);
   await writeFile(join(input.targetDir, ".oxlintrc.json"), oxlintConfigJson);
   await writeFile(join(input.targetDir, ".oxfmtrc.json"), oxfmtConfigJson);
-  await writeFile(join(input.targetDir, "prism-oxlint-plugin.js"), prismOxlintPluginJs);
   created.push(
     "package.json",
     "tsconfig.json",
     ".oxlintrc.json",
     ".oxfmtrc.json",
-    "prism-oxlint-plugin.js",
   );
 };
 

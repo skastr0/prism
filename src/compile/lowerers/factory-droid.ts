@@ -15,7 +15,6 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
@@ -129,10 +128,7 @@ const composeFactoryTools = (
     ...stringArray(override?.["allowed-tools"]),
   ];
   const category = stringValue(override?.tools);
-  const merged = uniqueSorted(
-    [...explicitArrayTools, ...agent.allowedTools],
-    { dropEmpty: true },
-  );
+  const merged = uniqueSorted(explicitArrayTools, { dropEmpty: true });
 
   if (category && !FACTORY_TOOL_CATEGORIES.has(category)) {
     throw new Error(
@@ -142,7 +138,7 @@ const composeFactoryTools = (
 
   if (category && merged.length > 0) {
     throw new Error(
-      `Factory Droid agent '${agent.name}' cannot combine tools category '${category}' with explicit or resolved native tools. Use a Factory tool array when mixing category and native tool names.`,
+      `Factory Droid agent '${agent.name}' cannot combine tools category '${category}' with explicit native tools. Use a Factory tool array when mixing category and native tool names.`,
     );
   }
 
@@ -205,10 +201,7 @@ const renderHooksJson = async (
   const groupedHooks: Record<string, unknown[]> = {};
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => {
-      const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return cliToolNameForBinding(owner, binding);
-    },
+    (binding) => cliToolNameForBinding(binding),
   );
 
   for (const hook of hooks) {

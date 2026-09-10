@@ -67,7 +67,6 @@ export type PluginArtifactType = (typeof PLUGIN_ARTIFACT_TYPES)[number];
 export const COMPILE_ARTIFACT_TYPES = [
   "orbits",
   "tools",
-  "toolspaces",
   "modelspaces",
   "skillspaces",
   "hooks",

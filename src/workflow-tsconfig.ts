@@ -277,7 +277,6 @@ export const WORKFLOW_REFS_MODULES = [
   "agents",
   "models",
   "skills",
-  "traits",
   "orbits",
   "tools",
 ] as const;

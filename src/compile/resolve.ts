@@ -16,19 +16,16 @@ import {
 import {
   Agent,
   ClaudeCodeModelTarget,
-  Contract,
   Identity,
   type ModelProfile,
   Orbit,
   OpenCodeModelTargetBlock,
   Personality,
-  Trait,
   type OrbitParameter,
   type OrbitDefinitions,
   type OrbitDefinitionEntry,
   type OrbitPulsarCheckpoint,
   type NormalizedOrbitPhase as OrbitPhase,
-  type NormalizedTraitBinding,
 } from "./sources.js";
 import {
   AgentValidationError,
@@ -38,54 +35,16 @@ import {
   UnknownReferenceError,
   type CompileError,
 } from "./errors.js";
-import {
-  materializeOrbitToolPermission,
-  materializeTraitTools,
-  validateTraitBindingSlots,
-  type MaterializedTraitTool,
-} from "./protocol-tools.js";
 import type { PluginRegistry } from "./registry.js";
 import { resolveManifestTargets } from "../manifest.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
 import { parseNamedRef, parseSpaceItemRef, resolveRefToRegistry } from "./refs.js";
 
 export interface ResolvedContractBinding {
-  readonly kind: "permission" | "synthetic";
   readonly logicalName: string;
-  readonly contract?: Contract;
   readonly toolPluginName: string;
   readonly toolName: string;
   readonly toolSourcePath: string;
-}
-
-export interface ResolvedToolReference {
-  readonly kind: "permission" | "synthetic";
-  readonly logicalName: string;
-  readonly contract?: Contract;
-  readonly toolPluginName: string;
-  readonly toolName: string;
-  readonly toolSourcePath: string;
-}
-
-export interface ResolvedTrait {
-  readonly ref: string;
-  readonly canonicalId: string;
-  readonly trait: Trait;
-  readonly owner: PluginRegistry;
-  readonly binding: NormalizedTraitBinding;
-}
-
-export interface ResolvedAgentCapabilities {
-  readonly agent: Agent;
-  readonly traits: ReadonlyArray<ResolvedTrait>;
-  readonly canonicalTraitIds: ReadonlyArray<string>;
-  readonly skills: ReadonlyArray<string>;
-  readonly toolRefs: ReadonlyArray<ResolvedToolReference>;
-  readonly access: {
-    readonly tools: ReadonlyArray<string>;
-    readonly toolGroups: ReadonlyArray<string>;
-    readonly skills: ReadonlyArray<string>;
-  };
 }
 
 export interface ResolvedAgent {
@@ -93,12 +52,7 @@ export interface ResolvedAgent {
   readonly identity: Identity;
   readonly personality: Personality | undefined;
   readonly resolvedModel: Record<string, unknown> | undefined;
-  readonly traits: ReadonlyArray<ResolvedTrait>;
-  readonly canonicalTraitIds: ReadonlyArray<string>;
   readonly skills: ReadonlyArray<string>;
-  readonly allowedSkills: ReadonlyArray<string>;
-  readonly toolBindings: ReadonlyArray<ResolvedContractBinding>;
-  readonly allowedTools: ReadonlyArray<string>;
 }
 
 type BindingMap = Readonly<Record<string, string>>;
@@ -207,437 +161,6 @@ const agentError = (
     agentName: agent.name,
     field,
     message,
-  });
-
-const canonicalTraitId = (owner: PluginRegistry, trait: Trait): string =>
-  `${owner.pluginName}:${trait.name}`;
-
-const resolveTraitReference = (
-  agent: Agent,
-  binding: NormalizedTraitBinding,
-  registry: PluginRegistry,
-): Effect.Effect<ResolvedTrait, CompileError> =>
-  Effect.gen(function* () {
-    const reg = yield* resolveRefToRegistry(binding.ref, registry, agent.sourcePath);
-    const name = parseNamedRef(binding.ref).name;
-    const trait = reg.traits.get(name);
-    if (!trait) {
-      return yield* Effect.fail(
-        new UnknownReferenceError({
-          agentName: agent.name,
-          sourcePath: agent.sourcePath,
-          field: "trait",
-          referenceName: binding.ref,
-        }),
-      );
-    }
-
-    const slotValidation = validateTraitBindingSlots(trait, binding);
-    if (!slotValidation.ok) {
-      return yield* Effect.fail(
-        agentError(
-          agent,
-          "traits",
-          `trait '${canonicalTraitId(reg, trait)}' ${slotValidation.error.message}`,
-        ),
-      );
-    }
-
-    return {
-      ref: binding.ref,
-      canonicalId: canonicalTraitId(reg, trait),
-      trait,
-      owner: reg,
-      binding,
-    };
-  });
-
-type ResolvedTraitSet = {
-  readonly traits: ResolvedTrait[];
-  readonly canonicalIds: Set<string>;
-};
-
-type MaterializedTraitToolWithOwner = MaterializedTraitTool & {
-  readonly traitId: string;
-};
-
-type AgentAccessAccumulator = {
-  readonly tools: Set<string>;
-  readonly toolGroups: Set<string>;
-  readonly skills: Set<string>;
-};
-
-const resolveAgentTraits = (
-  agent: Agent,
-  registry: PluginRegistry,
-): Effect.Effect<ResolvedTraitSet, CompileError> =>
-  Effect.gen(function* () {
-    const traits: ResolvedTrait[] = [];
-    const canonicalIds = new Set<string>();
-
-    for (const [index, binding] of agent.traits.entries()) {
-      const resolvedTrait = yield* resolveTraitReference(agent, binding, registry);
-      if (canonicalIds.has(resolvedTrait.canonicalId)) {
-        return yield* Effect.fail(
-          agentError(
-            agent,
-            `traits[${index}]`,
-            `declares duplicate trait '${resolvedTrait.canonicalId}'`,
-          ),
-        );
-      }
-      canonicalIds.add(resolvedTrait.canonicalId);
-      traits.push(resolvedTrait);
-    }
-
-    return { traits, canonicalIds };
-  });
-
-const createAccessAccumulator = (agent: Agent): AgentAccessAccumulator => ({
-  tools: new Set(agent.access.tools),
-  toolGroups: new Set(agent.access.toolGroups),
-  skills: new Set(agent.access.skills),
-});
-
-const mergeTraitAccess = (
-  access: AgentAccessAccumulator,
-  trait: Trait,
-): void => {
-  for (const skill of trait.inject.skills) {
-    access.skills.add(skill);
-  }
-  for (const toolRef of trait.access.tools) {
-    access.tools.add(toolRef);
-  }
-  for (const toolGroupRef of trait.access.toolGroups) {
-    access.toolGroups.add(toolGroupRef);
-  }
-  for (const skill of trait.access.skills) {
-    access.skills.add(skill);
-  }
-};
-
-const traitToolBindingsMatch = (
-  existing: MaterializedTraitToolWithOwner,
-  next: MaterializedTraitTool,
-): boolean =>
-  existing.kind === next.kind &&
-  existing.toolPluginName === next.toolPluginName &&
-  existing.toolName === next.toolName &&
-  existing.contract?.pluginName === next.contract?.pluginName &&
-  existing.contract?.name === next.contract?.name;
-
-const addTraitToolBinding = (
-  agent: Agent,
-  finalToolRefs: Map<string, MaterializedTraitToolWithOwner>,
-  resolvedTrait: ResolvedTrait,
-  materialized: MaterializedTraitTool,
-): AgentValidationError | undefined => {
-  const existing = finalToolRefs.get(materialized.logicalName);
-  if (!existing) {
-    finalToolRefs.set(materialized.logicalName, {
-      ...materialized,
-      traitId: resolvedTrait.canonicalId,
-    });
-    return undefined;
-  }
-
-  if (traitToolBindingsMatch(existing, materialized)) {
-    return undefined;
-  }
-
-  return agentError(
-    agent,
-    "traits",
-    `traits '${existing.traitId}' and '${resolvedTrait.canonicalId}' define conflicting tool bindings for '${materialized.logicalName}'`,
-  );
-};
-
-const mergeTraitTools = (
-  agent: Agent,
-  registry: PluginRegistry,
-  finalToolRefs: Map<string, MaterializedTraitToolWithOwner>,
-  resolvedTrait: ResolvedTrait,
-): AgentValidationError | undefined => {
-  const materializedTraitTools = materializeTraitTools({
-    agentName: agent.name,
-    ownerPluginName: registry.pluginName,
-    canonicalTraitId: resolvedTrait.canonicalId,
-    trait: resolvedTrait.trait,
-    binding: resolvedTrait.binding,
-    registry,
-    refRegistry: resolvedTrait.owner,
-  });
-  if (!(materializedTraitTools instanceof Array)) {
-    return agentError(
-      agent,
-      "traits",
-      `trait '${resolvedTrait.canonicalId}' ${materializedTraitTools.message}`,
-    );
-  }
-
-  for (const materialized of materializedTraitTools) {
-    const error = addTraitToolBinding(
-      agent,
-      finalToolRefs,
-      resolvedTrait,
-      materialized,
-    );
-    if (error) return error;
-  }
-
-  return undefined;
-};
-
-const collectTraitAccessGrants = (
-  agent: Agent,
-  resolvedTraits: ReadonlyArray<ResolvedTrait>,
-): AgentAccessAccumulator => {
-  const access = createAccessAccumulator(agent);
-  for (const resolvedTrait of resolvedTraits) {
-    mergeTraitAccess(access, resolvedTrait.trait);
-  }
-
-  return access;
-};
-
-const materializeAndMergeTraitTools = (
-  agent: Agent,
-  registry: PluginRegistry,
-  resolvedTraits: ReadonlyArray<ResolvedTrait>,
-): Map<string, MaterializedTraitToolWithOwner> | AgentValidationError => {
-  const toolRefs = new Map<string, MaterializedTraitToolWithOwner>();
-
-  for (const resolvedTrait of resolvedTraits) {
-    const error = mergeTraitTools(agent, registry, toolRefs, resolvedTrait);
-    if (error) return error;
-  }
-
-  return toolRefs;
-};
-
-const validateRequiredTraitTools = (
-  agent: Agent,
-  resolvedTraits: ReadonlyArray<ResolvedTrait>,
-  finalToolRefs: ReadonlyMap<string, MaterializedTraitToolWithOwner>,
-): AgentValidationError | undefined => {
-  const availableToolNames = new Set(finalToolRefs.keys());
-  for (const resolvedTrait of resolvedTraits) {
-    const missingTools = resolvedTrait.trait.require.tools.filter(
-      (logicalName) => !availableToolNames.has(logicalName),
-    );
-    if (missingTools.length === 0) continue;
-
-    const missingParts = [
-      missingTools.length > 0 ? `tools: ${missingTools.join(", ")}` : undefined,
-    ].filter((part): part is string => part !== undefined);
-
-    return agentError(
-      agent,
-      "traits",
-      `trait '${resolvedTrait.canonicalId}' requires missing ${missingParts.join("; ")}`,
-    );
-  }
-
-  return undefined;
-};
-
-const sortedToolRefs = (
-  finalToolRefs: ReadonlyMap<string, MaterializedTraitToolWithOwner>,
-): ResolvedToolReference[] =>
-  [...finalToolRefs.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([logicalName, resolved]) => ({
-      logicalName,
-      kind: resolved.kind,
-      contract: resolved.contract,
-      toolPluginName: resolved.toolPluginName,
-      toolName: resolved.toolName,
-      toolSourcePath: resolved.toolSourcePath,
-    }));
-
-const buildResolvedAgentCapabilities = (
-  agent: Agent,
-  resolvedTraits: ResolvedTraitSet,
-  grants: {
-    readonly access: AgentAccessAccumulator;
-    readonly toolRefs: ReadonlyMap<string, MaterializedTraitToolWithOwner>;
-  },
-): ResolvedAgentCapabilities => ({
-  agent,
-  traits: resolvedTraits.traits,
-  canonicalTraitIds: [...resolvedTraits.canonicalIds].sort((left, right) =>
-    left.localeCompare(right),
-  ),
-  skills: [...agent.skills],
-  toolRefs: sortedToolRefs(grants.toolRefs),
-  access: {
-    tools: [...grants.access.tools].sort((left, right) => left.localeCompare(right)),
-    toolGroups: [...grants.access.toolGroups].sort((left, right) =>
-      left.localeCompare(right),
-    ),
-    skills: [...grants.access.skills].sort((left, right) =>
-      left.localeCompare(right),
-    ),
-  },
-});
-
-export const resolveAgentCapabilities = (
-  agent: Agent,
-  registry: PluginRegistry,
-): Effect.Effect<ResolvedAgentCapabilities, CompileError> =>
-  Effect.gen(function* () {
-    const resolvedTraits = yield* resolveAgentTraits(agent, registry);
-
-    const access = collectTraitAccessGrants(agent, resolvedTraits.traits);
-    const toolRefs = materializeAndMergeTraitTools(
-      agent,
-      registry,
-      resolvedTraits.traits,
-    );
-    if (toolRefs instanceof AgentValidationError) {
-      return yield* Effect.fail(toolRefs);
-    }
-
-    const requirementError = validateRequiredTraitTools(
-      agent,
-      resolvedTraits.traits,
-      toolRefs,
-    );
-    if (requirementError) return yield* Effect.fail(requirementError);
-
-    return buildResolvedAgentCapabilities(agent, resolvedTraits, { access, toolRefs });
-  });
-
-const resolveToolRefForTarget = (
-  agent: Agent,
-  toolRef: string,
-  registry: PluginRegistry,
-  target: string,
-  currentRegistry: PluginRegistry = registry,
-): Effect.Effect<string, CompileError> =>
-  Effect.gen(function* () {
-    const parsed = parseSpaceItemRef(toolRef, "/");
-    if (!parsed) {
-      return yield* Effect.fail(
-        agentError(agent, "access.tools", `invalid tool ref '${toolRef}'`),
-      );
-    }
-
-    const reg = yield* resolveRefToRegistry(toolRef, currentRegistry, agent.sourcePath);
-    const toolspace = reg.toolspaces.get(parsed.space);
-    if (!toolspace) {
-      return yield* Effect.fail(
-        new UnknownReferenceError({
-          agentName: agent.name,
-          sourcePath: agent.sourcePath,
-          field: "tool",
-          referenceName: toolRef,
-        }),
-      );
-    }
-
-    const tool = toolspace.tools[parsed.name];
-    if (!tool) {
-      return yield* Effect.fail(
-        new UnknownReferenceError({
-          agentName: agent.name,
-          sourcePath: agent.sourcePath,
-          field: "tool",
-          referenceName: toolRef,
-        }),
-      );
-    }
-
-    const concrete = tool.targets[target];
-    if (!concrete) {
-      return yield* Effect.fail(
-        new MissingTargetResolutionError({
-          agentName: agent.name,
-          referenceKind: "tool",
-          referenceName: toolRef,
-          target,
-        }),
-      );
-    }
-
-    return concrete;
-  });
-
-const resolveToolGroupRefForTarget = (
-  agent: Agent,
-  toolGroupRef: string,
-  registry: PluginRegistry,
-  target: string,
-): Effect.Effect<ReadonlyArray<string>, CompileError> =>
-  Effect.gen(function* () {
-    const parsed = parseSpaceItemRef(toolGroupRef, "#");
-    if (!parsed) {
-      return yield* Effect.fail(
-        agentError(agent, "access.toolGroups", `invalid tool group ref '${toolGroupRef}'`),
-      );
-    }
-
-    const reg = yield* resolveRefToRegistry(toolGroupRef, registry, agent.sourcePath);
-    const toolspace = reg.toolspaces.get(parsed.space);
-    if (!toolspace) {
-      return yield* Effect.fail(
-        new UnknownReferenceError({
-          agentName: agent.name,
-          sourcePath: agent.sourcePath,
-          field: "tool-group",
-          referenceName: toolGroupRef,
-        }),
-      );
-    }
-
-    const group = toolspace.groups[parsed.name];
-    if (!group) {
-      return yield* Effect.fail(
-        new UnknownReferenceError({
-          agentName: agent.name,
-          sourcePath: agent.sourcePath,
-          field: "tool-group",
-          referenceName: toolGroupRef,
-        }),
-      );
-    }
-
-    const concrete = new Set<string>();
-    for (const nestedToolRef of group.tools) {
-      concrete.add(
-        yield* resolveToolRefForTarget(agent, nestedToolRef, registry, target, reg),
-      );
-    }
-
-    return [...concrete].sort((left, right) => left.localeCompare(right));
-  });
-
-const resolveAccessToolsForTarget = (
-  agent: Agent,
-  access: { readonly tools: ReadonlyArray<string>; readonly toolGroups: ReadonlyArray<string> },
-  registry: PluginRegistry,
-  target: string,
-): Effect.Effect<ReadonlyArray<string>, CompileError> =>
-  Effect.gen(function* () {
-    const concrete = new Set<string>();
-
-    for (const toolRef of access.tools) {
-      concrete.add(yield* resolveToolRefForTarget(agent, toolRef, registry, target));
-    }
-
-    for (const toolGroupRef of access.toolGroups) {
-      for (const nested of yield* resolveToolGroupRefForTarget(
-        agent,
-        toolGroupRef,
-        registry,
-        target,
-      )) {
-        concrete.add(nested);
-      }
-    }
-
-    return [...concrete].sort((left, right) => left.localeCompare(right));
   });
 
 const unknownSkillReference = (
@@ -1055,23 +578,6 @@ const visitOrbitPhaseAgentRefs = (
   return undefined;
 };
 
-const visitOrbitPhaseRequirementRefs = (
-  phase: Orbit["phases"][number],
-  index: number,
-  visit: OrbitStringVisitor,
-): OrbitValidationError | undefined => {
-  for (const [requirementIndex, requirement] of phase.requires.entries()) {
-    for (const [traitIndex, traitRef] of requirement.all.entries()) {
-      const error = visit(
-        `phases[${index}].requires[${requirementIndex}].all[${traitIndex}]`,
-        traitRef,
-      );
-      if (error) return error;
-    }
-  }
-  return undefined;
-};
-
 const visitOrbitPhaseStrings = (
   phase: Orbit["phases"][number],
   index: number,
@@ -1082,8 +588,7 @@ const visitOrbitPhaseStrings = (
     visitOrbitPhaseWorkflow(phase, index, visit) ??
     visitOrbitPhaseBindingStrings(phase, index, visit) ??
     visitOrbitPhaseNotes(phase, index, visit) ??
-    visitOrbitPhaseAgentRefs(phase, index, visit) ??
-    visitOrbitPhaseRequirementRefs(phase, index, visit)
+    visitOrbitPhaseAgentRefs(phase, index, visit)
   );
 };
 
@@ -1129,8 +634,7 @@ const validateOrbitTemplateUsage = (
       field.endsWith(".orbit") ||
       field.endsWith(".orbit_binding.orbit") ||
       field.endsWith(".agent") ||
-      field.includes(".agents[") ||
-      field.includes(".requires[")
+      field.includes(".agents[")
     ) {
       return orbitError(orbit, field, "reference names cannot contain template placeholders");
     }
@@ -1195,7 +699,6 @@ type InstantiatedPhaseDetails = {
 type ClonedPhaseAssignments = {
   readonly agent?: OrbitPhase["agent"];
   readonly agents: OrbitPhase["agents"];
-  readonly requires: OrbitPhase["requires"];
 };
 
 const instantiatePhaseReferences = (
@@ -1438,10 +941,6 @@ const instantiatePhaseDetails = (
 const clonePhaseAssignments = (phase: OrbitPhase): ClonedPhaseAssignments => ({
   ...(phase.agent ? { agent: phase.agent } : {}),
   agents: [...phase.agents],
-  requires: phase.requires.map((requirement) => ({
-    all: [...requirement.all],
-    ...(requirement.min !== undefined ? { min: requirement.min } : {}),
-  })),
 });
 
 const buildInstantiatedOrbitPhase = (options: {
@@ -1456,7 +955,6 @@ const buildInstantiatedOrbitPhase = (options: {
   ...(options.orbitBinding ? { orbit_binding: options.orbitBinding } : {}),
   ...(options.assignments.agent ? { agent: options.assignments.agent } : {}),
   agents: options.assignments.agents,
-  requires: options.assignments.requires,
   ...(Object.keys(options.notes).length > 0 ? { notes: options.notes } : {}),
   ...options.details,
 });
@@ -1488,24 +986,10 @@ const instantiateOrbitPhase = (
   });
 };
 
-const cloneOrbitToolPermissions = (orbit: Orbit): Orbit["tool_permissions"] =>
-  orbit.tool_permissions.map((tool) => ({
-    ref: tool.ref,
-    logicalName: tool.logicalName,
-  }));
-
 const cloneOrbitOrchestrator = (
   orbit: Orbit,
 ): Orbit["orchestrator"] | undefined =>
-  orbit.orchestrator
-    ? {
-        agent: orbit.orchestrator.agent,
-        tools: orbit.orchestrator.tools.map((tool) => ({
-          ref: tool.ref,
-          logicalName: tool.logicalName,
-        })),
-      }
-    : undefined;
+  orbit.orchestrator ? { agent: orbit.orchestrator.agent } : undefined;
 
 const instantiateOrbitCheckpoint = (
   orbit: Orbit,
@@ -1600,15 +1084,40 @@ const instantiateOrbitDefinitions = (
   };
 };
 
-type ResolvedAgentSkillSurface = {
-  readonly skills: ReadonlyArray<string>;
-  readonly allowedSkills: ReadonlyArray<string>;
-};
+const resolveAgentSkillSurface = (
+  agent: Agent,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<ReadonlyArray<string>, CompileError> =>
+  resolveSkillsForTarget(agent, agent.skills, registry, target);
 
-type ResolvedAgentTargetSurface = ResolvedAgentSkillSurface & {
-  readonly toolBindings: ReadonlyArray<ResolvedContractBinding>;
-  readonly allowedTools: ReadonlyArray<string>;
-};
+const buildResolvedAgent = (
+  agent: Agent,
+  identity: Identity,
+  personality: Personality | undefined,
+  resolvedModel: Record<string, unknown> | undefined,
+  skills: ReadonlyArray<string>,
+): ResolvedAgent => ({
+  agent,
+  identity,
+  personality,
+  resolvedModel,
+  skills,
+});
+
+export const resolveAgent = (
+  agent: Agent,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<ResolvedAgent, CompileError> =>
+  Effect.gen(function* () {
+    const identity = yield* resolveAgentIdentity(agent, registry);
+    const personality = yield* resolveAgentPersonality(agent, registry);
+    const resolvedModel = yield* resolveAgentModel(agent, registry, target);
+    const skills = yield* resolveAgentSkillSurface(agent, registry, target);
+
+    return buildResolvedAgent(agent, identity, personality, resolvedModel, skills);
+  });
 
 const resolveAgentIdentity = (
   agent: Agent,
@@ -1669,161 +1178,6 @@ const resolveAgentModel = (
 
     yield* resolveModelProfileReference(agent, agent.model, registry);
     return undefined;
-  });
-
-const resolveAgentSkillSurface = (
-  agent: Agent,
-  capabilities: ResolvedAgentCapabilities,
-  registry: PluginRegistry,
-  target: string,
-): Effect.Effect<ResolvedAgentSkillSurface, CompileError> =>
-  Effect.gen(function* () {
-    const skills = yield* resolveSkillsForTarget(
-      agent,
-      capabilities.skills,
-      registry,
-      target,
-    );
-    const resolvedAccessSkills = yield* resolveSkillsForTarget(
-      agent,
-      capabilities.access.skills,
-      registry,
-      target,
-    );
-    const allowedSkills = [...new Set([
-      ...skills,
-      ...resolvedAccessSkills,
-    ])].sort((left, right) => left.localeCompare(right));
-
-    return { skills, allowedSkills };
-  });
-
-const materializeResolvedContractBindings = (
-  toolRefs: ReadonlyArray<ResolvedToolReference>,
-): ResolvedContractBinding[] =>
-  toolRefs.map(
-    ({ kind, logicalName, contract, toolPluginName, toolName, toolSourcePath }) => ({
-      kind,
-      logicalName,
-      contract,
-      toolPluginName,
-      toolName,
-      toolSourcePath,
-    }),
-  );
-
-const validateTraitRequiredSkillsForTarget = (
-  agent: Agent,
-  capabilities: ResolvedAgentCapabilities,
-  allowedSkills: ReadonlyArray<string>,
-  registry: PluginRegistry,
-  target: string,
-): Effect.Effect<void, CompileError> =>
-  Effect.gen(function* () {
-    const availableSkillNames = new Set(allowedSkills);
-    for (const resolvedTrait of capabilities.traits) {
-      const requiredSkills = yield* resolveSkillsForTarget(
-        agent,
-        resolvedTrait.trait.require.skills,
-        registry,
-        target,
-      );
-      const missingSkills = requiredSkills.filter(
-        (skillName) => !availableSkillNames.has(skillName),
-      );
-      if (missingSkills.length === 0) continue;
-
-      return yield* Effect.fail(
-        agentError(
-          agent,
-          "traits",
-          `trait '${resolvedTrait.canonicalId}' requires missing skills: ${missingSkills.join(", ")}`,
-        ),
-      );
-    }
-  });
-
-const resolveAgentTargetSurface = (
-  agent: Agent,
-  capabilities: ResolvedAgentCapabilities,
-  registry: PluginRegistry,
-  target: string,
-): Effect.Effect<ResolvedAgentTargetSurface, CompileError> =>
-  Effect.gen(function* () {
-    const skillSurface = yield* resolveAgentSkillSurface(
-      agent,
-      capabilities,
-      registry,
-      target,
-    );
-    const toolBindings = materializeResolvedContractBindings(capabilities.toolRefs);
-    const allowedTools = yield* resolveAccessToolsForTarget(
-      agent,
-      capabilities.access,
-      registry,
-      target,
-    );
-
-    yield* validateTraitRequiredSkillsForTarget(
-      agent,
-      capabilities,
-      skillSurface.allowedSkills,
-      registry,
-      target,
-    );
-
-    return {
-      ...skillSurface,
-      toolBindings,
-      allowedTools,
-    };
-  });
-
-const buildResolvedAgent = (
-  agent: Agent,
-  identity: Identity,
-  personality: Personality | undefined,
-  resolvedModel: Record<string, unknown> | undefined,
-  capabilities: ResolvedAgentCapabilities,
-  targetSurface: ResolvedAgentTargetSurface,
-): ResolvedAgent => ({
-  agent,
-  identity,
-  personality,
-  resolvedModel,
-  traits: capabilities.traits,
-  canonicalTraitIds: capabilities.canonicalTraitIds,
-  skills: targetSurface.skills,
-  allowedSkills: targetSurface.allowedSkills,
-  toolBindings: targetSurface.toolBindings,
-  allowedTools: targetSurface.allowedTools,
-});
-
-export const resolveAgent = (
-  agent: Agent,
-  registry: PluginRegistry,
-  target: string,
-): Effect.Effect<ResolvedAgent, CompileError> =>
-  Effect.gen(function* () {
-    const identity = yield* resolveAgentIdentity(agent, registry);
-    const personality = yield* resolveAgentPersonality(agent, registry);
-    const resolvedModel = yield* resolveAgentModel(agent, registry, target);
-    const capabilities = yield* resolveAgentCapabilities(agent, registry);
-    const targetSurface = yield* resolveAgentTargetSurface(
-      agent,
-      capabilities,
-      registry,
-      target,
-    );
-
-    return buildResolvedAgent(
-      agent,
-      identity,
-      personality,
-      resolvedModel,
-      capabilities,
-      targetSurface,
-    );
   });
 
 type InstantiatedOrbitHeader = {
@@ -1953,7 +1307,6 @@ const buildInstantiatedOrbit = (
     parameters: [],
     phases,
     ...(clonedOrchestrator ? { orchestrator: clonedOrchestrator } : {}),
-    tool_permissions: cloneOrbitToolPermissions(orbit),
     pulsar_checkpoints: checkpoints,
     evolution: tail.evolution,
     body: tail.body,
@@ -1986,47 +1339,82 @@ export const instantiateOrbit = (
     return buildInstantiatedOrbit(orbit, header, phases, checkpoints, tail);
   });
 
-const resolveOrbitRequiredTraitId = (
-  orbit: Orbit,
-  field: string,
-  traitRef: string,
-  registry: PluginRegistry,
-): Effect.Effect<string, CompileError> =>
-  Effect.gen(function* () {
-    const reg = yield* resolveRefToRegistry(traitRef, registry, orbit.sourcePath);
-    const name = parseNamedRef(traitRef).name;
-    const trait = reg.traits.get(name);
-    if (!trait) {
-      return yield* Effect.fail(
-        orbitError(orbit, field, `references unknown trait '${traitRef}'`),
-      );
-    }
-
-    return canonicalTraitId(reg, trait);
-  });
-
-const resolveOrbitAssignedAgent = (
+const serializePhaseContractSchema = (
   orbit: Orbit,
   phaseIndex: number,
-  agentIndex: number,
-  agentRef: string,
-  registry: PluginRegistry,
-): Effect.Effect<ResolvedAgentCapabilities, CompileError> =>
-  Effect.gen(function* () {
-    const reg = yield* resolveRefToRegistry(agentRef, registry, orbit.sourcePath);
-    const name = parseNamedRef(agentRef).name;
-    const agent = reg.agents.get(name);
-    if (!agent) {
-      return yield* Effect.fail(
-        orbitError(
+  side: "input" | "output",
+  schema: Schema.Schema.AnyNoContext,
+): Effect.Effect<Record<string, unknown>, CompileError> =>
+  Effect.try({
+    try: () => workflowJsonSchemaFromEffectSchema(schema),
+    catch: (error) => {
+      if (error instanceof WorkflowOutputSchemaError) {
+        return orbitError(
           orbit,
-          `phases[${phaseIndex}].agents[${agentIndex}]`,
-          `references unknown agent '${agentRef}'`,
-        ),
+          `phases[${phaseIndex}].contract.${side}`,
+          error.message,
+        );
+      }
+      return orbitError(
+        orbit,
+        `phases[${phaseIndex}].contract.${side}`,
+        String(error),
+      );
+    },
+  });
+
+const projectedPhaseContractCache = new WeakMap<
+  OrbitPhase,
+  CompileManifestOrbitPhaseContract | null
+>();
+
+const projectPhaseContractForManifest = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+): Effect.Effect<CompileManifestOrbitPhaseContract | undefined, CompileError> =>
+  Effect.gen(function* () {
+    if (!phase.contract) return undefined;
+
+    const cached = projectedPhaseContractCache.get(phase);
+    if (cached !== undefined) {
+      return cached ?? undefined;
+    }
+
+    const serialized: {
+      input?: Record<string, unknown>;
+      output?: Record<string, unknown>;
+    } = {};
+    if (phase.contract.input) {
+      serialized.input = yield* serializePhaseContractSchema(
+        orbit,
+        phaseIndex,
+        "input",
+        phase.contract.input as Schema.Schema.AnyNoContext,
+      );
+    }
+    if (phase.contract.output) {
+      serialized.output = yield* serializePhaseContractSchema(
+        orbit,
+        phaseIndex,
+        "output",
+        phase.contract.output as Schema.Schema.AnyNoContext,
       );
     }
 
-    return yield* resolveAgentCapabilities(agent, reg);
+    const projected =
+      serialized.input || serialized.output ? serialized : undefined;
+    projectedPhaseContractCache.set(phase, projected ?? null);
+    return projected;
+  });
+
+const validatePhaseContractSchemas = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
+    yield* projectPhaseContractForManifest(orbit, phase, phaseIndex);
   });
 
 type PhaseOrbitReferenceResolution = "orbit" | "agent" | undefined;
@@ -2153,212 +1541,6 @@ const validatePhaseOrbitBinding = (
     }
   });
 
-const resolvePhaseAssignedAgents = (
-  orbit: Orbit,
-  phase: OrbitPhase,
-  phaseIndex: number,
-  registry: PluginRegistry,
-): Effect.Effect<ResolvedAgentCapabilities[], CompileError> =>
-  Effect.gen(function* () {
-    const assignedAgentCapabilities: ResolvedAgentCapabilities[] = [];
-    const assignedAgentIds = new Set<string>();
-
-    for (const [agentIndex, agentRef] of phase.agents.entries()) {
-      const agentCapabilities = yield* resolveOrbitAssignedAgent(
-        orbit,
-        phaseIndex,
-        agentIndex,
-        agentRef,
-        registry,
-      );
-      const agentId = `${agentCapabilities.agent.name}:${agentCapabilities.agent.sourcePath}`;
-      if (assignedAgentIds.has(agentId)) {
-        return yield* Effect.fail(
-          orbitError(
-            orbit,
-            `phases[${phaseIndex}].agents[${agentIndex}]`,
-            `phase '${phase.name}' assigns duplicate agent '${agentRef}'`,
-          ),
-        );
-      }
-      assignedAgentIds.add(agentId);
-      assignedAgentCapabilities.push(agentCapabilities);
-    }
-
-    return assignedAgentCapabilities;
-  });
-
-const validatePhaseRequiresAssignedAgents = (
-  orbit: Orbit,
-  phase: OrbitPhase,
-  phaseIndex: number,
-): OrbitValidationError | undefined => {
-  if (phase.requires.length === 0 || phase.agents.length > 0) return undefined;
-
-  return orbitError(
-    orbit,
-    `phases[${phaseIndex}].requires`,
-    `phase '${phase.name}' declares trait requirements but assigns no agents`,
-  );
-};
-
-const validatePhaseRequirement = (
-  orbit: Orbit,
-  phase: OrbitPhase,
-  phaseIndex: number,
-  requirementIndex: number,
-  assignedAgentCapabilities: ReadonlyArray<ResolvedAgentCapabilities>,
-  registry: PluginRegistry,
-): Effect.Effect<void, CompileError> =>
-  Effect.gen(function* () {
-    const requirement = phase.requires[requirementIndex]!;
-    const min = requirement.min ?? 1;
-    if (!Number.isInteger(min) || min < 1) {
-      return yield* Effect.fail(
-        orbitError(
-          orbit,
-          `phases[${phaseIndex}].requires[${requirementIndex}].min`,
-          "min must be an integer greater than or equal to 1",
-        ),
-      );
-    }
-
-    if (requirement.all.length === 0) {
-      return yield* Effect.fail(
-        orbitError(
-          orbit,
-          `phases[${phaseIndex}].requires[${requirementIndex}].all`,
-          "trait requirement must include at least one trait",
-        ),
-      );
-    }
-
-    const requiredTraitIds = new Set<string>();
-    for (const [traitIndex, traitRef] of requirement.all.entries()) {
-      const traitId = yield* resolveOrbitRequiredTraitId(
-        orbit,
-        `phases[${phaseIndex}].requires[${requirementIndex}].all[${traitIndex}]`,
-        traitRef,
-        registry,
-      );
-      requiredTraitIds.add(traitId);
-    }
-
-    const satisfiedCount = assignedAgentCapabilities.filter((agentCapabilities) =>
-      [...requiredTraitIds].every((traitId) =>
-        agentCapabilities.canonicalTraitIds.includes(traitId),
-      ),
-    ).length;
-
-    if (satisfiedCount < min) {
-      return yield* Effect.fail(
-        orbitError(
-          orbit,
-          `phases[${phaseIndex}].requires[${requirementIndex}]`,
-          `phase '${phase.name}' requires at least ${min} assigned agent(s) with all traits [${[...requiredTraitIds].join(", ")}], but only ${satisfiedCount} match`,
-        ),
-      );
-    }
-  });
-
-const validatePhaseRequirements = (
-  orbit: Orbit,
-  phase: OrbitPhase,
-  phaseIndex: number,
-  assignedAgentCapabilities: ReadonlyArray<ResolvedAgentCapabilities>,
-  registry: PluginRegistry,
-): Effect.Effect<void, CompileError> =>
-  Effect.gen(function* () {
-    for (const requirementIndex of phase.requires.keys()) {
-      yield* validatePhaseRequirement(
-        orbit,
-        phase,
-        phaseIndex,
-        requirementIndex,
-        assignedAgentCapabilities,
-        registry,
-      );
-    }
-  });
-
-const serializePhaseContractSchema = (
-  orbit: Orbit,
-  phaseIndex: number,
-  side: "input" | "output",
-  schema: Schema.Schema.AnyNoContext,
-): Effect.Effect<Record<string, unknown>, CompileError> =>
-  Effect.try({
-    try: () => workflowJsonSchemaFromEffectSchema(schema),
-    catch: (error) => {
-      if (error instanceof WorkflowOutputSchemaError) {
-        return orbitError(
-          orbit,
-          `phases[${phaseIndex}].contract.${side}`,
-          error.message,
-        );
-      }
-      return orbitError(
-        orbit,
-        `phases[${phaseIndex}].contract.${side}`,
-        String(error),
-      );
-    },
-  });
-
-const projectedPhaseContractCache = new WeakMap<
-  OrbitPhase,
-  CompileManifestOrbitPhaseContract | null
->();
-
-const projectPhaseContractForManifest = (
-  orbit: Orbit,
-  phase: OrbitPhase,
-  phaseIndex: number,
-): Effect.Effect<CompileManifestOrbitPhaseContract | undefined, CompileError> =>
-  Effect.gen(function* () {
-    if (!phase.contract) return undefined;
-
-    const cached = projectedPhaseContractCache.get(phase);
-    if (cached !== undefined) {
-      return cached ?? undefined;
-    }
-
-    const serialized: {
-      input?: Record<string, unknown>;
-      output?: Record<string, unknown>;
-    } = {};
-    if (phase.contract.input) {
-      serialized.input = yield* serializePhaseContractSchema(
-        orbit,
-        phaseIndex,
-        "input",
-        phase.contract.input as Schema.Schema.AnyNoContext,
-      );
-    }
-    if (phase.contract.output) {
-      serialized.output = yield* serializePhaseContractSchema(
-        orbit,
-        phaseIndex,
-        "output",
-        phase.contract.output as Schema.Schema.AnyNoContext,
-      );
-    }
-
-    const projected =
-      serialized.input || serialized.output ? serialized : undefined;
-    projectedPhaseContractCache.set(phase, projected ?? null);
-    return projected;
-  });
-
-const validatePhaseContractSchemas = (
-  orbit: Orbit,
-  phase: OrbitPhase,
-  phaseIndex: number,
-): Effect.Effect<void, CompileError> =>
-  Effect.gen(function* () {
-    yield* projectPhaseContractForManifest(orbit, phase, phaseIndex);
-  });
-
 const validateOrbitPhase = (
   orbit: Orbit,
   phase: OrbitPhase,
@@ -2383,202 +1565,33 @@ const validateOrbitPhase = (
 
     yield* validatePhaseOrbitBinding(orbit, phase, phaseIndex, registry);
 
-    const missingAgentsError = validatePhaseRequiresAssignedAgents(
-      orbit,
-      phase,
-      phaseIndex,
-    );
-    if (missingAgentsError) {
-      return yield* Effect.fail(missingAgentsError);
-    }
-
-    if (phase.agents.length === 0) return;
-
-    const assignedAgentCapabilities = yield* resolvePhaseAssignedAgents(
-      orbit,
-      phase,
-      phaseIndex,
-      registry,
-    );
-    yield* validatePhaseRequirements(
-      orbit,
-      phase,
-      phaseIndex,
-      assignedAgentCapabilities,
-      registry,
-    );
-  });
-
-const phaseAssignedLocalAgents = (
-  orbit: Orbit,
-  registry: PluginRegistry,
-): Set<string> => {
-  const assigned = new Set<string>();
-  for (const phase of orbit.phases) {
-    for (const agentRef of phase.agents) {
-      const parsed = parseNamedRef(agentRef);
-      if (parsed.pluginPrefix) continue;
-      if (!registry.agents.has(parsed.name)) continue;
-      assigned.add(parsed.name);
-    }
-  }
-  return assigned;
-};
-
-const orchestratorLocalAgent = (
-  orbit: Orbit,
-  registry: PluginRegistry,
-): string | undefined => {
-  if (!orbit.orchestrator) return undefined;
-  const parsed = parseNamedRef(orbit.orchestrator.agent);
-  if (parsed.pluginPrefix) return undefined;
-  if (!registry.agents.has(parsed.name)) return undefined;
-  return parsed.name;
-};
-
-const orbitSkillRecipients = (
-  orbit: Orbit,
-  registry: PluginRegistry,
-): Set<string> => {
-  const recipients = phaseAssignedLocalAgents(orbit, registry);
-  const orchestrator = orchestratorLocalAgent(orbit, registry);
-  if (orchestrator) recipients.add(orchestrator);
-  return recipients;
-};
-
-export const resolveOrbitSkillPermissions = (
-  orbits: ReadonlyArray<Orbit>,
-  registry: PluginRegistry,
-): ReadonlyMap<string, ReadonlyArray<string>> => {
-  const byAgent = new Map<string, Set<string>>();
-
-  for (const orbit of orbits) {
-    const recipients = orbitSkillRecipients(orbit, registry);
-
-    for (const agentName of recipients) {
-      const agentSkills = byAgent.get(agentName) ?? new Set<string>();
-      agentSkills.add(orbit.name);
-      byAgent.set(agentName, agentSkills);
-    }
-  }
-
-  return new Map(
-    [...byAgent.entries()].map(([agentName, skills]) => [
-      agentName,
-      [...skills].sort((left, right) => left.localeCompare(right)),
-    ]),
-  );
-};
-
-interface OrbitToolGrant {
-  readonly logicalName: string;
-  readonly ref: string;
-  readonly field: string;
-}
-
-const grantOrbitTool = (
-  orbit: Orbit,
-  registry: PluginRegistry,
-  agentName: string,
-  grant: OrbitToolGrant,
-  byAgent: Map<string, ResolvedContractBinding[]>,
-): CompileError | undefined => {
-  const bindings = byAgent.get(agentName) ?? [];
-  const existing = new Set(bindings.map((binding) => binding.logicalName));
-  if (existing.has(grant.logicalName)) {
-    // Orbit-wide grant already added this logical name to this agent; idempotent skip.
-    return undefined;
-  }
-
-  const materialized = materializeOrbitToolPermission({
-    logicalName: grant.logicalName,
-    toolRef: grant.ref,
-    registry,
-  });
-  if (!(materialized instanceof Object) || "message" in materialized) {
-    return orbitError(orbit, grant.field, materialized.message);
-  }
-
-  bindings.push({
-    kind: materialized.kind,
-    logicalName: materialized.logicalName,
-    contract: materialized.contract,
-    toolPluginName: materialized.toolPluginName,
-    toolName: materialized.toolName,
-    toolSourcePath: materialized.toolSourcePath,
-  });
-  byAgent.set(agentName, bindings);
-  return undefined;
-};
-
-export const resolveOrbitToolPermissions = (
-  orbits: ReadonlyArray<Orbit>,
-  registry: PluginRegistry,
-): Effect.Effect<ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>>, CompileError> =>
-  Effect.gen(function* () {
-    const byAgent = new Map<string, ResolvedContractBinding[]>();
-
-    for (const orbit of orbits) {
-      const phaseAgents = phaseAssignedLocalAgents(orbit, registry);
-
-      // Orbit-wide tool_permissions: materialize on every phase agent.
-      for (const [toolIndex, tool] of orbit.tool_permissions.entries()) {
-        const field = `tool_permissions[${toolIndex}]`;
-        for (const agentName of phaseAgents) {
-          const error = grantOrbitTool(
+    const assignedAgentIds = new Set<string>();
+    for (const [agentIndex, agentRef] of phase.agents.entries()) {
+      const reg = yield* resolveRefToRegistry(agentRef, registry, orbit.sourcePath);
+      const name = parseNamedRef(agentRef).name;
+      const agent = reg.agents.get(name);
+      if (!agent) {
+        return yield* Effect.fail(
+          orbitError(
             orbit,
-            registry,
-            agentName,
-            { logicalName: tool.logicalName, ref: tool.ref, field },
-            byAgent,
-          );
-          if (error) return yield* Effect.fail(error);
-        }
+            `phases[${phaseIndex}].agents[${agentIndex}]`,
+            `references unknown agent '${agentRef}'`,
+          ),
+        );
       }
 
-      // Orchestrator-only tools: validate the orchestrator agent and materialize on it.
-      if (orbit.orchestrator) {
-        const parsed = parseNamedRef(orbit.orchestrator.agent);
-        if (parsed.pluginPrefix) {
-          return yield* Effect.fail(
-            orbitError(
-              orbit,
-              "orchestrator.agent",
-              `orbit orchestrator must be a local agent compiled by '${registry.pluginName}', got '${orbit.orchestrator.agent}'`,
-            ),
-          );
-        }
-
-        if (!registry.agents.has(parsed.name)) {
-          return yield* Effect.fail(
-            orbitError(
-              orbit,
-              "orchestrator.agent",
-              `references unknown agent '${orbit.orchestrator.agent}'`,
-            ),
-          );
-        }
-
-        for (const [toolIndex, tool] of orbit.orchestrator.tools.entries()) {
-          const field = `orchestrator.tools[${toolIndex}]`;
-          const error = grantOrbitTool(
+      const agentId = `${reg.pluginName}:${agent.name}`;
+      if (assignedAgentIds.has(agentId)) {
+        return yield* Effect.fail(
+          orbitError(
             orbit,
-            registry,
-            parsed.name,
-            { logicalName: tool.logicalName, ref: tool.ref, field },
-            byAgent,
-          );
-          if (error) return yield* Effect.fail(error);
-        }
+            `phases[${phaseIndex}].agents[${agentIndex}]`,
+            `phase '${phase.name}' assigns duplicate agent '${agentRef}'`,
+          ),
+        );
       }
+      assignedAgentIds.add(agentId);
     }
-
-    return new Map(
-      [...byAgent.entries()].map(([agentName, bindings]) => [
-        agentName,
-        bindings.sort((left, right) => left.logicalName.localeCompare(right.logicalName)),
-      ]),
-    );
   });
 
 export const validateOrbit = (
@@ -2604,16 +1617,19 @@ const projectOrbitPhaseForManifest = (
 ): Effect.Effect<CompileManifestOrbitPhase, CompileError> =>
   Effect.gen(function* () {
     const agents: Array<{ plugin: string; name: string }> = [];
-    for (const [agentIndex, agentRef] of phase.agents.entries()) {
-      const capabilities = yield* resolveOrbitAssignedAgent(
-        orbit,
-        phaseIndex,
-        agentIndex,
-        agentRef,
-        registry,
-      );
+    for (const agentRef of phase.agents) {
       const reg = yield* resolveRefToRegistry(agentRef, registry, orbit.sourcePath);
-      agents.push({ plugin: reg.pluginName, name: capabilities.agent.name });
+      const name = parseNamedRef(agentRef).name;
+      if (!reg.agents.has(name)) {
+        return yield* Effect.fail(
+          orbitError(
+            orbit,
+            `phases[${phaseIndex}].agents`,
+            `references unknown agent '${agentRef}'`,
+          ),
+        );
+      }
+      agents.push({ plugin: reg.pluginName, name });
     }
 
     const framing: CompileManifestOrbitPhase["framing"] = {

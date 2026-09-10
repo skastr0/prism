@@ -3,9 +3,7 @@
  *
  * The canonical structured source model is TypeScript-first:
  * - agents/*.agent.ts
- * - traits/*.trait.ts
  * - orbits/*.orbit.ts
- * - toolspaces/*.toolspace.ts
  * - modelspaces/*.modelspace.ts
  * - skillspaces/*.skillspace.ts
  * - hooks/*.hook.ts
@@ -25,30 +23,12 @@ export interface NamedRefDefinition {
   readonly name: string;
 }
 
-export interface TraitRefDefinition extends NamedRefDefinition {
-  readonly kind: "trait-ref";
-}
-
 export interface AgentRefDefinition extends NamedRefDefinition {
   readonly kind: "agent-ref";
 }
 
 export interface OrbitRefDefinition extends NamedRefDefinition {
   readonly kind: "orbit-ref";
-}
-
-export interface ToolRefDefinition {
-  readonly kind: "tool-ref";
-  readonly plugin?: string;
-  readonly toolspace: string;
-  readonly name: string;
-}
-
-export interface ToolGroupRefDefinition {
-  readonly kind: "tool-group-ref";
-  readonly plugin?: string;
-  readonly toolspace: string;
-  readonly name: string;
 }
 
 export interface ModelProfileRefDefinition {
@@ -71,20 +51,11 @@ export interface SkillspaceRefDefinition {
   readonly name: string;
 }
 
-export type TraitRefInput = string | TraitRefDefinition;
 export type AgentRefInput = string | AgentRefDefinition;
 export type OrbitRefInput = string | OrbitRefDefinition;
-export type ToolRefInput = string | ToolRefDefinition;
-export type ToolGroupRefInput = string | ToolGroupRefDefinition;
 export type ModelProfileRefInput = string | ModelProfileRefDefinition;
 export type SkillRefInput = SkillRefDefinition | SkillspaceRefDefinition;
 export type EffectSchemaValue = import("effect").Schema.Schema.AnyNoContext;
-
-export interface AccessDefinition {
-  readonly tools?: ReadonlyArray<ToolRefInput>;
-  readonly toolGroups?: ReadonlyArray<ToolGroupRefInput>;
-  readonly skills?: ReadonlyArray<SkillRefInput>;
-}
 
 export interface AgentDefinition {
   readonly name: string;
@@ -92,8 +63,6 @@ export interface AgentDefinition {
   readonly identity: string;
   readonly personality?: string;
   readonly model?: ModelProfileRefInput;
-  readonly traits?: ReadonlyArray<TraitRefInput | TraitBindingSource>;
-  readonly access?: AccessDefinition;
   readonly skills?: ReadonlyArray<SkillRefInput>;
   readonly color?: string;
   readonly targets?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
@@ -112,50 +81,12 @@ export interface CanonicalToolDefinition {
 
 export type ToolSource = CanonicalToolDefinition;
 
-export interface TraitDefinition {
-  readonly name: string;
-  readonly description?: string;
-  readonly instructions?: string | ReadonlyArray<string>;
-  readonly access?: AccessDefinition;
-  readonly tools?: Readonly<Record<string, TraitToolAttachmentDefinition>>;
-  readonly inject?: {
-    readonly skills?: ReadonlyArray<SkillRefInput>;
-  };
-  readonly require?: {
-    readonly tools?: ReadonlyArray<string>;
-    readonly skills?: ReadonlyArray<SkillRefInput>;
-  };
-}
-
-export type TraitSource = TraitDefinition;
-
-export interface TraitBindingDefinition {
-  readonly kind: "trait-binding";
-  readonly trait: TraitRefInput;
-  readonly tools?: Readonly<Record<string, TraitBindingToolDefinition>>;
-}
-
-export interface PlainTraitBindingDefinition {
-  readonly trait: TraitRefInput;
-  readonly tools?: Readonly<Record<string, TraitBindingToolDefinition>>;
-}
-
-export type TraitBindingSource = TraitBindingDefinition | PlainTraitBindingDefinition;
-
 export interface ToolSchemaSlotDefinition {
   readonly kind: "schema";
   readonly description?: string;
 }
 
 export type ToolSlotDefinition = ToolSchemaSlotDefinition;
-
-export interface TraitBindingToolDefinition {
-  readonly slots?: Readonly<Record<string, EffectSchemaValue>>;
-}
-
-export interface TraitToolAttachmentDefinition {
-  readonly ref: string;
-}
 
 export interface OrbitParameterDefinition {
   readonly name: string;
@@ -168,21 +99,8 @@ export interface OrbitBindingDefinition {
   readonly bindings?: Readonly<Record<string, string>>;
 }
 
-export interface OrbitTraitRequirementDefinition {
-  readonly all: ReadonlyArray<TraitRefInput>;
-  readonly min?: number;
-}
-
-export type OrbitToolPermissionToolDefinition =
-  | string
-  | {
-      readonly ref: string;
-      readonly as?: string;
-    };
-
 export interface OrbitOrchestratorDefinition {
   readonly agent: AgentRefInput;
-  readonly tools: ReadonlyArray<OrbitToolPermissionToolDefinition>;
 }
 
 export interface OrbitPhaseWorkflowDefinition {
@@ -201,7 +119,6 @@ export interface OrbitPhaseDefinition {
   readonly orbit_binding?: OrbitBindingDefinition;
   readonly agents?: ReadonlyArray<AgentRefInput>;
   readonly agent?: AgentRefInput;
-  readonly requires?: ReadonlyArray<OrbitTraitRequirementDefinition>;
   readonly notes?: Readonly<Record<string, string>>;
   /**
    * Short structured fields rendered into the root orbit SKILL.md per-phase
@@ -255,7 +172,7 @@ export interface OrbitSignalEmitterDefinition {
    * `project_key`/`orbit` pair, optionally with a default priority and a
    * note describing what the destination handles. Used as structural
    * documentation, as input for delegation-map validation, and as the
-   * basis for tighter bound trait surfaces (e.g., per-destination
+   * basis for tighter bound agent surfaces (e.g., per-destination
    * delegate wrappers) when wanted.
    *
    * Leaving this empty marks the orbit as an emitter without constraining
@@ -288,46 +205,19 @@ export interface OrbitDefinition {
   readonly parameters?: ReadonlyArray<OrbitParameterDefinition>;
   readonly phases: ReadonlyArray<OrbitPhaseDefinition>;
   readonly orchestrator?: OrbitOrchestratorDefinition;
-  readonly tool_permissions?: ReadonlyArray<OrbitToolPermissionToolDefinition>;
   readonly pulsar_checkpoints?: ReadonlyArray<OrbitPulsarCheckpointDefinition>;
   readonly evolution?: string;
   readonly body?: string;
   /**
    * When present, declares this orbit emits signals to other orbits — the
    * routing/delegation surface that is privileged separately from the
-   * receive-side signal tools. Authors should attach the `signal-emitter`
-   * trait (from the `oracle` plugin) to the orchestrator agent (and to
-   * any other phase agent that authentically owns inter-orbit
-   * delegation). Declared `destinations` make the routing surface
-   * explicit and auditable.
+   * receive-side signal tools. Declared `destinations` make the routing
+   * surface explicit and auditable.
    */
   readonly signal_emitter?: OrbitSignalEmitterDefinition;
 }
 
 export type OrbitSource = OrbitDefinition;
-
-export interface ToolTargetBindingDefinition {
-  readonly name: string;
-}
-
-export interface ToolDefinition {
-  readonly description?: string;
-  readonly targets: Readonly<Record<string, ToolTargetBindingDefinition>>;
-}
-
-export interface ToolGroupDefinition {
-  readonly description?: string;
-  readonly tools: ReadonlyArray<ToolRefInput>;
-}
-
-export interface ToolspaceDefinition {
-  readonly name: string;
-  readonly description?: string;
-  readonly tools: Readonly<Record<string, ToolDefinition>>;
-  readonly groups?: Readonly<Record<string, ToolGroupDefinition>>;
-}
-
-export type ToolspaceSource = ToolspaceDefinition;
 
 export interface ModelTargetDefinition {
   readonly model: string;
@@ -617,14 +507,9 @@ export interface HookAnyToolMatcherDefinition {
   readonly kind: "hook-any-tool";
 }
 
-export interface HookToolspaceToolMatcherDefinition {
-  readonly kind: "hook-toolspace-tool";
-  readonly tool: ToolRefInput;
-}
-
-export interface HookToolspaceGroupMatcherDefinition {
-  readonly kind: "hook-toolspace-group";
-  readonly group: ToolGroupRefInput;
+export interface HookNativeToolMatcherDefinition {
+  readonly kind: "hook-native-tool";
+  readonly name: string;
 }
 
 export interface HookCanonicalToolMatcherDefinition {
@@ -634,8 +519,7 @@ export interface HookCanonicalToolMatcherDefinition {
 
 export type HookToolMatcherDefinition =
   | HookAnyToolMatcherDefinition
-  | HookToolspaceToolMatcherDefinition
-  | HookToolspaceGroupMatcherDefinition
+  | HookNativeToolMatcherDefinition
   | HookCanonicalToolMatcherDefinition;
 
 export interface ToolHookMatchDefinition {
@@ -674,12 +558,6 @@ export const withNamedRef = <TKind extends string>(
     ? { kind, name: first }
     : { kind, plugin: first, name: second };
 
-export function traitRef(name: string): TraitRefDefinition;
-export function traitRef(plugin: string, name: string): TraitRefDefinition;
-export function traitRef(first: string, second?: string): TraitRefDefinition {
-  return withNamedRef("trait-ref", first, second);
-}
-
 export function agentRef(name: string): AgentRefDefinition;
 export function agentRef(plugin: string, name: string): AgentRefDefinition;
 export function agentRef(first: string, second?: string): AgentRefDefinition {
@@ -690,41 +568,6 @@ export function orbitRef(name: string): OrbitRefDefinition;
 export function orbitRef(plugin: string, name: string): OrbitRefDefinition;
 export function orbitRef(first: string, second?: string): OrbitRefDefinition {
   return withNamedRef("orbit-ref", first, second);
-}
-
-export function toolRef(toolspace: string, name: string): ToolRefDefinition;
-export function toolRef(
-  plugin: string,
-  toolspace: string,
-  name: string,
-): ToolRefDefinition;
-export function toolRef(
-  first: string,
-  second: string,
-  third?: string,
-): ToolRefDefinition {
-  return third === undefined
-    ? { kind: "tool-ref", toolspace: first, name: second }
-    : { kind: "tool-ref", plugin: first, toolspace: second, name: third };
-}
-
-export function toolGroupRef(
-  toolspace: string,
-  name: string,
-): ToolGroupRefDefinition;
-export function toolGroupRef(
-  plugin: string,
-  toolspace: string,
-  name: string,
-): ToolGroupRefDefinition;
-export function toolGroupRef(
-  first: string,
-  second: string,
-  third?: string,
-): ToolGroupRefDefinition {
-  return third === undefined
-    ? { kind: "tool-group-ref", toolspace: first, name: second }
-    : { kind: "tool-group-ref", plugin: first, toolspace: second, name: third };
 }
 
 export function modelProfileRef(
@@ -788,24 +631,11 @@ export const schemaSlot = (
   ...options,
 });
 
-export const bindTrait = (
-  trait: TraitRefInput,
-  options: { readonly tools?: Readonly<Record<string, TraitBindingToolDefinition>> } = {},
-): TraitBindingDefinition => ({
-  kind: "trait-binding",
-  trait,
-  ...(options.tools ? { tools: options.tools } : {}),
-});
-
 export const hookTool = {
   any: (): HookAnyToolMatcherDefinition => ({ kind: "hook-any-tool" }),
-  tool: (tool: ToolRefInput): HookToolspaceToolMatcherDefinition => ({
-    kind: "hook-toolspace-tool",
-    tool,
-  }),
-  group: (group: ToolGroupRefInput): HookToolspaceGroupMatcherDefinition => ({
-    kind: "hook-toolspace-group",
-    group,
+  native: (name: string): HookNativeToolMatcherDefinition => ({
+    kind: "hook-native-tool",
+    name,
   }),
   canonical: (ref: string): HookCanonicalToolMatcherDefinition => ({
     kind: "hook-canonical-tool",

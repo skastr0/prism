@@ -16,8 +16,6 @@ import {
   bindingsFromCanonicalTools,
   bindingsOwnedByPlugin,
   collectBindingNameMap,
-  groupAgentToolBindingsByOwner,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -114,26 +112,12 @@ const piOverrideForAgent = (agent: ComposedAgent): Record<string, unknown> | und
   agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
 
 const composeAgentTools = (
-  agent: ComposedAgent,
-  target: PiLowerTarget,
   override: Record<string, unknown> | undefined,
-): string[] => {
-  const generatedTools: string[] = [];
-  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-    target.sourcePluginName,
-    agent,
-  )) {
-    for (const binding of bindings) {
-      generatedTools.push(cliToolNameForBinding(ownerPlugin, binding));
-    }
-  }
-  return uniqueSorted([
+): string[] =>
+  uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
-    ...agent.allowedTools,
-    ...generatedTools,
   ], { dropEmpty: true });
-};
 
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
@@ -150,8 +134,8 @@ const composePiAgentFrontmatter = (
 ): Record<string, unknown> => {
   const override = piOverrideForAgent(agent);
   const model = agent.model ?? {};
-  const tools = composeAgentTools(agent, target, override);
-  const skills = uniqueSorted([...agent.skills, ...agent.allowedSkills], { dropEmpty: true });
+  const tools = composeAgentTools(override);
+  const skills = uniqueSorted(agent.skills, { dropEmpty: true });
 
   return {
     name: stringValue(override?.name) ?? agent.name,
@@ -202,7 +186,7 @@ const uniqueBindings = (
 ): ReadonlyArray<ResolvedContractBinding> => {
   const byToolName = new Map<string, ResolvedContractBinding>();
   for (const binding of bindings) {
-    const toolName = cliToolNameForBinding(sourcePluginName, binding);
+    const toolName = cliToolNameForBinding(binding);
     const existing = byToolName.get(toolName);
     if (!existing) {
       byToolName.set(toolName, binding);
@@ -210,17 +194,14 @@ const uniqueBindings = (
     }
 
     const same =
-      existing.kind === binding.kind &&
       existing.toolPluginName === binding.toolPluginName &&
       existing.toolName === binding.toolName &&
-      existing.toolSourcePath === binding.toolSourcePath &&
-      existing.contract?.pluginName === binding.contract?.pluginName &&
-      existing.contract?.name === binding.contract?.name;
+      existing.toolSourcePath === binding.toolSourcePath;
     if (!same) throw new Error(`Pi tool name collision for '${toolName}'`);
   }
   return [...byToolName.values()].sort((left, right) =>
-    cliToolNameForBinding(sourcePluginName, left).localeCompare(
-      cliToolNameForBinding(sourcePluginName, right),
+    cliToolNameForBinding(left).localeCompare(
+      cliToolNameForBinding(right),
     ),
   );
 };
@@ -339,16 +320,13 @@ const planHookWrappers = async (
   desiredRelativePaths: Set<string>,
 ): Promise<PlannedHook[]> => {
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
-  const bindings = uniqueBindings(input.target.sourcePluginName, [
-    ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
-    ...input.agents.flatMap((agent) => agent.toolBindings),
-  ]);
+  const bindings = uniqueBindings(
+    input.target.sourcePluginName,
+    bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
+  );
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => {
-      const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-      return cliToolNameForBinding(owner, binding);
-    },
+    (binding) => cliToolNameForBinding(binding),
   );
   const planned: PlannedHook[] = [];
 
@@ -512,7 +490,6 @@ const planExtension = async (options: {
     ...bindingsOwnedByPlugin(
       options.input.target.sourcePluginName,
       options.input.tools ?? [],
-      options.input.agents,
     ),
   ]);
   const setupSource = renderPiSetupSource({
@@ -549,7 +526,6 @@ const hasPackageOutput = (
   bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools ?? [],
-    input.agents,
   ).length > 0 ||
   input.orbits.length > 0 ||
   (input.tools?.length ?? 0) > 0 ||

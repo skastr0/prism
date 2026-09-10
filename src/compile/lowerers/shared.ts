@@ -635,7 +635,6 @@ export const planGeneratedPluginHookWrites = async <
       mcpBindingsForAgentsAndTools(
         options.input.target.sourcePluginName,
         options.input.tools,
-        options.input.agents,
       ),
     ),
     bundleHookWrapper: options.bundleHookWrapper,

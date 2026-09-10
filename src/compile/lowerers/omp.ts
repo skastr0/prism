@@ -16,8 +16,6 @@ import {
   bindingsFromCanonicalTools,
   bindingsOwnedByPlugin,
   collectBindingNameMap,
-  groupAgentToolBindingsByOwner,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
@@ -88,26 +86,12 @@ const nonEmptyString = (value: unknown): string | undefined =>
 
 
 const composeAgentTools = (
-  agent: ComposedAgent,
-  target: OmpLowerTarget,
   override: Record<string, unknown> | undefined,
-): string[] => {
-  const generatedTools: string[] = [];
-  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-    target.sourcePluginName,
-    agent,
-  )) {
-    for (const binding of bindings) {
-      generatedTools.push(cliToolNameForBinding(ownerPlugin, binding));
-    }
-  }
-  return uniqueSorted([
+): string[] =>
+  uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
-    ...agent.allowedTools,
-    ...generatedTools,
   ], { dropEmpty: true });
-};
 
 const OMP_THINKING_LEVELS = new Set([
   "off",
@@ -133,7 +117,7 @@ const composeAgentFrontmatter = (
 ): Record<string, unknown> => {
   const override = agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
   const model = agent.model ?? {};
-  const tools = composeAgentTools(agent, target, override);
+  const tools = composeAgentTools(override);
   const spawns = override?.spawns === "*" ? "*" : stringArray(override?.spawns);
   const overrideModels = stringArray(override?.model);
   const configuredModel =
@@ -180,7 +164,7 @@ const uniqueBindings = (
 ): ReadonlyArray<ResolvedContractBinding> => {
   const byToolName = new Map<string, ResolvedContractBinding>();
   for (const binding of bindings) {
-    const toolName = cliToolNameForBinding(sourcePluginName, binding);
+    const toolName = cliToolNameForBinding(binding);
     const existing = byToolName.get(toolName);
     if (existing === undefined) {
       byToolName.set(toolName, binding);
@@ -188,17 +172,14 @@ const uniqueBindings = (
     }
 
     const sameBinding =
-      existing.kind === binding.kind &&
       existing.toolPluginName === binding.toolPluginName &&
       existing.toolName === binding.toolName &&
-      existing.toolSourcePath === binding.toolSourcePath &&
-      existing.contract?.pluginName === binding.contract?.pluginName &&
-      existing.contract?.name === binding.contract?.name;
+      existing.toolSourcePath === binding.toolSourcePath;
     if (!sameBinding) throw new Error(`OMP tool name collision for '${toolName}'`);
   }
   return [...byToolName.values()].sort((left, right) =>
-    cliToolNameForBinding(sourcePluginName, left).localeCompare(
-      cliToolNameForBinding(sourcePluginName, right),
+    cliToolNameForBinding(left).localeCompare(
+      cliToolNameForBinding(right),
     ),
   );
 };
@@ -248,14 +229,13 @@ const planHookWrappers = async (
   const hooks = [...(input.hooks ?? [])].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
-  const bindings = uniqueBindings(input.target.sourcePluginName, [
-    ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
-    ...input.agents.flatMap((agent) => agent.toolBindings),
-  ]);
-  const canonicalToolNames = collectBindingNameMap(bindings, (binding) => {
-    const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-    return cliToolNameForBinding(owner, binding);
-  });
+  const bindings = uniqueBindings(
+    input.target.sourcePluginName,
+    bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
+  );
+  const canonicalToolNames = collectBindingNameMap(bindings, (binding) =>
+    cliToolNameForBinding(binding),
+  );
   const planned: PlannedHook[] = [];
 
   for (const hook of hooks) {
@@ -413,7 +393,6 @@ const planExtension = async (options: {
     ...bindingsOwnedByPlugin(
       options.input.target.sourcePluginName,
       options.input.tools ?? [],
-      options.input.agents,
     ),
   ]);
   const setupSource = renderHookSetup(options.plannedHooks);

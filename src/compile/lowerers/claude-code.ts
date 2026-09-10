@@ -140,9 +140,7 @@ const composeAgentFrontmatter = (
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
   ]);
-  const tools = explicitTools.length > 0
-    ? uniqueSorted([...explicitTools, ...agent.allowedTools])
-    : [];
+  const tools = explicitTools.length > 0 ? explicitTools : [];
 
   return {
     name: agent.name,
@@ -178,7 +176,7 @@ const composeAgentFrontmatter = (
       ...stringArray(override?.disallowedTools),
       ...stringArray(override?.["disallowed-tools"]),
     ],
-    skills: uniqueSorted(agent.allowedSkills),
+    skills: uniqueSorted(agent.skills),
   };
 };
 
@@ -229,9 +227,8 @@ const claudeNativeHookEvent = (event: Hook["event"]): string => {
 
 /** Logical generated tool name for hook matchers (CLI tool surface, not MCP wire). */
 const claudeToolNameForBinding = (
-  ownerPluginName: string,
   binding: ResolvedContractBinding,
-): string => cliToolNameForBinding(ownerPluginName, binding);
+): string => cliToolNameForBinding(binding);
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
@@ -242,10 +239,7 @@ const renderHooksJson = async (
   const groupedHooks: Record<string, unknown[]> = {};
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => {
-      const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return claudeToolNameForBinding(owner, binding);
-    },
+    (binding) => claudeToolNameForBinding(binding),
   );
 
   for (const hook of hooks) {

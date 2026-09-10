@@ -10,15 +10,7 @@
 import fc from "fast-check";
 import { Schema } from "effect";
 import { emptyRegistry, type PluginRegistry } from "../registry.js";
-import {
-  CanonicalTool,
-  Modelspace,
-  Skillspace,
-  Toolspace,
-  Trait,
-  type NormalizedTraitBinding,
-  type NormalizedTraitBindingToolSlot,
-} from "../sources.js";
+import { Modelspace, Skillspace } from "../sources.js";
 
 // ---------------------------------------------------------------------------
 // Shared primitives
@@ -149,147 +141,8 @@ export const arbitraryRegistry = (opts: ArbitraryRegistryOptions = {}): fc.Arbit
 };
 
 // ---------------------------------------------------------------------------
-// Canonical tools
-// ---------------------------------------------------------------------------
-
-export const arbitraryCanonicalTool = (root: string): fc.Arbitrary<CanonicalTool> =>
-  fc.tuple(arbitraryIdentifier(), arbitraryBridgeSupportedSchema({ maxDepth: 2 })).map(
-    ([name, inputSchema]) =>
-      new CanonicalTool({
-        name,
-        sourcePath: joinSourcePath(root, "tools", `${name}.tool`),
-        description: `Tool ${name}`,
-        input: inputSchema,
-        output: Schema.Struct({ ok: Schema.Boolean }),
-        slots: {},
-        async handle() {
-          return { ok: true };
-        },
-      }),
-  );
-
-// ---------------------------------------------------------------------------
-// Traits and bindings
-// ---------------------------------------------------------------------------
-
-export interface TraitWithBinding {
-  readonly trait: Trait;
-  readonly binding: NormalizedTraitBinding;
-  readonly canonicalTool: CanonicalTool;
-}
-
-export const arbitraryTraitWithTool = (root: string): fc.Arbitrary<TraitWithBinding> =>
-  fc.tuple(arbitraryIdentifier(), arbitraryIdentifier()).chain(([traitName, logicalName]) =>
-    arbitraryCanonicalTool(root).map((canonicalTool) => {
-      const trait = new Trait({
-        name: traitName,
-        sourcePath: joinSourcePath(root, "traits", `${traitName}.trait`),
-        description: `Trait ${traitName}`,
-        instructions: [],
-        access: { tools: [], toolGroups: [], skills: [] },
-        tools: {
-          [logicalName]: { ref: canonicalTool.name },
-        },
-        inject: { skills: [] },
-        require: { tools: [], skills: [] },
-      });
-
-      const binding: NormalizedTraitBinding = {
-        ref: traitName,
-        tools: {},
-      };
-
-      return { trait, binding, canonicalTool };
-    }),
-  );
-
-export const arbitraryTraitBindingSlot = (
-  root: string,
-): fc.Arbitrary<NormalizedTraitBindingToolSlot> =>
-  arbitraryBridgeSupportedSchema({ maxDepth: 1 }).map((schema) => ({
-    schema,
-    source: { sourcePath: joinSourcePath(root, "schemas", "slot"), exportName: "SlotSchema" },
-  }));
-
-export const arbitraryTraitWithSlottedTool = (root: string): fc.Arbitrary<TraitWithBinding> =>
-  fc
-    .tuple(arbitraryIdentifier(), arbitraryIdentifier(), arbitraryIdentifier(), arbitraryIdentifier())
-    .chain(([traitName, logicalName, toolName, slotName]) =>
-      arbitraryBridgeSupportedSchema({ maxDepth: 1 }).map((slotSchema) => {
-        const canonicalTool = new CanonicalTool({
-          name: toolName,
-          sourcePath: joinSourcePath(root, "tools", `${toolName}.tool`),
-          description: `Tool ${toolName}`,
-          input: Schema.Struct({}),
-          output: Schema.Struct({ ok: Schema.Boolean }),
-          slots: {
-            [slotName]: { kind: "schema" },
-          },
-          async handle() {
-            return { ok: true };
-          },
-        });
-
-        const trait = new Trait({
-          name: traitName,
-          sourcePath: joinSourcePath(root, "traits", `${traitName}.trait`),
-          description: `Trait ${traitName}`,
-          instructions: [],
-          access: { tools: [], toolGroups: [], skills: [] },
-          tools: {
-            [logicalName]: { ref: toolName },
-          },
-          inject: { skills: [] },
-          require: { tools: [], skills: [] },
-        });
-
-        const binding: NormalizedTraitBinding = {
-          ref: traitName,
-          tools: {
-            [logicalName]: {
-              slots: {
-                [slotName]: {
-                  schema: slotSchema,
-                  source: { sourcePath: joinSourcePath(root, "schemas", `${toolName}-slots`), exportName: "Slot" },
-                },
-              },
-            },
-          },
-        };
-
-        return { trait, binding, canonicalTool };
-      }),
-    );
-
-// ---------------------------------------------------------------------------
 // Spaces
 // ---------------------------------------------------------------------------
-
-export const arbitraryToolspace = (root: string): fc.Arbitrary<Toolspace> =>
-  fc
-    .tuple(
-      arbitraryIdentifier(),
-      fc.array(fc.tuple(arbitraryIdentifier(), arbitraryIdentifier(), arbitraryIdentifier()), {
-        minLength: 0,
-        maxLength: 4,
-      }),
-    )
-    .map(([name, toolTuples]) => {
-      const tools: Record<string, { description?: string; targets: Record<string, string> }> = {};
-      for (const [toolName, targetId, nativeName] of toolTuples) {
-        tools[toolName] = {
-          description: `Tool ${toolName}`,
-          targets: { [targetId]: nativeName },
-        };
-      }
-      return new Toolspace({
-        name,
-        sourcePath: joinSourcePath(root, "toolspaces", `${name}.toolspace`),
-        description: `Toolspace ${name}`,
-        tools,
-        groups: {},
-      });
-    });
 
 export const arbitraryModelspace = (root: string): fc.Arbitrary<Modelspace> =>
   fc

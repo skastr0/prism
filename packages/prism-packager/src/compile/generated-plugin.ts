@@ -46,29 +46,12 @@ export const generatedOwnerToolName = (toolPluginName: string, toolName: string)
     `${generatedToolNamespace(toolPluginName)}_${sanitizeGeneratedToolSegment(toolName, "tool")}`,
   );
 
-export const generatedSyntheticToolName = (
-  sourcePluginName: string,
-  contractName: string,
-): string =>
-  compactGeneratedExternalToolName(
-    `${generatedToolNamespace(sourcePluginName)}_${sanitizeGeneratedToolSegment(contractName, "tool")}`,
-  );
-
 export const generatedPluginIdForOwner = (ownerPluginName: string): string =>
   `prism-generated-${normalizeGeneratedPluginName(ownerPluginName)}`;
 
 export const generatedToolNameForBinding = (
-  sourcePluginName: string,
   binding: ResolvedContractBinding,
-): string => {
-  if (binding.kind === "permission") {
-    return generatedOwnerToolName(binding.toolPluginName, binding.toolName);
-  }
-  if (!binding.contract) {
-    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
-  }
-  return generatedSyntheticToolName(sourcePluginName, binding.contract.name);
-};
+): string => generatedOwnerToolName(binding.toolPluginName, binding.toolName);
 
 export const sourceIsInside = (sourcePath: string, root: string): boolean => {
   const rel = relative(root, sourcePath);

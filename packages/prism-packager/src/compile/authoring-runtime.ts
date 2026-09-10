@@ -6,10 +6,9 @@ import { join } from "node:path";
 /**
  * Minimal in-memory authoring runtime that stubs the `prism` module for
  * plugin source files. It provides the typed-ref helpers used by
- * `.agent.ts`, `.orbit.ts`, `.trait.ts`, `.tool.ts`, `.toolspace.ts`,
- * `.modelspace.ts`, `.skillspace.ts`, and `.hook.ts` files, which export
- * a plain object satisfying the matching `*Source` type — there is no
- * define* wrapper call to stub.
+ * `.agent.ts`, `.orbit.ts`, `.tool.ts`, `.modelspace.ts`, `.skillspace.ts`,
+ * and `.hook.ts` files, which export a plain object satisfying the matching
+ * `*Source` type — there is no define* wrapper call to stub.
  *
  * The real semantic validation happens later in the compiler; this runtime
  * only needs to return plain data structures so that source modules can be
@@ -19,19 +18,8 @@ export const AUTHORING_RUNTIME_JS = `
 const withNamedRef = (kind, first, second) =>
   second === undefined ? { kind, name: first } : { kind, plugin: first, name: second };
 
-export const traitRef = (first, second) => withNamedRef("trait-ref", first, second);
 export const agentRef = (first, second) => withNamedRef("agent-ref", first, second);
 export const orbitRef = (first, second) => withNamedRef("orbit-ref", first, second);
-
-export const toolRef = (first, second, third) =>
-  third === undefined
-    ? { kind: "tool-ref", toolspace: first, name: second }
-    : { kind: "tool-ref", plugin: first, toolspace: second, name: third };
-
-export const toolGroupRef = (first, second, third) =>
-  third === undefined
-    ? { kind: "tool-group-ref", toolspace: first, name: second }
-    : { kind: "tool-group-ref", plugin: first, toolspace: second, name: third };
 
 export const modelProfileRef = (first, second, third) =>
   third === undefined
@@ -46,11 +34,6 @@ export const skillspaceRef = (first, second, third) =>
     : { kind: "skillspace-ref", plugin: first, skillspace: second, name: third };
 
 export const schemaSlot = (options = {}) => ({ kind: "schema", ...options });
-export const bindTrait = (trait, options = {}) => ({
-  kind: "trait-binding",
-  trait,
-  ...(options.tools ? { tools: options.tools } : {}),
-});
 
 export const hookEvent = {
   toolBefore: "tool.before",
@@ -70,8 +53,7 @@ export const hookEvent = {
 
 export const hookTool = {
   any: () => ({ kind: "hook-any-tool" }),
-  tool: (tool) => ({ kind: "hook-toolspace-tool", tool }),
-  group: (group) => ({ kind: "hook-toolspace-group", group }),
+  native: (name) => ({ kind: "hook-native-tool", name }),
   canonical: (ref) => ({ kind: "hook-canonical-tool", ref }),
 };
 

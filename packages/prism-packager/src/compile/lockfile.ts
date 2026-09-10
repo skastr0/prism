@@ -73,22 +73,13 @@ const collectRegistries = (root: PluginRegistry): ReadonlyArray<PluginRegistry> 
   return ordered;
 };
 
-// Trait-materialized synthetic tool contracts (see `materializeTraitTools` in
-// protocol-tools.ts) are intentionally not hashed as their own source below.
-// Their generated content is fully determined by the canonical tool they wrap
-// (`registry.tools`, included below) and the owning trait's slot-filling
-// attachment (`registry.traits`, already included) -- both already change
-// this hash when their source changes, so the derived contract is covered
-// without a separate lockfile entry.
 const collectSourcePaths = (registry: PluginRegistry): ReadonlyArray<string> => {
   const paths = [
     ...registry.identities.values(),
     ...registry.personalities.values(),
-    ...registry.toolspaces.values(),
     ...registry.modelspaces.values(),
     ...registry.skillspaces.values(),
     ...registry.skills.values(),
-    ...registry.traits.values(),
     ...registry.tools.values(),
     ...registry.hooks.values(),
     ...registry.orbits.values(),

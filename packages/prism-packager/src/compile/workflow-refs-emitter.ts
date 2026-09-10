@@ -6,9 +6,7 @@ import type {
   CompileManifestOrbit,
   CompileManifestOrbitPhase,
   CompileManifestOrbitPhaseContract,
-  CompileManifestTrait,
   CompileManifestCanonicalTool,
-  CompileManifestToolspaceTool,
 } from "./compile-manifest.js";
 import { projectGeneratedRefsDir } from "../project-key.js";
 import type { DesiredRoot } from "../sync/desired.js";
@@ -31,9 +29,6 @@ export const workflowModelsPath = (prismHome: string, projectKey: string): strin
 
 export const workflowSkillsPath = (prismHome: string, projectKey: string): string =>
   join(workflowRefsRoot(prismHome, projectKey), "skills.ts");
-
-export const workflowTraitsPath = (prismHome: string, projectKey: string): string =>
-  join(workflowRefsRoot(prismHome, projectKey), "traits.ts");
 
 export const workflowOrbitsPath = (prismHome: string, projectKey: string): string =>
   join(workflowRefsRoot(prismHome, projectKey), "orbits.ts");
@@ -285,33 +280,15 @@ type EmittedSkillspaceRef = {
   readonly skills: readonly string[];
 };
 
-type EmittedTraitRef = {
-  readonly kind: "trait-ref";
-  readonly id: string;
-  readonly ref: string;
-};
-
 type EmittedCanonicalToolRef = {
   readonly kind: "canonical-tool-ref";
   readonly plugin: string;
   readonly name: string;
 };
 
-type EmittedToolspaceToolRef = {
-  readonly kind: "toolspace-tool-ref";
-  readonly plugin: string;
-  readonly toolspace: string;
-  readonly name: string;
-};
+type UsedToolEntry = CompileManifestCanonicalTool;
 
-type EmittedToolGroupValue = EmittedCanonicalToolRef | Record<string, EmittedToolspaceToolRef>;
-
-type UsedToolEntry = CompileManifestCanonicalTool | CompileManifestToolspaceTool;
-
-const toolSortKey = (entry: UsedToolEntry): string =>
-  "toolspace" in entry && entry.toolspace !== undefined
-    ? `${entry.toolspace}/${entry.name}`
-    : entry.name;
+const toolSortKey = (entry: UsedToolEntry): string => entry.name;
 
 const pluginNames = (manifest: CompileManifest): string[] =>
   [...new Set(Object.values(manifest.agents).map((agent) => agent.plugin))].sort();
@@ -422,11 +399,7 @@ const collectUsedSkills = (
       { plugin: string; name?: string; skillspace?: string; skills?: Set<string> }
     > = {};
     for (const agent of Object.values(manifest.agents)) {
-      const allRefs = new Set<string>([
-        ...agent.skills,
-        ...agent.composed.grants.skills,
-        ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.allowedSkills),
-      ]);
+      const allRefs = new Set<string>(agent.skills);
       for (const ref of allRefs) {
         const named = parseNamedRef(ref);
         const space = parseSpaceItemRef(ref, "/");
@@ -470,40 +443,6 @@ const collectUsedSkills = (
         ? 0
         : (a.skillspace ?? a.name ?? "").localeCompare(b.skillspace ?? b.name ?? "")
       : a.plugin.localeCompare(b.plugin),
-  );
-};
-
-const collectUsedTraits = (
-  manifest: CompileManifest,
-): CompileManifestTrait[] => {
-  const entries: CompileManifestTrait[] = [];
-  const seen = new Set<string>();
-
-  const trRec = manifest.traits;
-  if (trRec && Object.keys(trRec).length > 0) {
-    for (const entry of Object.values(trRec)) {
-      const k = entry.id;
-      if (!seen.has(k)) {
-        seen.add(k);
-        entries.push({ id: entry.id, ref: entry.ref });
-      }
-    }
-  } else {
-    // Fallback: derive from agent.traits (manifest is source of truth either way)
-    for (const agent of Object.values(manifest.agents)) {
-      for (const t of agent.traits) {
-        if (!seen.has(t.id)) {
-          seen.add(t.id);
-          entries.push({ id: t.id, ref: t.ref });
-        }
-      }
-    }
-  }
-
-  return entries.sort((a, b) =>
-    a.id === b.id
-      ? (a.ref === b.ref ? 0 : a.ref < b.ref ? -1 : 1)
-      : a.id < b.id ? -1 : 1,
   );
 };
 
@@ -725,123 +664,14 @@ ${body}
 `;
 };
 
-export const renderWorkflowTraitsModule = (options: {
-  readonly manifest: CompileManifest;
-}): string => {
-  const used = collectUsedTraits(options.manifest);
-
-  const byPlugin: Record<string, Record<string, EmittedTraitRef>> = {};
-  for (const entry of used) {
-    // group by owner plugin from id prefix (e.g. "forge:foo" -> "forge")
-    const colon = entry.id.indexOf(":");
-    const owner = colon !== -1 ? entry.id.slice(0, colon) : entry.id;
-    const local = colon !== -1 ? entry.id.slice(colon + 1) : entry.id;
-    const pk = camelKey(owner);
-    if (!byPlugin[pk]) byPlugin[pk] = {};
-    const lk = camelKey(local);
-    byPlugin[pk][lk] = {
-      kind: "trait-ref",
-      id: entry.id,
-      ref: entry.ref,
-    };
-  }
-
-  const pluginBlocks = Object.keys(byPlugin)
-    .sort()
-    .map((pk) => {
-      const group = byPlugin[pk]!;
-      const lines = Object.keys(group)
-        .sort()
-        .map((k) => {
-          const ref = group[k];
-          return `    ${JSON.stringify(k)}: ${JSON.stringify(ref)}`;
-        })
-        .join(",\n");
-      return `  ${JSON.stringify(pk)}: {\n${lines}\n  }`;
-    });
-
-  const body = pluginBlocks.length > 0 ? pluginBlocks.join(",\n") : "";
-
-  return `/**
- * Generated by Prism. Do not edit.
- * Source: compile manifest ${options.manifest.manifestHash}
- */
-
-export interface WorkflowTraitRef {
-  readonly kind: "trait-ref";
-  readonly id: string;
-  readonly ref: string;
-}
-
-export const traits = {
-${body}
-} as const satisfies Record<string, Record<string, WorkflowTraitRef>>;
-`;
-};
-
 const collectUsedTools = (
   manifest: CompileManifest,
-): UsedToolEntry[] => {
-  const entries: UsedToolEntry[] = [];
-  const seen = new Set<string>();
-
-  const tRec = manifest.tools;
-  if (tRec && Object.keys(tRec).length > 0) {
-    for (const entry of Object.values(tRec)) {
-      const k = "toolspace" in entry && entry.toolspace !== undefined
-        ? `${entry.plugin}:${entry.toolspace}/${entry.name}`
-        : `${entry.plugin}:${entry.name}`;
-      if (!seen.has(k)) {
-        seen.add(k);
-        entries.push(entry);
-      }
-    }
-  } else {
-    // Fallback: derive from agent grants.tools + perTarget.toolGrants (manifest source of truth)
-    const toolAccum: Record<
-      string,
-      { plugin: string; name?: string; toolspace?: string }
-    > = {};
-    for (const agent of Object.values(manifest.agents)) {
-      const allRefs = new Set<string>([
-        ...agent.composed.grants.tools,
-        ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.toolGrants),
-      ]);
-      for (const ref of allRefs) {
-        const named = parseNamedRef(ref);
-        const space = parseSpaceItemRef(ref, "/");
-        let owner = named.pluginPrefix ?? agent.plugin;
-        if (space) {
-          owner = space.pluginPrefix ?? agent.plugin;
-          const key = `${owner}:${space.space}/${space.name}`;
-          if (!toolAccum[key]) {
-            toolAccum[key] = { plugin: owner, toolspace: space.space, name: space.name };
-          }
-        } else {
-          const key = `${owner}:${named.name}`;
-          if (!toolAccum[key]) {
-            toolAccum[key] = { plugin: owner, name: named.name };
-          }
-        }
-      }
-    }
-    for (const [_key, acc] of Object.entries(toolAccum)) {
-      if (acc.toolspace && acc.name) {
-        entries.push({ plugin: acc.plugin, toolspace: acc.toolspace, name: acc.name });
-      } else if (acc.name) {
-        entries.push({ plugin: acc.plugin, name: acc.name });
-      }
-    }
-  }
-
-  return entries.sort((a, b) =>
+): UsedToolEntry[] =>
+  Object.values(manifest.tools).sort((a, b) =>
     a.plugin === b.plugin
-      ? toolSortKey(a) === toolSortKey(b)
-        ? 0
-        : toolSortKey(a).localeCompare(toolSortKey(b))
+      ? toolSortKey(a).localeCompare(toolSortKey(b))
       : a.plugin.localeCompare(b.plugin),
   );
-};
 
 export const renderWorkflowOrbitsModule = (options: {
   readonly manifest: CompileManifest;
@@ -947,35 +777,16 @@ export const renderWorkflowToolsModule = (options: {
 }): string => {
   const used = collectUsedTools(options.manifest);
 
-  const byPlugin: Record<string, Record<string, EmittedToolGroupValue>> = {};
+  const byPlugin: Record<string, Record<string, EmittedCanonicalToolRef>> = {};
   for (const entry of used) {
     const pk = camelKey(entry.plugin);
     if (!byPlugin[pk]) byPlugin[pk] = {};
-    if ("toolspace" in entry && entry.toolspace !== undefined) {
-      const tsk = camelKey(entry.toolspace);
-      const toolspaceGroup = byPlugin[pk][tsk];
-      const nested: Record<string, EmittedToolspaceToolRef> =
-        toolspaceGroup && !("kind" in toolspaceGroup)
-          ? toolspaceGroup
-          : {};
-      if (!toolspaceGroup || "kind" in toolspaceGroup) {
-        byPlugin[pk][tsk] = nested;
-      }
-      const nk = camelKey(entry.name);
-      nested[nk] = {
-        kind: "toolspace-tool-ref",
-        plugin: entry.plugin,
-        toolspace: entry.toolspace,
-        name: entry.name,
-      };
-    } else {
-      const nk = camelKey(entry.name);
-      byPlugin[pk][nk] = {
-        kind: "canonical-tool-ref",
-        plugin: entry.plugin,
-        name: entry.name,
-      };
-    }
+    const nk = camelKey(entry.name);
+    byPlugin[pk][nk] = {
+      kind: "canonical-tool-ref",
+      plugin: entry.plugin,
+      name: entry.name,
+    };
   }
 
   const pluginBlocks = Object.keys(byPlugin)
@@ -984,19 +795,7 @@ export const renderWorkflowToolsModule = (options: {
       const group = byPlugin[pk]!;
       const lines = Object.keys(group)
         .sort()
-        .map((k) => {
-          const val = group[k];
-          if (val && typeof val === "object" && !("kind" in val)) {
-            // toolspace sub-namespace: 3-level nesting
-            const innerLines = Object.keys(val)
-              .sort()
-              .map((nk) => `      ${JSON.stringify(nk)}: ${JSON.stringify(val[nk])}`)
-              .join(",\n");
-            return `    ${JSON.stringify(k)}: {\n${innerLines}\n    }`;
-          } else {
-            return `    ${JSON.stringify(k)}: ${JSON.stringify(val)}`;
-          }
-        })
+        .map((k) => `    ${JSON.stringify(k)}: ${JSON.stringify(group[k])}`)
         .join(",\n");
       return `  ${JSON.stringify(pk)}: {\n${lines}\n  }`;
     });
@@ -1014,16 +813,9 @@ export interface WorkflowCanonicalToolRef {
   readonly name: string;
 }
 
-export interface WorkflowToolspaceToolRef {
-  readonly kind: "toolspace-tool-ref";
-  readonly plugin: string;
-  readonly toolspace: string;
-  readonly name: string;
-}
-
 export const tools = {
 ${body}
-} as const satisfies Record<string, Record<string, WorkflowCanonicalToolRef | Record<string, WorkflowToolspaceToolRef>>>;
+} as const satisfies Record<string, Record<string, WorkflowCanonicalToolRef>>;
 `;
 };
 
@@ -1054,13 +846,6 @@ export const planWorkflowRefsEmit = (options: {
       {
         targetPath: workflowSkillsPath(options.prismHome, options.projectKey),
         content: renderWorkflowSkillsModule({
-          manifest: options.manifest,
-        }),
-        plugin: WORKFLOW_REFS_HARNESS,
-      },
-      {
-        targetPath: workflowTraitsPath(options.prismHome, options.projectKey),
-        content: renderWorkflowTraitsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,

@@ -38,7 +38,7 @@ const SAMPLE_ERRORS: ReadonlyArray<PrismError> = [
   new UnknownReferenceError({
     agentName: "builder",
     sourcePath: "/plugins/demo/agents/builder.agent.ts",
-    field: "tool",
+    field: "skill",
     referenceName: "submit-work",
   }),
   new OrbitValidationError({
@@ -80,7 +80,7 @@ const SAMPLE_ERRORS: ReadonlyArray<PrismError> = [
   }),
   new MissingTargetResolutionError({
     agentName: "builder",
-    referenceKind: "tool",
+    referenceKind: "skill",
     referenceName: "submit-work",
     target: "codex-cli",
   }),

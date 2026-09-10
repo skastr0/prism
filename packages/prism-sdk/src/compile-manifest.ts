@@ -93,6 +93,23 @@ export const CompileManifestOrbitSchema = Schema.Struct({
 });
 export type CompileManifestOrbit = typeof CompileManifestOrbitSchema.Type;
 
+export const CompileManifestSopPhaseSchema = Schema.Struct({
+  name: Schema.String,
+  purpose: Schema.String,
+  acceptanceCriteria: Schema.Array(Schema.String),
+  escalation: Schema.optional(Schema.String),
+  input: Schema.optional(JsonSchemaObjectSchema),
+  output: Schema.optional(JsonSchemaObjectSchema),
+});
+export type CompileManifestSopPhase = typeof CompileManifestSopPhaseSchema.Type;
+
+export const CompileManifestSopSchema = Schema.Struct({
+  plugin: Schema.String,
+  name: Schema.String,
+  phases: Schema.Array(CompileManifestSopPhaseSchema),
+});
+export type CompileManifestSop = typeof CompileManifestSopSchema.Type;
+
 /**
  * Side-effect authority class for a canonical tool (PQ-075). Migration is
  * default-then-require: declaration is optional today (undeclared tools omit
@@ -202,6 +219,7 @@ const CompileManifestV1Schema = Schema.Struct({
   tools: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestToolspaceToolSchema, CompileManifestCanonicalToolSchema) }),
   traits: Schema.Record({ key: Schema.String, value: CompileManifestTraitSchema }),
   orbits: Schema.Record({ key: Schema.String, value: CompileManifestOrbitSchema }),
+  sops: Schema.Record({ key: Schema.String, value: CompileManifestSopSchema }),
   manifestHash: Schema.String,
 });
 
@@ -323,6 +341,27 @@ const sortOrbits = (orbits: ReadonlyArray<CompileManifestOrbit>): CompileManifes
       : compareCodePoint(left.plugin, right.plugin),
   );
 
+const normalizeSopPhaseForEncoding = (
+  phase: CompileManifestSopPhase,
+): CompileManifestSopPhase => ({
+  name: phase.name,
+  purpose: phase.purpose,
+  acceptanceCriteria: sortStrings(phase.acceptanceCriteria),
+  ...(phase.escalation !== undefined ? { escalation: phase.escalation } : {}),
+  ...(phase.input
+    ? { input: stableJsonValue(phase.input as StableJsonValue) as Record<string, unknown> }
+    : {}),
+  ...(phase.output
+    ? { output: stableJsonValue(phase.output as StableJsonValue) as Record<string, unknown> }
+    : {}),
+});
+
+const normalizeSopForEncoding = (sop: CompileManifestSop): CompileManifestSop => ({
+  plugin: sop.plugin,
+  name: sop.name,
+  phases: sop.phases.map(normalizeSopPhaseForEncoding),
+});
+
 const sortTools = (tools: ReadonlyArray<CompileManifestCanonicalTool | CompileManifestToolspaceTool>): (CompileManifestCanonicalTool | CompileManifestToolspaceTool)[] =>
   [...tools].sort((left, right) =>
     left.plugin === right.plugin
@@ -401,6 +440,7 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
   ),
   traits: sortRecord(manifest.traits, (trait) => trait),
   orbits: sortRecord(manifest.orbits, normalizeOrbitForEncoding),
+  sops: sortRecord(manifest.sops, normalizeSopForEncoding),
   manifestHash: manifest.manifestHash,
 });
 
@@ -459,6 +499,7 @@ export const emptyCompileManifest = (): CompileManifest => {
     tools: {},
     traits: {},
     orbits: {},
+    sops: {},
     manifestHash: "",
   };
   return { ...manifest, manifestHash: computeCompileManifestHash(manifest) };

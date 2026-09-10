@@ -98,6 +98,21 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
     "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] },
     "core:experiment": { plugin: "core", name: "experiment", phases: [] },
   },
+  sops: {
+    "forge:beacon": {
+      plugin: "forge",
+      name: "beacon",
+      phases: [
+        {
+          name: "explore",
+          purpose: "Map the problem space",
+          acceptanceCriteria: ["Hypothesis is falsifiable"],
+          escalation: "Ask a human when the audience is unclear",
+          input: { type: "object", properties: { brief: { type: "string" } }, required: ["brief"] },
+        },
+      ],
+    },
+  },
 });
 
 test("compile manifest decodes and encodes deterministically", () => {
@@ -117,6 +132,14 @@ test("compile manifest decodes and encodes deterministically", () => {
   expect(JSON.stringify(decoded.right.tools)).not.toContain("sourcePath");
   expect(JSON.stringify(decoded.right.tools)).not.toContain("input");
   expect(JSON.stringify(decoded.right.tools)).not.toContain("handle");
+  expect(decoded.right.sops["forge:beacon"]?.phases[0]?.acceptanceCriteria).toEqual([
+    "Hypothesis is falsifiable",
+  ]);
+  expect(decoded.right.sops["forge:beacon"]?.phases[0]?.input).toEqual({
+    type: "object",
+    properties: { brief: { type: "string" } },
+    required: ["brief"],
+  });
 });
 
 test("compile manifest sorts records and arrays into stable bytes", () => {
@@ -169,6 +192,9 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
     orbits: {
       "core:experiment": manifest.orbits["core:experiment"]!,
       "forge:delivery-contract": manifest.orbits["forge:delivery-contract"]!,
+    },
+    sops: {
+      "forge:beacon": manifest.sops["forge:beacon"]!,
     },
   };
 
@@ -293,6 +319,7 @@ test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless
       tools,
       traits: {},
       orbits,
+      sops: {},
     };
     const withEmpty = { ...base, manifestHash: "" };
     return { ...withEmpty, manifestHash: computeCompileManifestHash(withEmpty) };

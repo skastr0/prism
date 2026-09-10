@@ -39,31 +39,17 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
       plugin: "forge",
       description: "Build specialist",
       sourceHash: "agent-source",
-      traits: [
-        { id: "forge:reviewable", ref: "reviewable" },
-        { id: "core:committable", ref: "core:committable" },
-      ],
       skills: ["forge:build", "core:git"],
       composed: {
-        grants: {
-          tools: ["forge:workspace/run_shell", "core:create_commit"],
-          skills: ["core:git", "forge:build"],
-        },
         modelBindings: { modelspace: "models", profile: "builder" },
         perTarget: {
           grok: {
             scope: "project",
             model: { model: "grok-code-fast-1", nested: { temperature: 0 } },
-            toolGrants: ["forge:workspace/run_shell", "core:create_commit"],
-            allowedTools: ["forge_workspace_run_shell", "core_create_commit"],
-            allowedSkills: ["forge:build", "core:git"],
           },
           "claude-code": {
             scope: "global",
             model: null,
-            toolGrants: ["forge:workspace/run_shell"],
-            allowedTools: ["forge_workspace_run_shell"],
-            allowedSkills: ["forge:build"],
           },
         },
       },
@@ -86,13 +72,9 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
     },
   },
   tools: {
-    "forge:workspace/run_shell": { plugin: "forge", toolspace: "workspace", name: "run_shell" },
+    "forge:run_shell": { plugin: "forge", name: "run_shell" },
     "core:create_commit": { plugin: "core", name: "create_commit" },
-    "agent-core:repo/inspect": { plugin: "agent-core", toolspace: "repo", name: "inspect" },
-  },
-  traits: {
-    "forge:reviewable": { id: "forge:reviewable", ref: "reviewable" },
-    "core:committable": { id: "core:committable", ref: "core:committable" },
+    "agent-core:inspect": { plugin: "agent-core", name: "inspect" },
   },
   orbits: {
     "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] },
@@ -111,8 +93,8 @@ test("compile manifest decodes and encodes deterministically", () => {
   expect(verifyCompileManifestHash(decoded.right)).toBe(true);
   expect(verifyAgentManifestHash(decoded.right.agents["forge:builder"]!)).toBe(true);
   // tools populated as minimal identity refs, source-path free
-  expect(Object.keys(decoded.right.tools).sort()).toEqual(["agent-core:repo/inspect", "core:create_commit", "forge:workspace/run_shell"]);
-  expect(decoded.right.tools["forge:workspace/run_shell"]).toEqual({ plugin: "forge", toolspace: "workspace", name: "run_shell" });
+  expect(Object.keys(decoded.right.tools).sort()).toEqual(["agent-core:inspect", "core:create_commit", "forge:run_shell"]);
+  expect(decoded.right.tools["forge:run_shell"]).toEqual({ plugin: "forge", name: "run_shell" });
   expect(decoded.right.tools["core:create_commit"]).toEqual({ plugin: "core", name: "create_commit" });
   expect(JSON.stringify(decoded.right.tools)).not.toContain("sourcePath");
   expect(JSON.stringify(decoded.right.tools)).not.toContain("input");
@@ -131,14 +113,9 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
     agents: {
       "forge:builder": {
         ...manifest.agents["forge:builder"]!,
-        traits: [...manifest.agents["forge:builder"]!.traits].reverse(),
         skills: [...manifest.agents["forge:builder"]!.skills].reverse(),
         composed: {
           ...manifest.agents["forge:builder"]!.composed,
-          grants: {
-            tools: [...manifest.agents["forge:builder"]!.composed.grants.tools].reverse(),
-            skills: [...manifest.agents["forge:builder"]!.composed.grants.skills].reverse(),
-          },
           perTarget: {
             "claude-code": manifest.agents["forge:builder"]!.composed.perTarget["claude-code"]!,
             grok: manifest.agents["forge:builder"]!.composed.perTarget.grok!,
@@ -159,12 +136,8 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
     },
     tools: {
       "core:create_commit": manifest.tools["core:create_commit"]!,
-      "agent-core:repo/inspect": manifest.tools["agent-core:repo/inspect"]!,
-      "forge:workspace/run_shell": manifest.tools["forge:workspace/run_shell"]!,
-    },
-    traits: {
-      "forge:reviewable": manifest.traits["forge:reviewable"]!,
-      "core:committable": manifest.traits["core:committable"]!,
+      "agent-core:inspect": manifest.tools["agent-core:inspect"]!,
+      "forge:run_shell": manifest.tools["forge:run_shell"]!,
     },
     orbits: {
       "core:experiment": manifest.orbits["core:experiment"]!,
@@ -201,7 +174,7 @@ test("compile manifest invalid payload fails schema decode", () => {
     agents: {
       "forge:builder": {
         ...fixtureManifest().agents["forge:builder"]!,
-        composed: { grants: { tools: [] } },
+        composed: { modelBindings: {} },
       },
     },
   };
@@ -291,7 +264,6 @@ test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless
       modelspaces: {},
       skills: {},
       tools,
-      traits: {},
       orbits,
     };
     const withEmpty = { ...base, manifestHash: "" };

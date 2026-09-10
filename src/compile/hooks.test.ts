@@ -48,7 +48,6 @@ const createHookFixture = async (): Promise<string> => {
         version: "0.1.0",
         targets: {
           hooks: ["opencode"],
-          toolspaces: ["opencode"],
         },
       },
       null,
@@ -57,44 +56,16 @@ const createHookFixture = async (): Promise<string> => {
   );
 
   await writeText(
-    join(pluginRoot, "toolspaces", "core.toolspace.ts"),
-    `import { toolRef } from "prism";
-
-export default {
-  name: "core",
-  tools: {
-    shell: {
-      targets: {
-        opencode: { name: "bash" },
-        "claude-code": { name: "Bash" },
-      },
-    },
-    read: {
-      targets: {
-        opencode: { name: "read" },
-      },
-    },
-  },
-  groups: {
-    readonly_shell: {
-      tools: [toolRef("core", "shell"), toolRef("core", "read")],
-    },
-  },
-};
-`,
-  );
-
-  await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from "effect";
-import { hookEvent, hookTool, toolGroupRef } from "prism";
+import { hookEvent, hookTool } from "prism";
 
 export default {
   name: "audit-shell",
   description: "Audit shell-adjacent tool calls",
   event: hookEvent.toolBefore,
   match: {
-    tool: hookTool.group(toolGroupRef("core", "readonly_shell")),
+    tool: hookTool.native("bash"),
   },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
 };
@@ -104,7 +75,7 @@ export default {
   return pluginRoot;
 };
 
-test("hooks/*.hook.ts load as plain HookSource objects and normalize toolspace matchers", async () => {
+test("hooks/*.hook.ts load as plain HookSource objects and normalize native tool matchers", async () => {
   const pluginRoot = await createHookFixture();
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
@@ -113,12 +84,12 @@ test("hooks/*.hook.ts load as plain HookSource objects and normalize toolspace m
   expect(hook).toBeDefined();
   expect(hook?.event).toBe("tool.before");
   expect(hook?.match.tool).toEqual({
-    kind: "toolspace-group",
-    ref: "core#readonly_shell",
+    kind: "native-tool",
+    name: "bash",
   });
 });
 
-test("hook toolspace matchers resolve to target-native tool names", async () => {
+test("hook native matchers resolve to target-native tool names", async () => {
   const pluginRoot = await createHookFixture();
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const hook = registry.hooks.get("audit-shell");
@@ -128,7 +99,7 @@ test("hook toolspace matchers resolve to target-native tool names", async () => 
 
   expect(resolved.tool).toEqual({
     kind: "native-tools",
-    names: ["bash", "read"],
+    names: ["bash"],
   });
 });
 

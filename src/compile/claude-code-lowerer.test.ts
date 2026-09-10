@@ -69,54 +69,6 @@ afterEach(async () => {
   );
 });
 
-test("claude-code lowerer fails closed when hook matcher has no Claude target mapping", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".claude");
-  const pluginRoot = join(root, "invalid-claude-hook-fixture");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({ name: "invalid-claude-hook-fixture", version: "0.1.0", targets: { toolspaces: ["claude-code"], hooks: ["claude-code"] } }, null, 2)}\n`,
-  );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
-export default {
-  name: "workspace",
-  tools: { shell: { targets: { opencode: { name: "bash" } } } },
-};
-`);
-  await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "audit-shell",
-  event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
-  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-};
-`);
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const hook = registry.hooks.get("audit-shell");
-  if (!hook) throw new Error("expected audit-shell hook");
-
-  await expect(
-    planLowering({
-      agents: [],
-      orbits: [],
-      skills: [],
-      hooks: [hook],
-      registry,
-      target: {
-        scope: "project",
-        root: outputRoot,
-        sourcePluginName: "invalid-claude-hook-fixture",
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: pluginRoot,
-      },
-    }),
-  ).rejects.toThrow("has no 'claude-code' target binding");
-});
-
 test("claude-code lowerer full hook event and wrapper protocol fidelity", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");

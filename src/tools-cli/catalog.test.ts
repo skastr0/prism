@@ -20,14 +20,12 @@ import type { ResolvedContractBinding } from "../compile/resolve.js";
 
 const sampleBindings: ReadonlyArray<ResolvedContractBinding> = [
   {
-    kind: "permission",
     logicalName: "list_glyphs",
     toolPluginName: "tower",
     toolName: "list_glyphs",
     toolSourcePath: "/tmp/tower/tools/list_glyphs.tool.ts",
   },
   {
-    kind: "permission",
     logicalName: "create_glyph",
     toolPluginName: "tower",
     toolName: "create_glyph",
@@ -64,14 +62,12 @@ describe("tools-cli catalog", () => {
       pluginName: "tower",
       bindings: [
         {
-          kind: "permission",
           logicalName: "submit_review_findings",
           toolPluginName: "tower",
           toolName: "submit_review_findings",
           toolSourcePath: "/tmp/tower/tools/submit_review_findings.tool.ts",
         },
         {
-          kind: "permission",
           logicalName: "submit_review",
           toolPluginName: "tower",
           toolName: "submit_review",

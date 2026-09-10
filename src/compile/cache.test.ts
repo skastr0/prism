@@ -23,8 +23,6 @@ import {
   Personality,
   Skill,
   Skillspace,
-  Toolspace,
-  Trait,
 } from "./sources.js";
 
 const tempRoots: string[] = [];
@@ -98,12 +96,6 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
     "modelspaces/default-models.modelspace.ts",
     "modelspace",
   );
-  const traitPath = await writeSource(pluginRoot, "traits/reviewable.trait.ts", "trait");
-  const toolspacePath = await writeSource(
-    pluginRoot,
-    "toolspaces/workspace.toolspace.ts",
-    "toolspace",
-  );
   const skillspacePath = await writeSource(
     pluginRoot,
     "skillspaces/external.skillspace.ts",
@@ -158,19 +150,6 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
       },
     }),
   );
-  registry.toolspaces.set(
-    "workspace",
-    new Toolspace({
-      name: "workspace",
-      sourcePath: toolspacePath,
-      tools: {
-        run: { targets: { opencode: "bash" } },
-      },
-      groups: {
-        repo: { tools: ["workspace/run"] },
-      },
-    }),
-  );
   registry.skillspaces.set(
     "external",
     new Skillspace({
@@ -220,26 +199,6 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
     }),
   );
 
-  registry.traits.set(
-    "reviewable",
-    new Trait({
-      name: "reviewable",
-      sourcePath: traitPath,
-      instructions: [],
-      access: {
-        tools: ["missing-space/tool"],
-        toolGroups: ["workspace#repo"],
-        skills: ["dep:external/testing"],
-      },
-      tools: {
-        submit: { ref: "dep:submit_review" },
-      },
-      inject: { skills: ["dep:shared-skill"] },
-      require: { tools: [], skills: ["missing-skill"] },
-    }),
-  );
-
-  const traitBinding = { ref: "reviewable", tools: {} };
   const agent = new Agent({
     name: "worker",
     sourcePath: agentPath,
@@ -247,13 +206,7 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
     identity: "worker",
     personality: "steady",
     model: "default-models/builder",
-    traits: [traitBinding],
-    access: {
-      tools: ["workspace/run"],
-      toolGroups: ["workspace#repo"],
-      skills: ["external/method"],
-    },
-    skills: ["contracts"],
+    skills: ["contracts", "external/method", "dep:shared-skill", "dep:external/testing"],
     targets: {},
   });
   const peer = new Agent({
@@ -262,8 +215,6 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
     description: "Assistant peer",
     identity: "worker",
     model: "default-models/builder",
-    traits: [],
-    access: { tools: [], toolGroups: [], skills: [] },
     skills: [],
     targets: {},
   });
@@ -302,20 +253,6 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
     "modelspaces/default-models.modelspace.ts",
     "modelspace",
   );
-  const traitSource = resolved("reviewable", "main", "traits/reviewable.trait.ts", "trait");
-  const depTool = resolved("dep:submit_review", "dep", "tools/submit_review.tool.ts", "dep tool");
-  const toolspace = resolved(
-    "workspace/run",
-    "main",
-    "toolspaces/workspace.toolspace.ts",
-    "toolspace",
-  );
-  const toolGroupSpace = resolved(
-    "workspace#repo",
-    "main",
-    "toolspaces/workspace.toolspace.ts",
-    "toolspace",
-  );
   const depSkillspace = resolved(
     "dep:external/testing",
     "dep",
@@ -346,22 +283,8 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
         { name: "assistant", sourcePath: peer.sourcePath },
         { name: "worker", sourcePath: agent.sourcePath },
       ],
-      traits: [
-        {
-          ref: "reviewable",
-          binding: agent.traits[0],
-          source: traitSource,
-          tools: [depTool],
-        },
-      ],
-      access: {
-        tools: ["missing-space/tool", "workspace/run"],
-        toolGroups: ["workspace#repo"],
-        skills: ["dep:external/testing", "external/method"],
-      },
-      toolspaces: [missing("missing-space/tool"), toolspace, toolGroupSpace],
       skillspaces: [depSkillspace, skillspace],
-      managedSkills: [managedSkill, depManagedSkill, missing("missing-skill")],
+      managedSkills: [managedSkill, depManagedSkill],
     },
   };
   const expectedSourceHash = computeStableHash(expectedFingerprint);
@@ -370,9 +293,6 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
     identity,
     personality,
     model,
-    traitSource,
-    depTool,
-    toolspace,
     skillspace,
     depSkillspace,
     managedSkill,
@@ -392,10 +312,4 @@ test("agent cache descriptor preserves fingerprint and input semantics", async (
     computeCacheKey(expectedSourceHash, { target: "opencode", scope: "project" }),
   );
   expect(descriptor.inputs).toEqual(expectedInputs);
-  expect(descriptor.inputs.map((file) => `${file.plugin}:${file.path}`)).not.toContain(
-    "main:missing-space/tool",
-  );
-  expect(descriptor.inputs.map((file) => `${file.plugin}:${file.path}`)).not.toContain(
-    "main:missing-skill",
-  );
 });

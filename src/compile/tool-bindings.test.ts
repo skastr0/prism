@@ -1,98 +1,59 @@
 import { expect, test } from "bun:test";
-import type { ComposedAgent } from "./compose.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import {
-  bindingIsOwnedByPlugin,
+  bindingsFromCanonicalTools,
   bindingsOwnedByPlugin,
   groupBindingsByOwner,
   ownerPluginForBinding,
 } from "./tool-bindings.js";
+import { makeTool } from "./test-support.js";
 
-const permissionBinding = (
+const binding = (
   toolPluginName: string,
   toolName: string,
 ): ResolvedContractBinding => ({
-  kind: "permission",
   logicalName: toolName,
   toolPluginName,
   toolName,
   toolSourcePath: `/tmp/${toolPluginName}/tools/${toolName}.tool.ts`,
 });
 
-const syntheticBinding = (compilingPluginName: string): ResolvedContractBinding => ({
-  kind: "synthetic",
-  logicalName: "submit_review",
-  toolPluginName: "tower",
-  toolName: "submit_review",
-  toolSourcePath: `/tmp/${compilingPluginName}/traits/reviewable.trait.ts`,
-  contract: {
-    name: "forge_submit_review__details",
-    pluginName: compilingPluginName,
-    sourcePath: `/tmp/${compilingPluginName}/traits/reviewable.trait.ts`,
-  },
+test("ownerPluginForBinding is the binding's tool plugin", () => {
+  expect(ownerPluginForBinding(binding("tower", "claim_glyph"))).toBe("tower");
 });
 
-const agentWithBindings = (
-  name: string,
-  bindings: ReadonlyArray<ResolvedContractBinding>,
-): ComposedAgent => ({
-  name,
-  description: name,
-  body: name,
-  color: undefined,
-  model: {},
-  targetOverride: {},
-  skills: [],
-  allowedSkills: [],
-  allowedTools: [],
-  toolBindings: bindings,
-});
-
-test("ownerPluginForBinding maps permission and synthetic bindings", () => {
-  expect(ownerPluginForBinding("atelier", permissionBinding("tower", "claim_glyph"))).toBe("tower");
-  expect(ownerPluginForBinding("forge", syntheticBinding("forge"))).toBe("forge");
-});
-
-test("bindingIsOwnedByPlugin treats synthetics and local permissions as owned", () => {
-  expect(bindingIsOwnedByPlugin("atelier", permissionBinding("tower", "claim_glyph"))).toBe(false);
-  expect(bindingIsOwnedByPlugin("tower", permissionBinding("tower", "claim_glyph"))).toBe(true);
-  expect(bindingIsOwnedByPlugin("forge", syntheticBinding("forge"))).toBe(true);
-});
-
-test("bindingsOwnedByPlugin keeps only owned canonical and synthetic bindings", () => {
-  const agents = [
-    agentWithBindings("orchestrator", [
-      permissionBinding("tower", "claim_glyph"),
-      permissionBinding("booth", "register_draft"),
-    ]),
+test("bindingsOwnedByPlugin keeps only canonical tools owned by the plugin", () => {
+  const tools = [
+    makeTool({ name: "claim_glyph", sourcePath: "/tmp/tower/tools/claim_glyph.tool.ts" }),
+    makeTool({ name: "register_draft", sourcePath: "/tmp/booth/tools/register_draft.tool.ts" }),
   ];
 
+  expect(bindingsOwnedByPlugin("atelier", []).map((entry) => entry.toolName)).toEqual([]);
   expect(
-    bindingsOwnedByPlugin("atelier", [], agents).map((binding) => binding.toolName),
-  ).toEqual([]);
-  expect(
-    bindingsOwnedByPlugin(
-      "tower",
-      [],
-      [agentWithBindings("worker", [permissionBinding("tower", "claim_glyph")])],
-    ).map((binding) => binding.toolName),
+    bindingsOwnedByPlugin("tower", [tools[0]!]).map((entry) => entry.toolName),
   ).toEqual(["claim_glyph"]);
-  expect(
-    bindingsOwnedByPlugin("forge", [], [agentWithBindings("builder", [syntheticBinding("forge")])])
-      .map((binding) => binding.kind),
-  ).toEqual(["synthetic"]);
 });
 
-test("groupBindingsByOwner groups consumer agent bindings by executable owner", () => {
-  const groups = groupBindingsByOwner("atelier", [
-    permissionBinding("tower", "claim_glyph"),
-    permissionBinding("tower", "submit_work"),
-    permissionBinding("booth", "register_draft"),
-    permissionBinding("quasar", "search"),
+test("bindingsFromCanonicalTools sorts by tool name", () => {
+  const tools = [
+    makeTool({ name: "zeta", sourcePath: "/tmp/tower/tools/zeta.tool.ts" }),
+    makeTool({ name: "alpha", sourcePath: "/tmp/tower/tools/alpha.tool.ts" }),
+  ];
+  expect(
+    bindingsFromCanonicalTools("tower", tools).map((entry) => entry.toolName),
+  ).toEqual(["alpha", "zeta"]);
+});
+
+test("groupBindingsByOwner groups bindings by executable owner", () => {
+  const groups = groupBindingsByOwner([
+    binding("tower", "claim_glyph"),
+    binding("tower", "submit_work"),
+    binding("booth", "register_draft"),
+    binding("quasar", "search"),
   ]);
 
   expect([...groups.keys()]).toEqual(["booth", "quasar", "tower"]);
-  expect(groups.get("tower")?.map((binding) => binding.toolName)).toEqual([
+  expect(groups.get("tower")?.map((entry) => entry.toolName)).toEqual([
     "claim_glyph",
     "submit_work",
   ]);

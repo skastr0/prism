@@ -2,8 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Schema } from "effect";
 import { planLowering } from "./lowerers/pi.js";
 import type { ComposedAgent } from "./compose.js";
+import { CanonicalTool } from "./sources.js";
 import type { DesiredFile } from "../sync/desired.js";
 import { PathConflictError } from "../errors.js";
 import { readSnapshot } from "../state/store.js";
@@ -48,47 +50,40 @@ export default {
 };
 `;
 
-test("pi lowerer owner-qualifies foreign tool bindings and extension only registers owned bindings", async () => {
+test("pi lowerer extension registers only the source plugin's canonical tools", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".pi");
-  const ownerPluginName = "ot";
 
-  // Create a real owned tool so the Pi extension bundle can be built.
   const sourcePluginPath = join(root, "consumer-plugin");
   const ownedToolPath = join(sourcePluginPath, "tools", "owned.tool.ts");
   await writeText(ownedToolPath, ownedToolSource);
 
+  const ownedTool = new CanonicalTool({
+    name: "owned",
+    sourcePath: ownedToolPath,
+    description: "Owned tool for the consumer plugin.",
+    input: Schema.Struct({}),
+    output: Schema.Struct({}),
+    slots: {},
+    async handle() {
+      return {};
+    },
+  });
+
   const consumerAgent: ComposedAgent = {
     name: "consumer",
-    description: "Consumer agent that references an owner tool",
+    description: "Consumer agent",
     body: "# Consumer\n",
     color: undefined,
     model: {},
     targetOverride: {},
     skills: [],
-    allowedSkills: [],
-    allowedTools: [],
-    toolBindings: [
-      {
-        kind: "permission",
-        logicalName: "echo",
-        toolPluginName: ownerPluginName,
-        toolName: "echo",
-        toolSourcePath: join(root, "owner-tools", "tools", "echo.tool.ts"),
-      },
-      {
-        kind: "permission",
-        logicalName: "owned",
-        toolPluginName: "consumer-plugin",
-        toolName: "owned",
-        toolSourcePath: ownedToolPath,
-      },
-    ],
   };
 
   const { files: operations } = await planLowering({
     agents: [consumerAgent],
     orbits: [],
+    tools: [ownedTool],
     skills: [],
     hooks: [],
     registry: undefined,
@@ -101,13 +96,9 @@ test("pi lowerer owner-qualifies foreign tool bindings and extension only regist
     },
   });
 
-  const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  expect(agent?.content).toContain("ot_echo");
-
   const extension = findContentOperation(operations, join("extensions", "prism-extension.js"));
   expect(extension).toBeDefined();
   expect(extension?.content).toContain("consumer_plugin_owned");
-  expect(extension?.content).not.toContain("ot_echo");
 
   const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
   expect(bundle).toBeUndefined();
@@ -134,10 +125,7 @@ test("two plugins compiling a same-named agent to Pi's direct agent surface fail
     model: {},
     targetOverride: {},
     skills: [],
-    allowedSkills: [],
-    allowedTools: [],
-    toolBindings: [],
-  });
+    });
 
   const lowerFor = (sourcePluginName: string) =>
     planLowering({

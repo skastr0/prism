@@ -36,7 +36,6 @@ const permissionBinding = (
   ownerPlugin: string,
   toolName: string,
 ): ResolvedContractBinding => ({
-  kind: "permission",
   logicalName: toolName,
   toolPluginName: ownerPlugin,
   toolName,
@@ -86,7 +85,6 @@ test("antigravity-cli lowerer emits executable hook wrappers with Antigravity ou
         name: "antigravity-hook-fixture",
         version: "0.1.0",
         targets: {
-          toolspaces: ["antigravity-cli"],
           hooks: ["antigravity-cli"],
         },
       },
@@ -96,25 +94,15 @@ test("antigravity-cli lowerer emits executable hook wrappers with Antigravity ou
   );
 
   await writeText(
-    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `
-export default {
-  name: "workspace",
-  tools: { shell: { targets: { "antigravity-cli": { name: "run_shell" } } } },
-};
-`,
-  );
-
-  await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
+import { hookEvent, hookTool } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  match: { tool: hookTool.native("run_shell") },
   handle: (event) => Effect.succeed(
     event.tool.input?.block
       || event.cwd !== ${JSON.stringify(pluginRoot)}
@@ -137,7 +125,7 @@ export default {
   name: "audit-shell-after",
   description: "Audit shell command responses",
   event: hookEvent.toolAfter,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  match: { tool: hookTool.native("run_shell") },
   handle: (event) => Effect.succeed(event.tool.output?.ok && event.cwd === ${JSON.stringify(pluginRoot)} && event.session?.id === "session-2" && event.native?.stepIdx === 5 && event.native?.error === "" ? { decision: "continue" as const } : { decision: "block" as const, message: "missing tool_response fallback" }),
 };
 `,
@@ -221,7 +209,6 @@ export default {
       sourcePluginPath: pluginRoot,
     },
   });
-
   const hookConfig = findContentOperation(operations, "hooks.json");
   expect(hookConfig?.content).toContain('"PreToolUse"');
   expect(hookConfig?.content).toContain('"PostToolUse"');

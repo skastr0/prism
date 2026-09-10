@@ -78,26 +78,7 @@ export default {
   name: "worker",
   description: "Worker agent for native plugin load tests",
   identity: "worker",
-  traits: ["actionable"],
 } satisfies AgentSource;
-`,
-  );
-
-  await writeText(
-    join(pluginRoot, "traits", "actionable.trait.ts"),
-    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "actionable",
-  description: "Can perform actions",
-  instructions: "Use the greet tool when appropriate.",
-  tools: {
-    greet: { ref: "greet" },
-  },
-  require: {
-    tools: ["greet"],
-  },
-} satisfies TraitSource;
 `,
   );
 

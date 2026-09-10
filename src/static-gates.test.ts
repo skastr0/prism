@@ -105,6 +105,24 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
       "only the call form (trailing paren) so it does not flag unrelated string comparisons against " +
       "the bare relic name (e.g. import-specifier filtering) or prose describing the deletion.",
   },
+  {
+    pattern: /\btraitRef\b|\bbindTrait\b|TraitSchema|normalizeTraitRefInput|NormalizedTraitBinding/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in workstream C — the trait primitive is gone; instructions belong in agents or skills",
+  },
+  {
+    pattern: /\btoolspaceRef\b|\btoolRef\b|\btoolGroupRef\b|ToolspaceSchema|normalizeToolRefInput|normalizeToolGroupRefInput/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in workstream C — toolspaces are gone; canonical tools are declared in tools/*.tool.ts",
+  },
+  {
+    pattern: /\bmaterializeTraitTools\b|\bmaterializeOrbitToolPermission\b|AccessSchema|\ballowedTools\b|\ballowedSkills\b/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in workstream C — agent tool grants and access intent are gone; Prism stops managing which tools an agent may use",
+  },
 ];
 
 const SRC_ROOT = import.meta.dir;

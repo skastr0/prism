@@ -5,11 +5,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
+import { Schema } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/grok.js";
 import { cliToolNameForBinding } from "./tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "./resolve.js";
-import { Contract } from "./sources.js";
+import { CanonicalTool } from "./sources.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -33,7 +34,6 @@ const permissionBinding = (
   toolPluginName: string,
   toolName: string,
 ): ResolvedContractBinding => ({
-  kind: "permission",
   logicalName: toolName,
   toolPluginName,
   toolName,
@@ -102,7 +102,6 @@ test("grok global lowerer emits a plugin bundle with agents, skills, and hooks",
         version: "0.3.0",
         targets: {
           skills: ["grok"],
-          toolspaces: ["grok"],
           hooks: ["grok"],
         },
       },
@@ -117,25 +116,15 @@ test("grok global lowerer emits a plugin bundle with agents, skills, and hooks",
   );
 
   await writeText(
-    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `
-export default {
-  name: "workspace",
-  tools: { shell: { targets: { "grok": { name: "run_terminal_cmd" } } } },
-};
-`,
-  );
-
-  await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  match: { tool: hookTool.native("run_terminal_cmd") },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
 };
 `,
@@ -239,24 +228,22 @@ export default {
   if (!subagentStopHook) throw new Error("expected subagent-stopped hook");
   if (!notificationHook) throw new Error("expected notified hook");
   const echoBinding: ResolvedContractBinding = {
-    kind: "permission",
     logicalName: "echo",
     toolPluginName: "grok-plugin-fixture",
     toolName: "echo",
     toolSourcePath: toolPath,
   };
-  const longSyntheticBinding: ResolvedContractBinding = {
-    kind: "synthetic",
-    logicalName: "echo_review",
-    contract: new Contract({
-      name: "echo__requirements_trace_review_details",
-      sourcePath: `${join(pluginRoot, "traits", "review.trait.ts")}#echo`,
-      pluginName: "grok-plugin-fixture",
-    }),
-    toolPluginName: "grok-plugin-fixture",
-    toolName: "echo_review",
-    toolSourcePath: toolPath,
-  };
+  const echoTool = new CanonicalTool({
+    name: "echo",
+    sourcePath: toolPath,
+    description: "Echo a message",
+    input: Schema.Struct({ message: Schema.String }),
+    output: Schema.Struct({ message: Schema.String }),
+    slots: {},
+    async handle(input: { message: string }) {
+      return { message: input.message };
+    },
+  });
 
   const { files: operations, regions } = await planLowering({
     agents: [
@@ -283,9 +270,6 @@ export default {
           },
         },
         skills: [],
-        allowedSkills: ["testing"],
-        allowedTools: ["grep_search"],
-        toolBindings: [echoBinding, longSyntheticBinding],
       },
       {
         name: "fallback",
@@ -301,12 +285,10 @@ export default {
           },
         },
         skills: [],
-        allowedSkills: [],
-        allowedTools: [],
-        toolBindings: [],
       },
     ],
     orbits: [],
+    tools: [echoTool],
     skills: [...registry.skills.values()],
     hooks: [hook, canonicalHook, sessionEndHook, promptSubmitHook, subagentStopHook, notificationHook],
     registry,
@@ -344,7 +326,6 @@ export default {
   expect(agent?.content).toContain("top_p: 0.7");
   expect(agent?.content).not.toContain("mcp__");
   expect(agent?.content).not.toContain('- "grok_plugin_fixture_echo"');
-  expect(agent?.content).toContain('- "grep_search"');
   expect(agent?.content).toContain('- "read_file"');
   expect(agent?.content).toContain('- "run_terminal_cmd"');
   expect(agent?.content).toContain('disallowedTools:\n  - "web_fetch"\n  - "web_search"');
@@ -379,17 +360,9 @@ export default {
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_terminal_cmd"');
   // Hook matchers use CLI tool names (not harness MCP wire names).
-  const generatedEchoTool = cliToolNameForBinding("grok-plugin-fixture", {
-    kind: "permission",
-    logicalName: "echo",
-    toolPluginName: "grok-plugin-fixture",
-    toolName: "echo",
-    toolSourcePath: "tools/echo.tool.ts",
-  });
-  const generatedSyntheticTool = cliToolNameForBinding("grok-plugin-fixture", longSyntheticBinding);
+  const generatedEchoTool = cliToolNameForBinding(echoBinding);
   expect(hookConfig?.content).toContain(`"matcher": "${generatedEchoTool}"`);
-  // Agent frontmatter no longer lists generated tool wire names.
-  expect(agent?.content).not.toContain(`- "${generatedSyntheticTool}"`);
+  // Agent frontmatter never lists generated tool wire names.
   expect(agent?.content).not.toContain(`- "${generatedEchoTool}"`);
   expect(hookConfig?.content).toContain(
     join(outputRoot, "plugins", "prism-generated-grok-plugin-fixture", "hooks", "audit-shell.mjs"),
@@ -483,9 +456,6 @@ test("grok project lowerer emits agents and skills directly without a shadow plu
       model: { model: "grok-4.5" },
       targetOverride: {},
       skills: [],
-      allowedSkills: [],
-      allowedTools: [],
-      toolBindings: [],
     }],
     orbits: [...registry.orbits.values()],
     skills: [...registry.skills.values()],
@@ -522,9 +492,6 @@ test("grok global lowerer omits an empty hooks map", async () => {
       model: {},
       targetOverride: {},
       skills: [],
-      allowedSkills: [],
-      allowedTools: [],
-      toolBindings: [],
     }],
     orbits: [],
     skills: [],
@@ -622,9 +589,6 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
           },
         },
         skills: ["direct-skill"],
-        allowedSkills: ["zeta", "alpha", "alpha"],
-        allowedTools: ["grep_search", "list_files"],
-        toolBindings: [],
       },
       {
         name: "frontmatter-omission",
@@ -634,9 +598,6 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
         model: { model: 123, effort: false, variant: null, reasoning_effort: "ignored" },
         targetOverride: { grok: {} },
         skills: ["direct-skill"],
-        allowedSkills: [],
-        allowedTools: [],
-        toolBindings: [],
       },
     ],
     orbits: [],
@@ -664,7 +625,7 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(precedenceAgent?.content).toContain("temperature: 0");
   expect(precedenceAgent?.content).toContain("top_p: 0");
   expect(precedenceAgent?.content).toContain(
-    'tools:\n  - "grep_search"\n  - "list_files"\n  - "read_file"\n  - "run_terminal_cmd"',
+    'tools:\n  - "grep_search"\n  - "read_file"\n  - "run_terminal_cmd"',
   );
   expect(precedenceAgent?.content).toContain(
     'disallowedTools:\n  - "web_fetch"\n  - "web_fetch"\n  - "web_search"',
@@ -690,53 +651,6 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(omissionAgent?.content).not.toContain("direct-skill");
 });
 
-test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".grok");
-  const pluginRoot = join(root, "invalid-grok-hook-fixture");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({ name: "invalid-grok-hook-fixture", version: "0.1.0", targets: { toolspaces: ["grok"], hooks: ["grok"] } }, null, 2)}\n`,
-  );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
-export default {
-  name: "workspace",
-  tools: { shell: { targets: { opencode: { name: "bash" } } } },
-};
-`);
-  await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "audit-shell",
-  event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
-  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-};
-`);
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const hook = registry.hooks.get("audit-shell");
-  if (!hook) throw new Error("expected audit-shell hook");
-
-  await expect(
-    planLowering({
-      agents: [],
-      orbits: [],
-      skills: [],
-      hooks: [hook],
-      registry,
-      target: {
-        scope: "global",
-        root: outputRoot,
-        sourcePluginName: "invalid-grok-hook-fixture",
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: pluginRoot,
-      },
-    }),
-  ).rejects.toThrow("has no 'grok' target binding");
-});
 
 test("grok lowerer reproduces the reported typefully-cli overflow and keeps it compliant (PQ-168)", async () => {
   const root = await createTempRoot();
@@ -752,9 +666,6 @@ test("grok lowerer reproduces the reported typefully-cli overflow and keeps it c
         model: {},
         targetOverride: {},
         skills: [],
-        allowedSkills: [],
-        allowedTools: [],
-        toolBindings: [binding],
       },
     ],
     orbits: [],
@@ -803,9 +714,6 @@ test("grok lowerer no longer emits generated tool wire names in agent frontmatte
         model: {},
         targetOverride: {},
         skills: [],
-        allowedSkills: [],
-        allowedTools: [],
-        toolBindings: bindings,
       },
     ],
     orbits: [],
@@ -825,7 +733,7 @@ test("grok lowerer no longer emits generated tool wire names in agent frontmatte
   expect(agent?.content).not.toContain("\ntools:");
   expect(agent?.content).not.toContain("mcp__");
   for (const { plugin, tool } of corpus) {
-    const name = cliToolNameForBinding(plugin, permissionBinding(plugin, tool));
+    const name = cliToolNameForBinding(permissionBinding(plugin, tool));
     expect(name.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   }
 });

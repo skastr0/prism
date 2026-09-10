@@ -24,9 +24,6 @@ import {
   makeRegistry,
   makeResolvedAgent,
   makeSkillspace,
-  makeTool,
-  makeToolspace,
-  makeTrait,
 } from "./test-support.js";
 
 const getFailure = <E>(
@@ -63,20 +60,6 @@ test("resolveAgent succeeds and exposes target-resolved surfaces", async () => {
   addToRegistry(registry, {
     identities: [makeIdentity({ name: "builder" })],
     personalities: [makePersonality({ name: "focused" })],
-    traits: [
-      makeTrait({
-        name: "reviewable",
-        tools: { submit_review: { ref: "submit_review" } },
-        access: { tools: ["workspace/run_shell"], skills: ["global/testing"] },
-      }),
-    ],
-    tools: [makeTool({ name: "submit_review" })],
-    toolspaces: [
-      makeToolspace({
-        name: "workspace",
-        tools: { run_shell: { targets: { opencode: "bash" } } },
-      }),
-    ],
     modelspaces: [
       makeModelspace({
         name: "models",
@@ -95,9 +78,7 @@ test("resolveAgent succeeds and exposes target-resolved surfaces", async () => {
         identity: "builder",
         personality: "focused",
         model: "models/default",
-        traits: [{ ref: "reviewable" }],
         skills: ["global/testing"],
-        access: { tools: ["workspace/run_shell"], skills: ["global/testing"] },
       }),
     ],
   });
@@ -108,13 +89,7 @@ test("resolveAgent succeeds and exposes target-resolved surfaces", async () => {
   expect(resolved.identity.name).toBe("builder");
   expect(resolved.personality?.name).toBe("focused");
   expect(resolved.resolvedModel).toEqual({ model: "openai/gpt-5" });
-  expect(resolved.canonicalTraitIds).toEqual(["test-plugin:reviewable"]);
   expect(resolved.skills).toEqual(["testing"]);
-  expect(resolved.allowedSkills).toEqual(["testing"]);
-  expect(resolved.allowedTools).toEqual(["bash"]);
-  expect(resolved.toolBindings).toHaveLength(1);
-  expect(resolved.toolBindings[0]!.kind).toBe("permission");
-  expect(resolved.toolBindings[0]!.logicalName).toBe("submit_review");
 });
 
 test("resolveAgent fails with UnknownReferenceError for missing identity", async () => {
@@ -130,75 +105,6 @@ test("resolveAgent fails with UnknownReferenceError for missing identity", async
 
   expect(error.field).toBe("identity");
   expect(error.referenceName).toBe("missing");
-});
-
-test("resolveAgent fails with UnknownReferenceError for missing trait", async () => {
-  const registry = makeRegistry();
-  addToRegistry(registry, {
-    identities: [makeIdentity()],
-    agents: [makeAgent({ traits: [{ ref: "missing" }] })],
-  });
-
-  const error = assertErrorTag(
-    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "opencode")),
-    "UnknownReferenceError",
-  );
-
-  expect(error.field).toBe("trait");
-  expect(error.referenceName).toBe("missing");
-});
-
-test("resolveAgent fails with UnknownReferenceError for missing tool ref", async () => {
-  const registry = makeRegistry();
-  addToRegistry(registry, {
-    identities: [makeIdentity()],
-    agents: [makeAgent({ access: { tools: ["workspace/missing"] } })],
-  });
-
-  const error = assertErrorTag(
-    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "opencode")),
-    "UnknownReferenceError",
-  );
-
-  expect(error.field).toBe("tool");
-});
-
-test("resolveAgent fails with UnknownReferenceError for missing tool group", async () => {
-  const registry = makeRegistry();
-  addToRegistry(registry, {
-    identities: [makeIdentity()],
-    toolspaces: [makeToolspace({ name: "workspace" })],
-    agents: [makeAgent({ access: { toolGroups: ["workspace#missing"] } })],
-  });
-
-  const error = assertErrorTag(
-    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "opencode")),
-    "UnknownReferenceError",
-  );
-
-  expect(error.field).toBe("tool-group");
-});
-
-test("resolveAgent fails with MissingTargetResolutionError for tool missing target", async () => {
-  const registry = makeRegistry();
-  addToRegistry(registry, {
-    identities: [makeIdentity()],
-    toolspaces: [
-      makeToolspace({
-        name: "workspace",
-        tools: { run_shell: { targets: { "claude-code": "bash" } } },
-      }),
-    ],
-    agents: [makeAgent({ access: { tools: ["workspace/run_shell"] } })],
-  });
-
-  const error = assertErrorTag(
-    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "opencode")),
-    "MissingTargetResolutionError",
-  );
-
-  expect(error.referenceKind).toBe("tool");
-  expect(error.target).toBe("opencode");
 });
 
 test("resolveAgent fails with MissingTargetResolutionError for model profile missing target", async () => {
@@ -286,7 +192,7 @@ test("resolveAgent fails with MissingTargetResolutionError for skillspace skill 
         skills: { testing: { targets: { "claude-code": { name: "testing" } } } },
       }),
     ],
-    agents: [makeAgent({ access: { skills: ["global/testing"] } })],
+    agents: [makeAgent({ skills: ["global/testing"] })],
   });
 
   const error = assertErrorTag(
@@ -308,7 +214,7 @@ test("resolveAgent fails with AgentValidationError for invalid OpenCode skill na
         skills: { testing: { targets: { opencode: { name: "Testing_123" } } } },
       }),
     ],
-    agents: [makeAgent({ access: { skills: ["global/testing"] } })],
+    agents: [makeAgent({ skills: ["global/testing"] })],
   });
 
   const error = assertErrorTag(
@@ -320,51 +226,14 @@ test("resolveAgent fails with AgentValidationError for invalid OpenCode skill na
   expect(error.message).toContain("invalid OpenCode skill name");
 });
 
-test("resolveAgent fails with AgentValidationError for duplicate trait", async () => {
-  const registry = makeRegistry();
-  addToRegistry(registry, {
-    identities: [makeIdentity()],
-    traits: [makeTrait({ name: "reviewable" })],
-    agents: [makeAgent({ traits: [{ ref: "reviewable" }, { ref: "reviewable" }] })],
-  });
-
-  const error = assertErrorTag(
-    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "opencode")),
-    "AgentValidationError",
-  );
-
-  expect(error.field).toBe("traits[1]");
-  expect(error.message).toContain("duplicate trait");
-});
-
-test("resolveAgent fails with AgentValidationError for trait slot on unknown tool", async () => {
-  const registry = makeRegistry();
-  addToRegistry(registry, {
-    identities: [makeIdentity()],
-    traits: [makeTrait({ name: "reviewable", tools: {} })],
-    agents: [
-      makeAgent({
-        traits: [{ ref: "reviewable", tools: { missing: { slots: {} } } }],
-      }),
-    ],
-  });
-
-  const error = assertErrorTag(
-    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "opencode")),
-    "AgentValidationError",
-  );
-
-  expect(error.message).toContain("fills slots for unknown tool");
-});
-
 test("resolveAgent resolves cross-plugin references through deps", async () => {
   const core = makeRegistry({ pluginName: "agent-core" });
   addToRegistry(core, {
     identities: [makeIdentity({ name: "builder" })],
-    toolspaces: [
-      makeToolspace({
-        name: "workspace",
-        tools: { run_shell: { targets: { opencode: "bash" } } },
+    skillspaces: [
+      makeSkillspace({
+        name: "core-skills",
+        skills: { testing: { targets: { opencode: { name: "testing" } } } },
       }),
     ],
   });
@@ -376,7 +245,7 @@ test("resolveAgent resolves cross-plugin references through deps", async () => {
       makeAgent({
         name: "worker",
         identity: "agent-core:builder",
-        access: { tools: ["agent-core:workspace/run_shell"] },
+        skills: ["agent-core:core-skills/testing"],
       }),
     ],
   });
@@ -386,22 +255,13 @@ test("resolveAgent resolves cross-plugin references through deps", async () => {
   );
 
   expect(resolved.identity.name).toBe("builder");
-  expect(resolved.allowedTools).toEqual(["bash"]);
+  expect(resolved.skills).toEqual(["testing"]);
 });
 
-test("resolveAgent produces sorted tool and skill lists", async () => {
+test("resolveAgent produces sorted skill lists", async () => {
   const registry = makeRegistry();
   addToRegistry(registry, {
     identities: [makeIdentity()],
-    toolspaces: [
-      makeToolspace({
-        name: "workspace",
-        tools: {
-          z_tool: { targets: { opencode: "z" } },
-          a_tool: { targets: { opencode: "a" } },
-        },
-      }),
-    ],
     skillspaces: [
       makeSkillspace({
         name: "global",
@@ -413,10 +273,7 @@ test("resolveAgent produces sorted tool and skill lists", async () => {
     ],
     agents: [
       makeAgent({
-        access: {
-          tools: ["workspace/z_tool", "workspace/a_tool"],
-          skills: ["global/zeta", "global/alpha"],
-        },
+        skills: ["global/zeta", "global/alpha"],
       }),
     ],
   });
@@ -425,28 +282,20 @@ test("resolveAgent produces sorted tool and skill lists", async () => {
     resolveAgent(registry.agents.get("builder")!, registry, "opencode"),
   );
 
-  expect(resolved.allowedTools).toEqual(["a", "z"]);
-  expect(resolved.allowedSkills).toEqual(["alpha", "zeta"]);
+  expect(resolved.skills).toEqual(["alpha", "zeta"]);
 });
 
-test("validateOrbit succeeds for valid agent phase with trait requirements", async () => {
+test("validateOrbit succeeds for a valid agent phase", async () => {
   const registry = makeRegistry();
   addToRegistry(registry, {
     identities: [makeIdentity()],
-    traits: [makeTrait({ name: "reviewable" })],
-    agents: [
-      makeAgent({
-        name: "builder",
-        traits: [{ ref: "reviewable" }],
-      }),
-    ],
+    agents: [makeAgent({ name: "builder" })],
     orbits: [
       makeOrbit({
         phases: [
           {
             name: "Review",
             agents: ["builder"],
-            requires: [{ all: ["reviewable"] }],
           },
         ],
       }),
@@ -480,33 +329,6 @@ test("validateOrbit fails when phase declares multiple references", async () => 
   );
 
   expect(error.message).toContain("multiple references");
-});
-
-test("validateOrbit fails when assigned agents do not satisfy required traits", async () => {
-  const registry = makeRegistry();
-  addToRegistry(registry, {
-    identities: [makeIdentity()],
-    traits: [makeTrait({ name: "reviewable" })],
-    agents: [makeAgent({ name: "builder" })],
-    orbits: [
-      makeOrbit({
-        phases: [
-          {
-            name: "Review",
-            agents: ["builder"],
-            requires: [{ all: ["reviewable"], min: 1 }],
-          },
-        ],
-      }),
-    ],
-  });
-
-  const error = assertErrorTag(
-    await failResolve(validateOrbit(registry.orbits.get("delivery")!, registry)),
-    "OrbitValidationError",
-  );
-
-  expect(error.message).toContain("requires at least 1");
 });
 
 test("validateOrbit fails when parameterized orbit is referenced directly", async () => {
@@ -703,19 +525,9 @@ test("projectOrbitsForCompileManifest fails for dangling agent refs", async () =
 test("makeResolvedAgent factory produces a valid ResolvedAgent", () => {
   const resolved = makeResolvedAgent({
     skills: ["testing"],
-    toolBindings: [
-      {
-        kind: "permission",
-        logicalName: "submit_review",
-        toolPluginName: "test-plugin",
-        toolName: "submit_review",
-        toolSourcePath: "/test/plugin/tools/submit_review.tool.ts",
-      },
-    ],
   });
 
   expect(resolved.agent.name).toBe("builder");
   expect(resolved.identity.name).toBe("builder");
   expect(resolved.skills).toEqual(["testing"]);
-  expect(resolved.toolBindings[0]!.kind).toBe("permission");
 });

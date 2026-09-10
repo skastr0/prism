@@ -5,6 +5,7 @@
  * - agents/*.agent.ts
  * - traits/*.trait.ts
  * - orbits/*.orbit.ts
+ * - sops/*.sop.ts
  * - toolspaces/*.toolspace.ts
  * - modelspaces/*.modelspace.ts
  * - skillspaces/*.skillspace.ts
@@ -305,6 +306,35 @@ export interface OrbitDefinition {
 }
 
 export type OrbitSource = OrbitDefinition;
+
+export interface SopPhaseDefinition {
+  readonly name: string;
+  readonly purpose: string;
+  /** Optional typed phase input contract (Effect Schema). */
+  readonly input?: EffectSchemaValue;
+  /** Optional typed phase output contract (Effect Schema). */
+  readonly output?: EffectSchemaValue;
+  /** Judge-level bars a schema cannot express. */
+  readonly acceptance_criteria?: ReadonlyArray<string>;
+  /** When to stop and ask a human. */
+  readonly escalation?: string;
+  /** Full procedure prose for this phase — steps, failure modes, examples. */
+  readonly body: string;
+}
+
+/**
+ * A SOP is a type-safe procedure. It may say what must be true; it never
+ * names who executes it, with what tool, or in what runtime.
+ */
+export interface SopDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly phases: ReadonlyArray<SopPhaseDefinition>;
+  /** Cross-phase frame for the whole procedure. */
+  readonly body?: string;
+}
+
+export type SopSource = SopDefinition;
 
 export interface ToolTargetBindingDefinition {
   readonly name: string;

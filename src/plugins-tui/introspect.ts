@@ -29,6 +29,7 @@ export const buildIntrospection = (registry: PluginRegistry): PluginIntrospectio
   const mapEntries: Array<[string, Map<string, unknown>]> = [
     ["agent", registry.agents],
     ["orbit", registry.orbits],
+    ["sop", registry.sops],
     ["tool", registry.tools],
     ["skill", registry.skills],
     ["hook", registry.hooks],
@@ -72,6 +73,6 @@ export const buildIntrospection = (registry: PluginRegistry): PluginIntrospectio
   return {
     pluginName: registry.pluginName,
     groups,
-    orbitSkillCount: registry.orbits.size,
+    derivedSkillCount: registry.orbits.size + registry.sops.size,
   };
 };

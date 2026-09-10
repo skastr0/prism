@@ -25,6 +25,11 @@ describe("buildIntrospection", () => {
       description: "Test orbit",
     } as never);
 
+    registry.sops.set("sop-y", {
+      name: "sop-y",
+      description: "Test sop",
+    } as never);
+
     registry.tools.set("tool-1", {
       name: "tool-1",
       description: "A tool",
@@ -35,8 +40,8 @@ describe("buildIntrospection", () => {
     const result = buildIntrospection(registry);
 
     expect(result.pluginName).toBe("test-plugin");
-    expect(result.orbitSkillCount).toBe(1); // 1 orbit
-    expect(result.groups).toHaveLength(3); // agents, orbits, tools (skipping empty ones)
+    expect(result.derivedSkillCount).toBe(2); // 1 orbit + 1 sop
+    expect(result.groups).toHaveLength(4); // agents, orbits, sops, tools (skipping empty ones)
 
     // Check agents group
     const agentGroup = result.groups.find((g) => g.noun === "agent");
@@ -55,6 +60,13 @@ describe("buildIntrospection", () => {
     expect(orbitGroup!.count).toBe(1);
     expect(orbitGroup!.entries[0]!.name).toBe("orbit-x");
     expect(orbitGroup!.entries[0]!.summary).toBe("Test orbit");
+
+    // Check sops group
+    const sopGroup = result.groups.find((g) => g.noun === "sop");
+    expect(sopGroup).toBeDefined();
+    expect(sopGroup!.count).toBe(1);
+    expect(sopGroup!.entries[0]!.name).toBe("sop-y");
+    expect(sopGroup!.entries[0]!.summary).toBe("Test sop");
 
     // Check tools group
     const toolGroup = result.groups.find((g) => g.noun === "tool");
@@ -115,7 +127,7 @@ describe("buildIntrospection", () => {
     const result = buildIntrospection(registry);
 
     expect(result.pluginName).toBe("empty-plugin");
-    expect(result.orbitSkillCount).toBe(0);
+    expect(result.derivedSkillCount).toBe(0);
     expect(result.groups).toHaveLength(0);
   });
 

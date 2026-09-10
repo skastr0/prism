@@ -7,6 +7,7 @@ import {
   type ModelspaceSource,
   type OrbitSource,
   type SkillspaceSource,
+  type SopSource,
   type ToolSource,
   type ToolspaceSource,
   type TraitSource,
@@ -17,6 +18,7 @@ import {
   ModelspaceSourceSchema,
   OrbitSourceSchema,
   SkillspaceSourceSchema,
+  SopSourceSchema,
   ToolSourceSchema,
   ToolspaceSourceSchema,
   TraitSourceSchema,
@@ -189,6 +191,28 @@ describe("public source contracts", () => {
       handle: () => Effect.succeed({ decision: "continue" as const }),
     } satisfies HookSource<typeof hookEvent.sessionStart>;
 
+    const sop = {
+      name: "beacon",
+      description: "Marketing method.",
+      phases: [
+        {
+          name: "explore",
+          purpose: "Map the space before committing.",
+          input: Schema.Struct({ brief: Schema.String }),
+          output: Schema.Struct({ summary: Schema.String }),
+          acceptance_criteria: ["Positioning hypothesis is falsifiable"],
+          escalation: "Ask a human when the audience is unclear.",
+          body: "Read the brief.",
+        },
+        {
+          name: "build",
+          purpose: "Produce the artifact.",
+          body: "Write it.",
+        },
+      ],
+      body: "Cross-phase frame.",
+    } satisfies SopSource;
+
     expectDecodes(AgentSourceSchema, agent);
     expectDecodes(TraitSourceSchema, trait);
     expectDecodes(ToolSourceSchema, tool);
@@ -202,6 +226,45 @@ describe("public source contracts", () => {
       "Validate result",
     ]);
     expectDecodes(HookSourceSchema, hook);
+    const decodedSop = expectDecodes(SopSourceSchema, sop);
+    expect(decodedSop.phases[0]?.acceptance_criteria).toEqual([
+      "Positioning hypothesis is falsifiable",
+    ]);
+    expect(decodedSop.phases[1]?.input).toBeUndefined();
+  });
+
+  test("sop executor, tool, and runtime fields are explicitly unsupported", () => {
+    const base = {
+      name: "beacon",
+      description: "Marketing method.",
+      phases: [{ name: "explore", purpose: "Map the space.", body: "Read the brief." }],
+    };
+
+    expectRejects(SopSourceSchema, { ...base, orchestrator: { agent: "builder" } });
+    expectRejects(SopSourceSchema, { ...base, parameters: [{ name: "domain" }] });
+    expectRejects(SopSourceSchema, { ...base, definitions: {} });
+    expectRejects(SopSourceSchema, { ...base, signal_emitter: { destinations: [] } });
+    expectRejects(SopSourceSchema, { ...base, pulsar_checkpoints: [] });
+    expectRejects(SopSourceSchema, {
+      ...base,
+      phases: [{ ...base.phases[0]!, agents: ["builder"] }],
+    });
+    expectRejects(SopSourceSchema, {
+      ...base,
+      phases: [{ ...base.phases[0]!, requires: [{ all: ["committable"] }] }],
+    });
+    expectRejects(SopSourceSchema, {
+      ...base,
+      phases: [{ ...base.phases[0]!, tools: [] }],
+    });
+    expectRejects(SopSourceSchema, {
+      ...base,
+      phases: [{ ...base.phases[0]!, contract: { input: {} } }],
+    });
+    expectRejects(SopSourceSchema, {
+      ...base,
+      phases: [{ ...base.phases[0]!, orbit_binding: { orbit: "x" } }],
+    });
   });
 
   test("orbit tool permission bind is explicitly unsupported", () => {

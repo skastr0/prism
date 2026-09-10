@@ -92,8 +92,8 @@ export interface IntrospectionNounGroup {
 export interface PluginIntrospection {
   readonly pluginName: string;
   readonly groups: ReadonlyArray<IntrospectionNounGroup>;
-  /** Orbit-derived skills are synthesized at lower-time, not in registry.skills. */
-  readonly orbitSkillCount: number;
+  /** Orbit/SOP-derived skills are synthesized at lower-time, not in registry.skills. */
+  readonly derivedSkillCount: number;
 }
 
 export type IntrospectionResult =

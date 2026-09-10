@@ -36,6 +36,7 @@ export const typescriptTsconfigJson = `${JSON.stringify(
     include: [
       "agents/**/*.ts",
       "orbits/**/*.ts",
+      "sops/**/*.ts",
       "modelspaces/**/*.ts",
       "schemas/**/*.ts",
       "skillspaces/**/*.ts",
@@ -87,7 +88,7 @@ export const oxfmtConfigJson = `${JSON.stringify(
   2
 )}\n`;
 
-export const prismOxlintPluginJs = `const DSL_PATH_PATTERN = /(^|\\/)(agents|orbits|modelspaces|skillspaces|toolspaces|traits)(\\/|$)|\\.(agent|orbit|modelspace|skillspace|toolspace|trait)\\.ts$/;
+export const prismOxlintPluginJs = `const DSL_PATH_PATTERN = /(^|\\/)(agents|orbits|sops|modelspaces|skillspaces|toolspaces|traits)(\\/|$)|\\.(agent|orbit|sop|modelspace|skillspace|toolspace|trait)\\.ts$/;
 
 const getPropertyName = (property) => {
   if (!property || property.type !== "Property") {

@@ -3,7 +3,7 @@
  * ComposedAgent for the lowerers.
  */
 
-import type { NormalizedOrbitPhase as OrbitPhase } from "./sources.js";
+import type { NormalizedOrbitPhase as OrbitPhase, NormalizedSopPhase as SopPhase } from "./sources.js";
 import type { ResolvedAgent, ResolvedContractBinding } from "./resolve.js";
 
 export interface ComposedAgentManifestMetadata {
@@ -195,5 +195,35 @@ export const composeOrbitPhaseReference = (
   return {
     label: "(no reference)",
     detailLines: [],
+  };
+};
+
+export interface ComposedSopPhaseReference {
+  readonly label: string;
+  readonly detailLines: ReadonlyArray<string>;
+}
+
+/**
+ * Diagnostics-only summary of a SOP phase's typed contract. SOP phases have
+ * no agent/orbit references by construction, so the only "reference" a phase
+ * carries is the shape of its input/output contract.
+ */
+export const composeSopPhaseReference = (
+  phase: SopPhase,
+): ComposedSopPhaseReference => {
+  const sides = [
+    phase.input ? "input" : undefined,
+    phase.output ? "output" : undefined,
+  ].filter((side): side is string => side !== undefined);
+
+  if (sides.length === 0) {
+    return { label: "prose only", detailLines: [] };
+  }
+
+  return {
+    label: `typed ${sides.join(" + ")}`,
+    detailLines: [
+      `- **Typed contract**: ${sides.join(" and ")} schema(s) declared; the phase reference carries the full contract.`,
+    ],
   };
 };

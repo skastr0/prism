@@ -649,3 +649,171 @@ export default {
 
   expect(sourceFamilySnapshot(helperRegistry)).toEqual(sourceFamilySnapshot(nounRegistry));
 });
+
+const writeSopManifest = (pluginRoot: string, name: string): Promise<void> =>
+  writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name,
+        version: "0.1.0",
+        targets: { sops: ["claude-code"] },
+      },
+      null,
+      2,
+    ),
+  );
+
+test("loadPlugin loads a sop source with validated typed phase IO", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeSopManifest(pluginRoot, "sop-fixture");
+  await writeText(
+    join(pluginRoot, "sops", "beacon.sop.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import type { SopSource } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "beacon",
+  description: "Marketing method.",
+  phases: [
+    {
+      name: "explore",
+      purpose: "Map the space.",
+      input: Schema.Struct({ brief: Schema.String }),
+      output: Schema.Struct({ summary: Schema.String }),
+      acceptance_criteria: ["Hypothesis is falsifiable"],
+      escalation: "Ask a human when the audience is unclear",
+      body: "## Steps\\n\\nDo the work.",
+    },
+    {
+      name: "build",
+      purpose: "Build the artifact.",
+      body: "Write it.",
+    },
+  ],
+  body: "Cross-phase frame.",
+} satisfies SopSource;
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const sop = registry.sops.get("beacon");
+
+  expect(sop).toBeDefined();
+  expect(sop?.description).toBe("Marketing method.");
+  expect(sop?.body).toBe("Cross-phase frame.");
+  expect(sop?.phases.map((phase) => phase.name)).toEqual(["explore", "build"]);
+  expect(sop?.phases[0]?.acceptanceCriteria).toEqual(["Hypothesis is falsifiable"]);
+  expect(sop?.phases[0]?.escalation).toBe("Ask a human when the audience is unclear");
+  expect(Schema.isSchema(sop?.phases[0]?.input)).toBe(true);
+  expect(Schema.isSchema(sop?.phases[0]?.output)).toBe(true);
+  expect(sop?.phases[1]?.input).toBeUndefined();
+  expect(sop?.phases[1]?.body).toBe("Write it.");
+});
+
+test("loadPlugin rejects sop non-schema phase IO", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeSopManifest(pluginRoot, "bad-sop-io");
+  await writeText(
+    join(pluginRoot, "sops", "beacon.sop.ts"),
+    `export default {
+  name: "beacon",
+  description: "Bad IO.",
+  phases: [{ name: "explore", purpose: "P", input: { type: "object" }, body: "b" }],
+};
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("SourceParseError");
+  expect((failure as { readonly message: string }).message).toContain(
+    "phases[0].input: must be an Effect Schema",
+  );
+});
+
+test("loadPlugin rejects forbidden executor fields in sop sources with remediation", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeSopManifest(pluginRoot, "bad-sop-field");
+  await writeText(
+    join(pluginRoot, "sops", "beacon.sop.ts"),
+    `export default {
+  name: "beacon",
+  description: "Bad field.",
+  phases: [{ name: "explore", purpose: "P", body: "b", agents: ["builder"] }],
+};
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("SourceParseError");
+  expect((failure as { readonly message: string }).message).toContain(
+    "phases[0].agents: is not part of the SOP phase schema",
+  );
+});
+
+test("loadPlugin rejects sop names that are not valid skill names or do not match the stem", async () => {
+  const mismatchRoot = await createTempRoot();
+  await writeSopManifest(mismatchRoot, "mismatch-sop");
+  await writeText(
+    join(mismatchRoot, "sops", "beacon.sop.ts"),
+    `export default {
+  name: "signal",
+  description: "Mismatch.",
+  phases: [{ name: "explore", purpose: "P", body: "b" }],
+};
+`,
+  );
+
+  const mismatchExit = await Effect.runPromiseExit(loadPlugin(mismatchRoot));
+  const mismatchFailure = getFailure(mismatchExit);
+  expect(mismatchFailure._tag).toBe("SourceParseError");
+  expect((mismatchFailure as { readonly message: string }).message).toContain(
+    "sop 'name' field ('signal') must match file stem ('beacon')",
+  );
+
+  const badNameRoot = await createTempRoot();
+  await writeSopManifest(badNameRoot, "bad-sop-name");
+  await writeText(
+    join(badNameRoot, "sops", "BadName.sop.ts"),
+    `export default {
+  name: "BadName",
+  description: "Bad name.",
+  phases: [{ name: "explore", purpose: "P", body: "b" }],
+};
+`,
+  );
+
+  const nameExit = await Effect.runPromiseExit(loadPlugin(badNameRoot));
+  const nameFailure = getFailure(nameExit);
+  expect(nameFailure._tag).toBe("SourceParseError");
+  expect((nameFailure as { readonly message: string }).message).toContain(
+    "must be a valid skill name",
+  );
+});
+
+test("loadPlugin discovers only sops/*.sop.ts files in the sops directory", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeSopManifest(pluginRoot, "sop-discovery");
+  await writeText(
+    join(pluginRoot, "sops", "beacon.sop.ts"),
+    `export default {
+  name: "beacon",
+  description: "Beacon.",
+  phases: [{ name: "explore", purpose: "P", body: "b" }],
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "sops", "helper.ts"),
+    `export const ignored = true;\n`,
+  );
+  await writeText(
+    join(pluginRoot, "sops", "not-a-sop.md"),
+    `# ignored\n`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  expect([...registry.sops.keys()]).toEqual(["beacon"]);
+});

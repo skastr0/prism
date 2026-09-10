@@ -371,7 +371,7 @@ function IntrospectContent({
               <span fg={gi === at.gi ? PALETTE.fgBright : PALETTE.fg}>{`${group.noun} (${group.count})`}</span>
             </text>
           ))}
-          <text content={`orbit-skills ${result.value.orbitSkillCount}`} style={{ fg: PALETTE.fgDim, marginTop: 1 }} />
+          <text content={`derived-skills ${result.value.derivedSkillCount}`} style={{ fg: PALETTE.fgDim, marginTop: 1 }} />
         </box>
       ) : null}
       <box style={{ width: entriesW, flexDirection: "column", marginRight: 1 }}>

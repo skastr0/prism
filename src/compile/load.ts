@@ -31,6 +31,8 @@ import {
   Skill,
   Skillspace,
   SkillspaceSchema,
+  Sop,
+  SopDefinitionSchema,
   Toolspace,
   ToolspaceSchema,
   Trait,
@@ -52,9 +54,11 @@ import {
   type NormalizedOrbitOrchestrator,
   type NormalizedOrbitPhase,
   type NormalizedOrbitToolPermissionTool,
+  type NormalizedSopPhase,
   type NormalizedTraitBinding,
   type NormalizedTraitBindingToolSlot,
   type SkillRefInput,
+  type SopDefinition,
   type TraitBindingInput,
   type TraitRefInput,
 } from "./sources.js";
@@ -66,6 +70,7 @@ import {
   type CompileError,
 } from "./errors.js";
 import { PluginManifestError } from "../errors.js";
+import { validateSkillName } from "../manifest.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { deriveProjectKey, projectGeneratedAgentsPath, projectGeneratedRefsDir } from "../project-key.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
@@ -593,7 +598,7 @@ const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> =>
   const prismHome = resolvePrismHome();
   const { key } = deriveProjectKey();
   const refsDir = projectGeneratedRefsDir(prismHome, key);
-  const modules = ["agents", "models", "skills", "traits", "orbits", "tools"] as const;
+  const modules = ["agents", "models", "skills", "traits", "orbits", "sops", "tools"] as const;
   return Object.fromEntries(
     modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
   );
@@ -828,6 +833,7 @@ const TOOLSPACE_SUFFIX_TS = ".toolspace.ts";
 const MODELSPACE_SUFFIX_TS = ".modelspace.ts";
 const SKILLSPACE_SUFFIX_TS = ".skillspace.ts";
 const ORBIT_SUFFIX_TS = ".orbit.ts";
+const SOP_SUFFIX_TS = ".sop.ts";
 const TOOL_SUFFIX_TS = ".tool.ts";
 const HOOK_SUFFIX_TS = ".hook.ts";
 
@@ -2509,6 +2515,215 @@ const loadOrbits = (
     return map;
   });
 
+const FORBIDDEN_SOP_FIELDS = [
+  "agent",
+  "agents",
+  "roles",
+  "role",
+  "requires",
+  "orchestrator",
+  "tools",
+  "tool_permissions",
+  "signals",
+  "signal_emitter",
+  "checkpoints",
+  "pulsar_checkpoints",
+  "definitions",
+  "parameters",
+  "bindings",
+  "orbit",
+  "orbit_binding",
+] as const;
+
+const SOP_INVARIANT =
+  "a SOP says what must be true and never names who executes it, with what tool, or in what runtime";
+
+const unsupportedSopFieldError = (
+  sourcePath: string,
+  raw: unknown,
+): SourceParseError | undefined => {
+  if (!isRecord(raw)) return undefined;
+
+  for (const field of FORBIDDEN_SOP_FIELDS) {
+    if (!hasOwn(raw, field)) continue;
+    return forbiddenFieldError(sourcePath, "sop", field, `is not part of the SOP schema; ${SOP_INVARIANT}`);
+  }
+
+  const phases = raw.phases;
+  if (!Array.isArray(phases)) return undefined;
+  for (const [index, phase] of phases.entries()) {
+    if (!isRecord(phase)) continue;
+    for (const field of FORBIDDEN_SOP_FIELDS) {
+      if (!hasOwn(phase, field)) continue;
+      return forbiddenFieldError(
+        sourcePath,
+        "sop",
+        `phases[${index}].${field}`,
+        `is not part of the SOP phase schema; ${SOP_INVARIANT}`,
+      );
+    }
+  }
+
+  return undefined;
+};
+
+const sopSourceParseError = (
+  sourcePath: string,
+  field: string,
+  message: string,
+): SourceParseError =>
+  new SourceParseError({
+    sourcePath,
+    kind: "sop",
+    message: `${field}: ${message}`,
+  });
+
+const normalizeSopPhaseContract = (
+  sourcePath: string,
+  phase: SopDefinition["phases"][number],
+  index: number,
+): Pick<NormalizedSopPhase, "input" | "output"> | SourceParseError => {
+  const normalized: {
+    input?: Schema.Schema.AnyNoContext;
+    output?: Schema.Schema.AnyNoContext;
+  } = {};
+
+  for (const side of ["input", "output"] as const) {
+    const schema = phase[side];
+    if (schema === undefined) continue;
+    if (!isEffectSchema(schema)) {
+      return sopSourceParseError(
+        sourcePath,
+        `phases[${index}].${side}`,
+        "must be an Effect Schema",
+      );
+    }
+    normalized[side] = schema;
+  }
+
+  return normalized;
+};
+
+const normalizeSopPhase = (
+  sourcePath: string,
+  phase: SopDefinition["phases"][number],
+  index: number,
+): NormalizedSopPhase | SourceParseError => {
+  const contract = normalizeSopPhaseContract(sourcePath, phase, index);
+  if (contract instanceof SourceParseError) return contract;
+
+  return {
+    name: phase.name,
+    purpose: phase.purpose,
+    ...(contract.input ? { input: contract.input } : {}),
+    ...(contract.output ? { output: contract.output } : {}),
+    acceptanceCriteria: [...(phase.acceptance_criteria ?? [])],
+    ...(phase.escalation !== undefined ? { escalation: phase.escalation } : {}),
+    body: phase.body.trim(),
+  };
+};
+
+const parseSopDefinition = (
+  sourcePath: string,
+  raw: unknown,
+): Effect.Effect<Sop, CompileError> =>
+  Effect.gen(function* () {
+    const unsupported = unsupportedSopFieldError(sourcePath, raw);
+    if (unsupported) return yield* Effect.fail(unsupported);
+
+    const result = Schema.decodeUnknownEither(SopDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
+    if (result._tag === "Left") {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "sop",
+          message: result.left.message,
+        }),
+      );
+    }
+
+    const parsed = result.right;
+    const fileStem = stripSuffix(basename(sourcePath), [SOP_SUFFIX_TS]);
+    if (parsed.name !== fileStem) {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "sop",
+          message: `sop 'name' field ('${parsed.name}') must match file stem ('${fileStem}')`,
+        }),
+      );
+    }
+
+    const skillName = validateSkillName(parsed.name);
+    if (!skillName.valid) {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "sop",
+          message: `sop name must be a valid skill name: ${skillName.error}`,
+        }),
+      );
+    }
+
+    const phases: NormalizedSopPhase[] = [];
+    for (const [index, phase] of parsed.phases.entries()) {
+      const normalized = normalizeSopPhase(sourcePath, phase, index);
+      if (normalized instanceof SourceParseError) {
+        return yield* Effect.fail(normalized);
+      }
+      phases.push(normalized);
+    }
+
+    return new Sop({
+      name: parsed.name,
+      sourcePath,
+      description: parsed.description,
+      phases,
+      body: (parsed.body ?? "").trim(),
+    });
+  });
+
+const parseSopTs = (
+  sourcePath: string,
+): Effect.Effect<Sop, CompileError> =>
+  Effect.gen(function* () {
+    const raw = yield* importTsModule<unknown>(sourcePath, "sop");
+    return yield* parseSopDefinition(sourcePath, raw);
+  });
+
+const loadSops = (
+  pluginPath: string,
+): Effect.Effect<Map<string, Sop>, CompileError> =>
+  Effect.gen(function* () {
+    const dir = join(pluginPath, "sops");
+    const entries = yield* listDir(dir);
+    const map = new Map<string, Sop>();
+
+    for (const entry of entries.sort()) {
+      if (!entry.endsWith(SOP_SUFFIX_TS)) {
+        continue;
+      }
+
+      const sop = yield* parseSopTs(join(dir, entry));
+
+      const existing = map.get(sop.name);
+      if (existing) {
+        return yield* Effect.fail(
+          new DuplicateNameError({
+            kind: "sop",
+            name: sop.name,
+            firstPath: existing.sourcePath,
+            secondPath: sop.sourcePath,
+          }),
+        );
+      }
+
+      map.set(sop.name, sop);
+    }
+
+    return map;
+  });
+
 const parseHook = (sourcePath: string): Effect.Effect<Hook, CompileError> =>
   Effect.gen(function* () {
     const raw = yield* importTsModule<unknown>(sourcePath, "hook");
@@ -2834,6 +3049,7 @@ const loadPluginArtifacts = (
     registry.tools = yield* loadCanonicalTools(pluginPath);
     registry.hooks = yield* loadHooks(pluginPath);
     registry.orbits = yield* loadOrbits(pluginPath);
+    registry.sops = yield* loadSops(pluginPath);
     registry.agents = yield* loadAgents(pluginPath);
     return registry;
   });

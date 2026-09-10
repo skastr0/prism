@@ -92,6 +92,7 @@ const collectSourcePaths = (registry: PluginRegistry): ReadonlyArray<string> => 
     ...registry.tools.values(),
     ...registry.hooks.values(),
     ...registry.orbits.values(),
+    ...registry.sops.values(),
     ...registry.agents.values(),
   ].map((source) => source.sourcePath);
 

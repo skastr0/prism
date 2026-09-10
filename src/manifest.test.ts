@@ -261,6 +261,21 @@ test("readManifest rejects empty agent presets and accepts claw-harness hooks th
   expect((await readManifest(hookPluginRoot)).targets.hooks).toEqual(["claw-harness"]);
 });
 
+test("readManifest accepts targets.sops for compile skill harnesses and rejects cursor", async () => {
+  const okRoot = await createPluginWithManifest("sops-target", {
+    sops: ["claude-code", "opencode", "coding-harness"],
+  });
+  const manifest = await readManifest(okRoot);
+  expect(manifest.targets.sops).toEqual(["claude-code", "opencode", "coding-harness"]);
+
+  const cursorRoot = await createPluginWithManifest("sops-cursor", {
+    sops: ["cursor"],
+  });
+  await expectManifestValidationDetails(cursorRoot, [
+    "targets.sops resolves to unsupported harnesses for sops: cursor (Cursor)",
+  ]);
+});
+
 test("readManifest rejects file-level targets in shared install artifacts", async () => {
   const pluginRoot = await createPluginWithManifest("shared-file-targets", {
     rules: ["opencode"],

@@ -123,6 +123,7 @@ const targetSupportsCompileSourceNoun = (
     case "hooks":
       return capabilities.hooks === "supported";
     case "orbits":
+    case "sops":
     case "toolspaces":
     case "modelspaces":
     case "skillspaces":

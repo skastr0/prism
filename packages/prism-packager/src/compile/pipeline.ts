@@ -16,6 +16,7 @@ import { loadPlugin } from "./load.js";
 import {
   instantiateOrbit,
   projectOrbitsForCompileManifest,
+  projectSopsForCompileManifest,
   resolveAgent,
   resolveOrbitSkillPermissions,
   resolveOrbitToolPermissions,
@@ -55,7 +56,7 @@ import {
   type CompileError,
 } from "./errors.js";
 import { BlockedTargetError, PluginManifestError } from "../errors.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
 import { planHooksForTarget, type HookFidelityEntry } from "./hook-planning.js";
 import {
@@ -96,6 +97,7 @@ interface LowererModule {
   readonly planLowering: (input: {
     readonly agents: ReadonlyArray<ComposedAgent>;
     readonly orbits: ReadonlyArray<Orbit>;
+    readonly sops: ReadonlyArray<Sop>;
     readonly tools: ReadonlyArray<CanonicalTool>;
     readonly skills: ReadonlyArray<Skill>;
     readonly hooks: ReadonlyArray<Hook>;
@@ -127,6 +129,7 @@ interface TargetSurfaceSelection {
   readonly runtime: SourceRuntimeRequirements;
   readonly agents: boolean;
   readonly orbits: boolean;
+  readonly sops: boolean;
   readonly tools: boolean;
   readonly skills: boolean;
   readonly hooks: boolean;
@@ -171,6 +174,7 @@ export interface CompileResult {
   readonly lockfilePath: string | null;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   /** Desired state produced by the (pure) lowerer. */
   readonly files: ReadonlyArray<DesiredFile>;
   readonly regions: ReadonlyArray<DesiredRegion>;
@@ -194,6 +198,7 @@ export interface PlannedCompileResult {
   readonly cacheDir: string;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly files: ReadonlyArray<DesiredFile>;
   readonly regions: ReadonlyArray<DesiredRegion>;
   readonly built: ReadonlyArray<string>;
@@ -599,6 +604,7 @@ const selectTargetSurfaces = (
   );
   const agents = selected.nouns.agents;
   const orbits = selected.nouns.orbits;
+  const sops = selected.nouns.sops;
   const tools = selected.nouns.tools;
   const skills = selected.nouns.skills;
   const hooks = selected.nouns.hooks;
@@ -611,13 +617,14 @@ const selectTargetSurfaces = (
     runtime: selected.runtime,
     agents,
     orbits,
+    sops,
     tools,
     skills,
     hooks,
     rules,
     commands,
     hasLowerableArtifacts:
-      agents || orbits || tools || skills || hooks || rules || commands,
+      agents || orbits || sops || tools || skills || hooks || rules || commands,
   };
 };
 
@@ -689,6 +696,16 @@ const prepareTargetOrbits = (
 
     return orbits;
   });
+
+const prepareTargetSops = (
+  registry: PluginRegistry,
+  targetsSops: boolean,
+): Sop[] => {
+  if (!targetsSops) return [];
+  return [...registry.sops.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+};
 
 const applyOrbitGrantsAndAssertCapabilities = (options: {
   readonly target: string;
@@ -882,6 +899,7 @@ const planTargetLowering = (options: {
   readonly surfaces: TargetSurfaceSelection;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly artifacts: TargetArtifacts;
   readonly registry: PluginRegistry;
   readonly scope: HarnessScope;
@@ -904,6 +922,7 @@ const planTargetLowering = (options: {
     const lowered = await options.lowerer.planLowering({
       agents: options.agents,
       orbits: options.orbits,
+      sops: options.sops,
       tools: options.artifacts.tools,
       skills: options.artifacts.skills,
       hooks: options.artifacts.hooks,
@@ -1010,6 +1029,7 @@ const prepareLoweringInputs = (
   readonly surfaces: TargetSurfaceSelection;
   readonly agentResult: AgentCompositionResult;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly composedForLowering: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
 }, CompileError> =>
@@ -1028,6 +1048,7 @@ const prepareLoweringInputs = (
       targetsAgents: surfaces.agents,
     });
     const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
+    const sops = prepareTargetSops(registry, surfaces.sops);
     const composedForLowering = yield* applyOrbitGrantsAndAssertCapabilities({
       target: options.target,
       targetId: context.targetId,
@@ -1066,6 +1087,7 @@ const prepareLoweringInputs = (
       surfaces,
       agentResult,
       orbits,
+      sops,
       composedForLowering,
       artifacts: finalArtifacts,
     };
@@ -1081,6 +1103,7 @@ export const planPluginForTarget = (
       surfaces,
       agentResult,
       orbits,
+      sops,
       composedForLowering,
       artifacts,
     } = yield* prepareLoweringInputs(options);
@@ -1090,6 +1113,7 @@ export const planPluginForTarget = (
       surfaces,
       agents: composedForLowering,
       orbits,
+      sops,
       artifacts,
       registry,
       scope: options.scope,
@@ -1104,6 +1128,7 @@ export const planPluginForTarget = (
       cacheDir: context.cacheDir,
       composed: composedForLowering,
       orbits,
+      sops,
       files: lowered.files,
       regions: lowered.regions,
       built: agentResult.built,
@@ -1123,6 +1148,7 @@ export const compilePluginForTarget = (
       surfaces,
       agentResult,
       orbits,
+      sops,
       composedForLowering,
       artifacts,
     } = yield* prepareLoweringInputs(options);
@@ -1132,6 +1158,7 @@ export const compilePluginForTarget = (
       surfaces,
       agents: composedForLowering,
       orbits,
+      sops,
       artifacts,
       registry,
       scope: options.scope,
@@ -1171,6 +1198,9 @@ export const compilePluginForTarget = (
       const orbitProjections = surfaces.orbits
         ? yield* projectOrbitsForCompileManifest(orbits, registry)
         : undefined;
+      const sopProjections = surfaces.sops
+        ? yield* projectSopsForCompileManifest(sops)
+        : undefined;
       yield* Effect.promise(() =>
         updateCompileManifestForTarget({
           prismHome: context.prismHome,
@@ -1181,6 +1211,7 @@ export const compilePluginForTarget = (
           composed: composedForLowering,
           cacheDescriptors: agentResult.cacheDescriptors,
           ...(orbitProjections ? { orbits: orbitProjections } : {}),
+          ...(sopProjections ? { sops: sopProjections } : {}),
         }),
       );
       if (options.emitWorkflowRefs !== false) {
@@ -1215,6 +1246,7 @@ export const compilePluginForTarget = (
       lockfilePath,
       composed: composedForLowering,
       orbits,
+      sops,
       files: lowered.files,
       regions: lowered.regions,
       operations: [...report.ops, ...(workflowRefsReport?.ops ?? [])],

@@ -16,6 +16,7 @@ import {
   Personality,
   Skill,
   Skillspace,
+  Sop,
   Toolspace,
   Trait,
 } from "./sources.js";
@@ -38,6 +39,7 @@ export interface PluginRegistry {
   tools: Map<string, CanonicalTool>;
   hooks: Map<string, Hook>;
   orbits: Map<string, Orbit>;
+  sops: Map<string, Sop>;
   agents: Map<string, Agent>;
   deps: Map<string, PluginRegistry>;
 }
@@ -66,6 +68,7 @@ export const emptyRegistry = (
   tools: new Map(),
   hooks: new Map(),
   orbits: new Map(),
+  sops: new Map(),
   agents: new Map(),
   deps: new Map(),
 });

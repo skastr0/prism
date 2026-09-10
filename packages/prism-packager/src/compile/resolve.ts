@@ -7,8 +7,12 @@ import { Effect, Schema } from "effect";
 import type {
   CompileManifestOrbitPhase,
   CompileManifestOrbitPhaseContract,
+  CompileManifestSopPhase,
 } from "@skastr0/prism-sdk/compile-manifest";
-import type { CompileManifestOrbitProjectionInput } from "./compile-manifest.js";
+import type {
+  CompileManifestOrbitProjectionInput,
+  CompileManifestSopProjectionInput,
+} from "./compile-manifest.js";
 import {
   workflowJsonSchemaFromEffectSchema,
   WorkflowOutputSchemaError,
@@ -28,7 +32,9 @@ import {
   type OrbitDefinitionEntry,
   type OrbitPulsarCheckpoint,
   type NormalizedOrbitPhase as OrbitPhase,
+  type NormalizedSopPhase as SopPhase,
   type NormalizedTraitBinding,
+  Sop,
 } from "./sources.js";
 import {
   AgentValidationError,
@@ -2663,6 +2669,84 @@ export const projectOrbitsForCompileManifest = (
     const projected: CompileManifestOrbitProjectionInput[] = [];
     for (const orbit of orbits) {
       projected.push(yield* projectOrbitForManifest(orbit, registry));
+    }
+    return projected;
+  });
+
+const sopSourceError = (sop: Sop, field: string, message: string): SourceParseError =>
+  new SourceParseError({
+    sourcePath: sop.sourcePath,
+    kind: "sop",
+    message: `${field}: ${message}`,
+  });
+
+const serializeSopPhaseContractSchema = (
+  sop: Sop,
+  phaseIndex: number,
+  side: "input" | "output",
+  schema: Schema.Schema.AnyNoContext,
+): Effect.Effect<Record<string, unknown>, CompileError> =>
+  Effect.try({
+    try: () => workflowJsonSchemaFromEffectSchema(schema),
+    catch: (error) => {
+      if (error instanceof WorkflowOutputSchemaError) {
+        return sopSourceError(sop, `phases[${phaseIndex}].${side}`, error.message);
+      }
+      return sopSourceError(sop, `phases[${phaseIndex}].${side}`, String(error));
+    },
+  });
+
+const projectSopPhaseForManifest = (
+  sop: Sop,
+  phase: SopPhase,
+  phaseIndex: number,
+): Effect.Effect<CompileManifestSopPhase, CompileError> =>
+  Effect.gen(function* () {
+    const input = phase.input
+      ? yield* serializeSopPhaseContractSchema(
+          sop,
+          phaseIndex,
+          "input",
+          phase.input as Schema.Schema.AnyNoContext,
+        )
+      : undefined;
+    const output = phase.output
+      ? yield* serializeSopPhaseContractSchema(
+          sop,
+          phaseIndex,
+          "output",
+          phase.output as Schema.Schema.AnyNoContext,
+        )
+      : undefined;
+
+    return {
+      name: phase.name,
+      purpose: phase.purpose,
+      acceptanceCriteria: [...phase.acceptanceCriteria],
+      ...(phase.escalation !== undefined ? { escalation: phase.escalation } : {}),
+      ...(input ? { input } : {}),
+      ...(output ? { output } : {}),
+    };
+  });
+
+const projectSopForManifest = (
+  sop: Sop,
+): Effect.Effect<CompileManifestSopProjectionInput, CompileError> =>
+  Effect.gen(function* () {
+    const phases: CompileManifestSopPhase[] = [];
+    for (const [index, phase] of sop.phases.entries()) {
+      phases.push(yield* projectSopPhaseForManifest(sop, phase, index));
+    }
+    return { name: sop.name, phases };
+  });
+
+export const projectSopsForCompileManifest = (
+  sops: ReadonlyArray<Sop>,
+): Effect.Effect<ReadonlyArray<CompileManifestSopProjectionInput>, CompileError> =>
+  Effect.gen(function* () {
+    const projected: CompileManifestSopProjectionInput[] = [];
+    for (const sop of sops) {
+      projected.push(yield* projectSopForManifest(sop));
     }
     return projected;
   });

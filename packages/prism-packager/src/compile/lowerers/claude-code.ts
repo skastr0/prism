@@ -12,7 +12,7 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   ownerPluginForBinding,
@@ -32,6 +32,7 @@ import {
   planGeneratedPluginManifest,
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
+  planStandardGeneratedPluginSopSkillWrites,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
   uniqueSorted,
@@ -53,6 +54,7 @@ export interface ClaudeCodeLowerTarget {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -437,6 +439,11 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   });
   await planGeneratedPluginSkillWrites({ input, state, pushWrite });
   await planStandardGeneratedPluginOrbitSkillWrites({
+    input,
+    state,
+    pushWrite,
+  });
+  await planStandardGeneratedPluginSopSkillWrites({
     input,
     state,
     pushWrite,

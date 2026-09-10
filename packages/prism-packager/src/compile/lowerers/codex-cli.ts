@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
+import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
@@ -25,6 +26,7 @@ import {
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
   renderStandardOrbitSkill,
+  renderStandardSopSkill,
   uniqueSorted,
   type LowerOutput,
 } from "./shared.js";
@@ -42,6 +44,7 @@ export interface CodexCliLowerTarget {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -413,6 +416,31 @@ const planOrbitWrites = (
   }
 };
 
+const planSopWrites = (
+  input: LowerInput,
+  files: DesiredFile[],
+): void => {
+  for (const sop of input.sops) {
+    pushDesiredFile(files, {
+      targetPath: join(input.target.root, "skills", `${sop.name}/SKILL.md`),
+      content: renderStandardSopSkill(sop),
+      plugin: input.target.sourcePluginName,
+    });
+
+    for (const reference of renderDerivedSopPhaseReferences(sop)) {
+      pushDesiredFile(files, {
+        targetPath: join(
+          input.target.root,
+          "skills",
+          `${sop.name}/references/${reference.filename}`,
+        ),
+        content: reference.content,
+        plugin: input.target.sourcePluginName,
+      });
+    }
+  }
+};
+
 const codexRulesRegionKey = (plugin: string): string =>
   `codex.rules.${normalizeBundleSegment(plugin)}`;
 
@@ -478,6 +506,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   planAgentWrites(input, files);
   await planManagedSkillWrites(input, files);
   planOrbitWrites(input, files);
+  planSopWrites(input, files);
   const hooks = await planHooks(input, files);
   const regions = planConfigRegions(input, hooks);
   await planRulesRegion(input, regions);

@@ -11,7 +11,7 @@ import {
 } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   bindingsFromCanonicalTools,
   bindingsOwnedByPlugin,
@@ -31,7 +31,9 @@ import {
   planGeneratedPluginAgentWrites,
   planGeneratedPluginOrbitSkillWrites,
   planGeneratedPluginSkillWrites,
+  planGeneratedPluginSopSkillWrites,
   renderGeneratedOrbitSkill,
+  renderGeneratedSopSkill,
   renderPrePostSessionHookWrapperEntry,
   serializeSimpleFrontmatter as serializeFrontmatter,
   stringArray,
@@ -53,6 +55,7 @@ export interface OmpLowerTarget {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -462,6 +465,16 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       renderGeneratedOrbitSkill({
         orbit,
         registry: input.registry,
+        trailingNewline: true,
+      }),
+  });
+  await planGeneratedPluginSopSkillWrites({
+    input,
+    state: rootState,
+    pushWrite: pushRootWrite,
+    renderSopSkill: (sop) =>
+      renderGeneratedSopSkill({
+        sop,
         trailingNewline: true,
       }),
   });

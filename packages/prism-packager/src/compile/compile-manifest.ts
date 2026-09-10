@@ -17,6 +17,7 @@ import {
   type CompileManifestSkillspace,
   type CompileManifestOrbit,
   type CompileManifestOrbitPhase,
+  type CompileManifestSop,
   type CompileManifestTrait,
   type CompileManifestCanonicalTool,
   type CompileManifestToolspaceTool,
@@ -422,6 +423,43 @@ const deriveOrbitsForManifest = (options: {
   return orbitsRecord;
 };
 
+export interface CompileManifestSopProjectionInput {
+  readonly name: string;
+  readonly phases: CompileManifestSop["phases"];
+}
+
+/**
+ * A sop compile pass is always authoritative for the source plugin's sop
+ * entries: passing projections replaces every existing entry for that plugin
+ * (including the empty set), so stale sops cannot be stranded. Unlike orbits,
+ * there is no declared/undeclared "authoritative pass" split here.
+ */
+const deriveSopsForManifest = (options: {
+  readonly base: CompileManifest;
+  readonly registryPluginName: string;
+  readonly sops?: ReadonlyArray<CompileManifestSopProjectionInput>;
+}): Record<string, CompileManifestSop> => {
+  const sopsRecord: Record<string, CompileManifestSop> = {
+    ...options.base.sops,
+  };
+  if (options.sops !== undefined) {
+    for (const key of Object.keys(sopsRecord)) {
+      if (sopsRecord[key]!.plugin === options.registryPluginName) {
+        delete sopsRecord[key];
+      }
+    }
+    for (const sop of options.sops) {
+      const id = `${options.registryPluginName}:${sop.name}`;
+      sopsRecord[id] = {
+        plugin: options.registryPluginName,
+        name: sop.name,
+        phases: [...sop.phases],
+      };
+    }
+  }
+  return sopsRecord;
+};
+
 const derivePluginsForManifest = (options: {
   readonly base: CompileManifest;
   readonly registry: PluginRegistry;
@@ -455,6 +493,8 @@ export const buildCompileManifestForTarget = (options: {
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
   /** When provided, this compile pass is authoritative for the source plugin's orbit phase projections (from prepareTargetOrbits, non-templates only). Threaded only for orbit-targeting compiles to avoid clearing on other targets. */
   readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
+  /** When provided, this compile pass replaces every sop entry for the source plugin (including with the empty set). Threaded only for sop-targeting compiles. */
+  readonly sops?: ReadonlyArray<CompileManifestSopProjectionInput>;
 }): CompileManifest => {
   const agents: Record<string, CompileManifestAgent> = { ...options.base.agents };
   const currentIds = new Set<string>();
@@ -515,6 +555,12 @@ export const buildCompileManifestForTarget = (options: {
     ...(options.orbits ? { orbits: options.orbits } : {}),
   });
 
+  const sops = deriveSopsForManifest({
+    base: options.base,
+    registryPluginName: options.registry.pluginName,
+    ...(options.sops ? { sops: options.sops } : {}),
+  });
+
   const plugins = derivePluginsForManifest({
     base: options.base,
     registry: options.registry,
@@ -532,6 +578,7 @@ export const buildCompileManifestForTarget = (options: {
     tools,
     traits,
     orbits,
+    sops,
   });
 };
 
@@ -545,6 +592,8 @@ export const updateCompileManifestForTarget = async (options: {
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
   /** Forwarded from surfaces.orbits pass in compilePluginForTarget; undefined means non-authoritative for orbits (carry base). */
   readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
+  /** Forwarded from surfaces.sops pass in compilePluginForTarget; undefined carries base, [] clears the plugin's sop entries. */
+  readonly sops?: ReadonlyArray<CompileManifestSopProjectionInput>;
 }): Promise<void> =>
   withSnapshotLock(options.prismHome, async () => {
     const { manifest } = await readCompileManifest(options.prismHome, options.projectKey);
@@ -559,6 +608,7 @@ export const updateCompileManifestForTarget = async (options: {
         composed: options.composed,
         cacheDescriptors: options.cacheDescriptors,
         ...(options.orbits ? { orbits: options.orbits } : {}),
+        ...(options.sops ? { sops: options.sops } : {}),
       }),
     });
   });

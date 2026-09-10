@@ -5,6 +5,7 @@
  * - Agent         : agents/*.agent.ts
  * - Trait         : traits/*.trait.ts
  * - Orbit     : orbits/*.orbit.ts
+ * - Sop           : sops/*.sop.ts
  * - Toolspace     : toolspaces/*.toolspace.ts
  * - Modelspace    : modelspaces/*.modelspace.ts
  * - Skillspace    : skillspaces/*.skillspace.ts
@@ -1888,4 +1889,63 @@ export class Orbit extends Schema.Class<Orbit>("Orbit")({
   evolution: Schema.optional(Schema.String),
   body: Schema.String,
   signal_emitter: Schema.optional(OrbitSignalEmitterSchema),
+}) {}
+
+// ---------------------------------------------------------------------------
+// Sop
+// ---------------------------------------------------------------------------
+
+/**
+ * A SOP is a type-safe procedure: phases with a purpose, optional typed I/O
+ * contracts, judge-level acceptance criteria, an escalation rule, and prose.
+ * A SOP may say what must be true; it never names who executes it, with what
+ * tool, or in what runtime.
+ */
+export const SopPhaseSchema = Schema.Struct({
+  name: Schema.String,
+  purpose: Schema.String,
+  input: Schema.optional(Schema.Unknown),
+  output: Schema.optional(Schema.Unknown),
+  acceptance_criteria: Schema.optional(Schema.Array(Schema.String)),
+  escalation: Schema.optional(Schema.String),
+  body: Schema.String,
+});
+export type SopPhase = typeof SopPhaseSchema.Type;
+
+export const SopDefinitionSchema = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  phases: Schema.Array(SopPhaseSchema),
+  body: Schema.optional(Schema.String),
+});
+export type SopDefinition = typeof SopDefinitionSchema.Type;
+export const SopSourceSchema = SopDefinitionSchema;
+export type SopSource = typeof SopSourceSchema.Type;
+
+export const NormalizedSopPhaseSchema = Schema.Struct({
+  name: Schema.String,
+  purpose: Schema.String,
+  input: Schema.optional(Schema.Unknown),
+  output: Schema.optional(Schema.Unknown),
+  acceptanceCriteria: Schema.Array(Schema.String),
+  escalation: Schema.optional(Schema.String),
+  body: Schema.String,
+});
+export type NormalizedSopPhase = typeof NormalizedSopPhaseSchema.Type;
+
+export const NormalizedSopDefinitionSchema = Schema.Struct({
+  name: Schema.String,
+  sourcePath: Schema.String,
+  description: Schema.String,
+  phases: Schema.Array(NormalizedSopPhaseSchema),
+  body: Schema.String,
+});
+export type NormalizedSopDefinition = typeof NormalizedSopDefinitionSchema.Type;
+
+export class Sop extends Schema.Class<Sop>("Sop")({
+  name: Schema.String,
+  sourcePath: Schema.String,
+  description: Schema.String,
+  phases: Schema.Array(NormalizedSopPhaseSchema),
+  body: Schema.String,
 }) {}

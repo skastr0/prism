@@ -96,28 +96,17 @@ describe("hermes hook lowerer", () => {
       ) + "\n",
     );
 
-    // Write toolspace
-    await writeText(
-      join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-      `export default {
-  name: "workspace",
-  tools: {
-    shell: { targets: { hermes: { name: "shell.command" } } },
-  },
-};`
-    );
-
     // Write tool.before hook
     await writeText(
       join(pluginRoot, "hooks", "audit-shell.hook.ts"),
       `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  match: { tool: hookTool.native("shell.command") },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
 };`
     );

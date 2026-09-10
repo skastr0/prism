@@ -118,7 +118,7 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
       "deleted in workstream C — toolspaces are gone; canonical tools are declared in tools/*.tool.ts",
   },
   {
-    pattern: /\bmaterializeTraitTools\b|\bmaterializeOrbitToolPermission\b|AccessSchema|\ballowedTools\b|\ballowedSkills\b/,
+    pattern: /\bmaterializeTraitTools\b|\bmaterializeOrbitToolPermission\b|AccessSchema/,
     allowedFiles: new Set([GATE_FILE]),
     reason:
       "deleted in workstream C — agent tool grants and access intent are gone; Prism stops managing which tools an agent may use",

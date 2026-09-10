@@ -1914,7 +1914,7 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain(
-    "Manifest targets: agents=[opencode, claude-code]; orbits=[opencode, claude-code]; tools=[opencode, claude-code]; toolspaces=[opencode, claude-code]; modelspaces=[opencode, claude-code]"
+    "Manifest targets: agents=[opencode, claude-code]; orbits=[opencode, claude-code]; tools=[opencode, claude-code]; modelspaces=[opencode, claude-code]; skillspaces=[opencode, claude-code]"
   );
   expect(result.stdout).toContain("Matching requested harnesses: opencode, claude-code");
   expect(result.stdout).toContain("Compile output scope: project");

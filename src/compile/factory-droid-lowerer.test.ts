@@ -83,7 +83,6 @@ test("factory-droid lowerer emits native plugin bundle surfaces", async () => {
         version: "0.4.0",
         targets: {
           skills: ["factory-droid"],
-          toolspaces: ["factory-droid"],
           hooks: ["factory-droid"],
         },
       },
@@ -98,25 +97,15 @@ test("factory-droid lowerer emits native plugin bundle surfaces", async () => {
   );
 
   await writeText(
-    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `
-export default {
-  name: "workspace",
-  tools: { shell: { targets: { "factory-droid": { name: "Execute" } } } },
-};
-`,
-  );
-
-  await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  match: { tool: hookTool.native("Execute") },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
 };
 `,
@@ -195,7 +184,7 @@ export default {
       },
     ],
     orbits: [],
-    tools: [],
+    tools: [...registry.tools.values()],
     skills: [...registry.skills.values()],
     hooks: [shellHook, canonicalHook, sessionEndHook],
     registry,
@@ -226,7 +215,6 @@ export default {
   expect(droid?.content).toContain('reasoningEffort: "high"');
   expect(droid?.content).toContain("tools:");
   expect(droid?.content).toContain('- "LS"');
-  expect(droid?.content).toContain('- "Glob"');
   expect(droid?.content).toContain('- "Grep"');
   expect(droid?.content).toContain('- "Read"');
   // Canonical tools are CLI-only; droid frontmatter keeps native tools only.

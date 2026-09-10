@@ -119,7 +119,7 @@ export default {
   await writeText(
     join(pluginRoot, "hooks", "audit-shell-after.hook.ts"),
     `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
+import { hookEvent, hookTool } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default {
   name: "audit-shell-after",

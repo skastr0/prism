@@ -137,7 +137,6 @@ test("codex-cli lowerer emits desired files plus config.toml regions", async () 
         targets: {
           rules: ["codex-cli"],
           skills: ["codex-cli"],
-          toolspaces: ["codex-cli"],
           hooks: ["codex-cli"],
         },
       },

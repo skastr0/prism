@@ -273,7 +273,6 @@ function DetailPane({
         `task ${task.taskId}`,
         `phase ${task.phase ?? "-"}`,
         `status ${task.status}`,
-        `agent ${task.agent?.plugin ?? task.snapshot?.agent.plugin ?? "-"}.${task.agent?.name ?? task.snapshot?.agent.name ?? "-"}`,
         `worker ${task.workerAdapter ?? task.snapshot?.worker?.worker ?? "-"}`,
         `model ${task.model ?? task.snapshot?.worker?.model ?? "-"}`,
         `cache ${badgeText(task.badges)}`,

@@ -10,7 +10,6 @@ import {
   defineTask,
   defineWorkflow,
   type PhaseContract,
-  type WorkflowAgentRef,
   type WorkflowRuntime,
 } from "./workflows.js";
 import {
@@ -25,16 +24,6 @@ import {
   registerWorkflowStore,
   workflowStoreRegistryPath,
 } from "./workflow-store-registry.js";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["grok"],
-} as const satisfies WorkflowAgentRef;
 
 const Report = Schema.Struct({ summary: Schema.String });
 
@@ -96,7 +85,7 @@ describe("workflow trace recorder", () => {
 describe("workflow runner tracing", () => {
   test("static run records workflow.run -> workflow.task -> task.executor with worker attributes", async () => {
     await withStore(async (store) => {
-      const build = defineTask({ id: "build", agent, prompt: "Build it.", output: Report });
+      const build = defineTask({ id: "build", prompt: "Build it.", output: Report });
       const workflow = defineWorkflow({ name: "trace-static", tasks: [build] as const });
       const result = await runWorkflow(workflow, {
         store,
@@ -128,7 +117,7 @@ describe("workflow runner tracing", () => {
 
   test("cached task re-run records the task span without an executor span", async () => {
     await withStore(async (store) => {
-      const build = defineTask({ id: "build", agent, prompt: "Build it.", output: Report });
+      const build = defineTask({ id: "build", prompt: "Build it.", output: Report });
       const workflow = defineWorkflow({ name: "trace-cache", tasks: [build] as const });
       const executeTask = async () => ({ summary: "done" });
       const first = await runWorkflow(workflow, { store, executeTask });
@@ -143,7 +132,7 @@ describe("workflow runner tracing", () => {
 
   test("failed task records error spans and the run root reflects the failure", async () => {
     await withStore(async (store) => {
-      const build = defineTask({ id: "build", agent, prompt: "Build it.", output: Report });
+      const build = defineTask({ id: "build", prompt: "Build it.", output: Report });
       const workflow = defineWorkflow({ name: "trace-fail", tasks: [build] as const });
       await expect(runWorkflow(workflow, {
         store,
@@ -179,7 +168,6 @@ describe("workflow runner tracing", () => {
         name: "trace-phase",
         run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
           id: "scope",
-          agent,
           prompt: "Explore.",
         })),
       });
@@ -203,15 +191,15 @@ describe("workflow runner tracing", () => {
       expect(task?.parentSpanId).toBe(phaseSpan?.spanId ?? "");
       expect(phaseSpan?.attributes["agent.plugin"]).toBeUndefined();
       expect(phaseSpan?.attributes["agent.name"]).toBeUndefined();
-      expect(task?.attributes["agent.plugin"]).toBe("forge");
-      expect(task?.attributes["agent.name"]).toBe("builder");
+      expect(task?.attributes["agent.plugin"]).toBeUndefined();
+      expect(task?.attributes["agent.name"]).toBeUndefined();
       expect(spans.every((span) => span.traceId === root?.traceId)).toBe(true);
     });
   });
 
   test("dynamic run: author Effect.withSpan spans land in the trace and parent the task spans", async () => {
     await withStore(async (store) => {
-      const build = defineTask({ id: "build", agent, prompt: "Build it.", output: Report });
+      const build = defineTask({ id: "build", prompt: "Build it.", output: Report });
       const workflow = defineWorkflow({
         name: "trace-dynamic",
         run: (runtime: WorkflowRuntime) =>
@@ -237,7 +225,7 @@ describe("workflow runner tracing", () => {
   });
 
   test("unpersisted run records no spans and still succeeds", async () => {
-    const build = defineTask({ id: "build", agent, prompt: "Build it.", output: Report });
+    const build = defineTask({ id: "build", prompt: "Build it.", output: Report });
     const workflow = defineWorkflow({ name: "trace-unpersisted", tasks: [build] as const });
     const result = await runWorkflow(workflow, { executeTask: async () => ({ summary: "done" }) });
     expect(result.tasks[0]?.status).toBe("completed");
@@ -309,7 +297,7 @@ describe("trace tree rendering", () => {
     ];
     const rendered = renderWorkflowTraceHuman(spans);
     expect(rendered).toContain("workflow.run · demo · 1m05s");
-    expect(rendered).toContain("workflow.task · extract · survey/context-forensics · 1.5s");
+    expect(rendered).toContain("workflow.task · extract · 1.5s");
     expect(rendered).toContain("task.executor · attempt 0 · antigravity-cli");
     expect(rendered).toContain("spawn failed");
     expect(rendered).toContain(`trace: ${"t".repeat(32)}`);

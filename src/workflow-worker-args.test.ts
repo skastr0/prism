@@ -42,7 +42,6 @@ describe("workflow worker argument builders", () => {
   test("grok uses explicit single-turn mode", () => {
     const args = buildGrokArgs({
       cwd: "/repo",
-      agent: "qa-tester",
       model: "grok-build",
       prompt: "return json",
     });
@@ -52,7 +51,7 @@ describe("workflow worker argument builders", () => {
     expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual(["--output-format", "json"]);
     expect(args).toContain("--no-wait-for-background");
     expect(args).not.toContain("--prompt-file");
-    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
+    expect(args).not.toContain("--agent");
   });
 
   test("grok auth output detection is line-based", () => {
@@ -68,16 +67,14 @@ describe("workflow worker argument builders", () => {
     expect(isKimiAuthOutput(JSON.stringify({ summary: "auth.login_required: requires login" }))).toBe(false);
   });
 
-  test("opencode invokes the generated agent directly", () => {
+  test("opencode passes the model and prompt without an agent selector", () => {
     const args = buildOpenCodeArgs({
       cwd: "/repo",
-      agent: "qa-tester",
       model: "provider/model",
       prompt: "return json",
     });
 
-    expect(args).toContain("--agent");
-    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
+    expect(args).not.toContain("--agent");
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "provider/model"]);
     expect(args).not.toContain("subagent");
   });
@@ -108,33 +105,29 @@ describe("workflow worker argument builders", () => {
 
 describe("workflow worker continuation arg mapping", () => {
   test("claude uses exact session resume only", () => {
-    const args = buildClaudeArgs({ agent: "a", prompt: "p", resumeSessionId: "s1" });
+    const args = buildClaudeArgs({ prompt: "p", resumeSessionId: "s1" });
     expect(args.slice(args.indexOf("--resume"), args.indexOf("--resume") + 2)).toEqual(["--resume", "s1"]);
     expect(args).not.toContain("--continue");
   });
 
   test("claude maps ephemeral task sessions without a continuation selector", () => {
     const args = buildClaudeArgs({
-      agent: "a",
       prompt: "p",
       sessionPersistence: "ephemeral",
     });
     expect(args).toContain("--no-session-persistence");
     expect(args).not.toContain("--resume");
-    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual([
-      "--agent",
-      "a",
-    ]);
+    expect(args).not.toContain("--agent");
   });
 
   test("opencode uses exact session id", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", sessionId: "s1" });
+    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p", sessionId: "s1" });
     expect(args.slice(args.indexOf("-s"), args.indexOf("-s") + 2)).toEqual(["-s", "s1"]);
     expect(args).not.toContain("--continue");
   });
 
   test("grok uses exact session id", () => {
-    const args = buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", sessionId: "s1" });
+    const args = buildGrokArgs({ cwd: "/r", prompt: "p", sessionId: "s1" });
     expect(args.slice(args.indexOf("-r"), args.indexOf("-r") + 2)).toEqual(["-r", "s1"]);
     expect(args).not.toContain("--continue");
   });
@@ -174,7 +167,6 @@ describe("workflow worker continuation arg mapping", () => {
   test("omp maps ephemeral task sessions without a continuation selector", () => {
     const args = buildOmpArgs({
       cwd: "/r",
-      systemPromptPath: "/agent.md",
       prompt: "p",
       sessionPersistence: "ephemeral",
     });
@@ -307,106 +299,107 @@ describe("antigravity-cli permission arg mapping", () => {
 
 describe("opencode permission arg mapping", () => {
   test("legacy emits no --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "legacy" });
+    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "legacy" });
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
   test("permissive emits --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", model: "provider/model", prompt: "p", permission: "permissive" });
+    const args = buildOpenCodeArgs({ cwd: "/r", model: "provider/model", prompt: "p", permission: "permissive" });
     expect(args).toContain("--dangerously-skip-permissions");
-    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "a"]);
+    expect(args).not.toContain("--agent");
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "provider/model"]);
   });
 
   test("default emits permissive --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p" });
+    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p" });
     expect(args).toContain("--dangerously-skip-permissions");
   });
 
   test("restricted throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "restricted" }))
+    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "restricted" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("interactive throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "interactive" }))
+    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "interactive" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-read-only throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "sandbox-read-only" }))
+    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "sandbox-read-only" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-workspace-write throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "sandbox-workspace-write" }))
+    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "sandbox-workspace-write" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("full-access emits --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "full-access" });
+    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "full-access" });
     expect(args).toContain("--dangerously-skip-permissions");
   });
 });
 
 describe("claude-code permission arg mapping", () => {
   test("legacy emits --print only", () => {
-    const args = buildClaudeArgs({ agent: "a", prompt: "p", permission: "legacy" });
+    const args = buildClaudeArgs({ prompt: "p", permission: "legacy" });
     expect(args).toContain("--print");
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
-  test("omits --agent when no compiled Claude agent is selected", () => {
+  test("never emits --agent or --plugin-dir for Claude tasks", () => {
     const args = buildClaudeArgs({ prompt: "p", permission: "legacy" });
     expect(args).not.toContain("--agent");
+    expect(args).not.toContain("--plugin-dir");
   });
 
   test("permissive emits --dangerously-skip-permissions --print --output-format stream-json", () => {
-    const args = buildClaudeArgs({ agent: "a", prompt: "p", permission: "permissive" });
+    const args = buildClaudeArgs({ prompt: "p", permission: "permissive" });
     expect(args).toContain("--dangerously-skip-permissions");
     expect(args).toContain("--print");
     expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual(["--output-format", "stream-json"]);
-    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "a"]);
+    expect(args).not.toContain("--agent");
   });
 
   test("default emits permissive --dangerously-skip-permissions", () => {
-    const args = buildClaudeArgs({ agent: "a", prompt: "p" });
+    const args = buildClaudeArgs({ prompt: "p" });
     expect(args).toContain("--dangerously-skip-permissions");
   });
 
   test("restricted with tools list emits --allowedTools", () => {
-    const args = buildClaudeArgs({ agent: "a", prompt: "p", permission: "restricted", restrictedTools: ["Read", "Edit"] });
+    const args = buildClaudeArgs({ prompt: "p", permission: "restricted", restrictedTools: ["Read", "Edit"] });
     expect(args).toContain("--allowedTools=Read,Edit");
   });
 
   test("restricted with no tools list throws", () => {
-    expect(() => buildClaudeArgs({ agent: "a", prompt: "p", permission: "restricted" }))
+    expect(() => buildClaudeArgs({ prompt: "p", permission: "restricted" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("interactive throws", () => {
-    expect(() => buildClaudeArgs({ agent: "a", prompt: "p", permission: "interactive" }))
+    expect(() => buildClaudeArgs({ prompt: "p", permission: "interactive" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-read-only throws", () => {
-    expect(() => buildClaudeArgs({ agent: "a", prompt: "p", permission: "sandbox-read-only" }))
+    expect(() => buildClaudeArgs({ prompt: "p", permission: "sandbox-read-only" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-workspace-write throws", () => {
-    expect(() => buildClaudeArgs({ agent: "a", prompt: "p", permission: "sandbox-workspace-write" }))
+    expect(() => buildClaudeArgs({ prompt: "p", permission: "sandbox-workspace-write" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("full-access emits same as permissive", () => {
-    const args = buildClaudeArgs({ agent: "a", prompt: "p", permission: "full-access" });
+    const args = buildClaudeArgs({ prompt: "p", permission: "full-access" });
     expect(args).toContain("--dangerously-skip-permissions");
     expect(args).toContain("--print");
   });
 
   test("emits json schema only when a native output schema is supplied", () => {
-    const withoutSchema = buildClaudeArgs({ agent: "a", prompt: "p" });
+    const withoutSchema = buildClaudeArgs({ prompt: "p" });
     expect(withoutSchema).not.toContain("--json-schema");
 
     const outputSchema = {
@@ -415,7 +408,7 @@ describe("claude-code permission arg mapping", () => {
       required: ["summary"],
       additionalProperties: false,
     };
-    const args = buildClaudeArgs({ agent: "a", prompt: "p", outputSchema });
+    const args = buildClaudeArgs({ prompt: "p", outputSchema });
     const idx = args.indexOf("--json-schema");
     expect(idx).not.toBe(-1);
     expect(JSON.parse(args[idx + 1] ?? "")).toEqual(outputSchema);
@@ -559,14 +552,14 @@ describe("codex-cli permission arg mapping", () => {
 
 describe("grok permission arg mapping", () => {
   test("legacy emits no --always-approve", () => {
-    const args = buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "legacy" });
+    const args = buildGrokArgs({ cwd: "/r", prompt: "p", permission: "legacy" });
     expect(args).not.toContain("--always-approve");
   });
 
   test("permissive emits --always-approve and bypassPermissions", () => {
-    const args = buildGrokArgs({ cwd: "/r", agent: "a", model: "grok-model", prompt: "p", permission: "permissive" });
+    const args = buildGrokArgs({ cwd: "/r", model: "grok-model", prompt: "p", permission: "permissive" });
     expect(args).toContain("--always-approve");
-    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "a"]);
+    expect(args).not.toContain("--agent");
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "grok-model"]);
     expect(args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2)).toEqual([
       "--permission-mode",
@@ -575,12 +568,12 @@ describe("grok permission arg mapping", () => {
   });
 
   test("model override replaces the grok-build fallback", () => {
-    const args = buildGrokArgs({ cwd: "/r", agent: "a", model: "grok-custom", prompt: "p", permission: "legacy" });
+    const args = buildGrokArgs({ cwd: "/r", model: "grok-custom", prompt: "p", permission: "legacy" });
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "grok-custom"]);
   });
 
   test("default emits permissive --always-approve and bypassPermissions", () => {
-    const args = buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p" });
+    const args = buildGrokArgs({ cwd: "/r", prompt: "p" });
     expect(args).toContain("--always-approve");
     expect(args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2)).toEqual([
       "--permission-mode",
@@ -589,27 +582,27 @@ describe("grok permission arg mapping", () => {
   });
 
   test("restricted throws", () => {
-    expect(() => buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "restricted" }))
+    expect(() => buildGrokArgs({ cwd: "/r", prompt: "p", permission: "restricted" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("interactive throws", () => {
-    expect(() => buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "interactive" }))
+    expect(() => buildGrokArgs({ cwd: "/r", prompt: "p", permission: "interactive" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-read-only throws", () => {
-    expect(() => buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "sandbox-read-only" }))
+    expect(() => buildGrokArgs({ cwd: "/r", prompt: "p", permission: "sandbox-read-only" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-workspace-write throws", () => {
-    expect(() => buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "sandbox-workspace-write" }))
+    expect(() => buildGrokArgs({ cwd: "/r", prompt: "p", permission: "sandbox-workspace-write" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("full-access emits --always-approve and bypassPermissions", () => {
-    const args = buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "full-access" });
+    const args = buildGrokArgs({ cwd: "/r", prompt: "p", permission: "full-access" });
     expect(args).toContain("--always-approve");
     expect(args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2)).toEqual([
       "--permission-mode",
@@ -749,19 +742,6 @@ describe("cursor permission arg mapping", () => {
   test("sandbox-read-only throws", () => {
     expect(() => buildCursorArgs({ cwd: "/r", prompt: "p", permission: "sandbox-read-only" }))
       .toThrow(WorkflowPermissionError);
-  });
-
-  test("plugin-dir is forwarded when discovery finds a generated plugin", () => {
-    const args = buildCursorArgs({
-      cwd: "/r",
-      prompt: "p",
-      generatedPlugin: { pluginDir: "/tmp/.cursor/plugins/local/prism-generated-agent-core" },
-    });
-    expect(args.slice(args.indexOf("--plugin-dir"), args.indexOf("--plugin-dir") + 2)).toEqual([
-      "--plugin-dir",
-      "/tmp/.cursor/plugins/local/prism-generated-agent-core",
-    ]);
-    expect(args).not.toContain("--agent");
   });
 
   test("sandbox-workspace-write emits sandbox + --force", () => {

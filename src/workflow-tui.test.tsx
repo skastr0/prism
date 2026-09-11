@@ -7,20 +7,10 @@ import { testRender } from "@opentui/react/test-utils";
 import { Schema } from "effect";
 import { runWorkflow } from "./workflow-runner.js";
 import { WorkflowStore } from "./workflow-store.js";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
+import { defineTask, defineWorkflow } from "./workflows.js";
 import { destroyWorkflowMonitorAfter, WorkflowMonitorApp } from "./workflow-tui.js";
 
 const Output = Schema.Struct({ summary: Schema.String });
-
-const agent: WorkflowAgentRef = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["grok"],
-};
 
 test("workflow monitor renders persisted run task data and refreshes", async () => {
   const root = await mkdtemp(join(tmpdir(), "prism-tui-"));
@@ -30,7 +20,6 @@ test("workflow monitor renders persisted run task data and refreshes", async () 
   const task = defineTask({
     id: "build",
     phase: "Build",
-    agent,
     prompt: "Build the monitored slice.",
     output: Output,
     cacheKey: "monitor-build",

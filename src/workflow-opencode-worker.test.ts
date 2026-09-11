@@ -6,22 +6,10 @@ import { Schema } from "effect";
 import { buildOpenCodeArgs, OpenCodeWorkflowWorkerError, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
 import type { StableSessionId } from "./workflow-session.js";
-import type { WorkflowAgentRef } from "./workflows.js";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["opencode"],
-} as const satisfies WorkflowAgentRef;
 
 const task = {
   kind: "workflow-task" as const,
   id: "build",
-  agent,
   prompt: "Do the thing.",
   output: Schema.Struct({ summary: Schema.String }),
 };
@@ -41,13 +29,13 @@ const fakeOpenCodeEventStream = (callsFile: string, sessionId: string): string =
 
 describe("opencode worker session id", () => {
   test("buildOpenCodeArgs requests the json event stream and uses exact session resume", () => {
-    const fresh = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p" });
+    const fresh = buildOpenCodeArgs({ cwd: "/r", prompt: "p" });
     expect(fresh.slice(fresh.indexOf("--format"), fresh.indexOf("--format") + 2)).toEqual(["--format", "json"]);
     expect(fresh).not.toContain("-s");
     expect(fresh).not.toContain("--continue");
     expect(fresh).not.toContain("--fork");
 
-    const resume = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", sessionId: "ses_1" });
+    const resume = buildOpenCodeArgs({ cwd: "/r", prompt: "p", sessionId: "ses_1" });
     expect(resume.slice(resume.indexOf("-s"), resume.indexOf("-s") + 2)).toEqual(["-s", "ses_1"]);
     expect(resume).toContain("--format");
   });

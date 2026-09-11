@@ -5,17 +5,6 @@ import { join } from "node:path";
 import { Schema } from "effect";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
-import type { WorkflowAgentRef } from "./workflows.js";
-
-const builder = {
-  kind: "agent-ref",
-  plugin: "native-output-fixture",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["claude-code", "codex-cli"],
-} as const satisfies WorkflowAgentRef;
 
 const NativeReport = Schema.Struct({
   summary: Schema.String,
@@ -29,7 +18,6 @@ const UnsupportedReport = Schema.Struct({
 const task = {
   kind: "workflow-task" as const,
   id: "build",
-  agent: builder,
   prompt: "Return a native report.",
   output: NativeReport,
 };

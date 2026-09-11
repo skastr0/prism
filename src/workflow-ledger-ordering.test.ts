@@ -19,15 +19,6 @@ test("task phase events never outrun their attempt rows and decode failures reta
   const store = await WorkflowStore.open(join(root, "workflows.sqlite"), { applyDefaultRetention: false });
   const task = defineTask({
     id: "build",
-    agent: {
-      kind: "agent-ref",
-      plugin: "forge",
-      name: "builder",
-      description: "Build specialist",
-      sourceHash: "a".repeat(64),
-      manifestHash: "b".repeat(64),
-      installs: ["codex-cli"],
-    },
     prompt: "Build the slice.",
     output: Schema.Struct({ summary: Schema.String }),
     cacheKey: "build-cache",

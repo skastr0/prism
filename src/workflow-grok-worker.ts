@@ -41,15 +41,6 @@ const GROK_AUTH_PROMPT_PATTERNS = [
 export const isGrokAuthOutput = (output: string): boolean =>
   GROK_AUTH_OUTPUT_PATTERN.test(output);
 
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 // Grok keeps config, installed plugins, and the resumable session store under one home.
 // Hardcode it to ~/.grok: the home grok itself defaults to and where `prism sync` installs
 // the generated plugin, so the session written on the first attempt still exists when a

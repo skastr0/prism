@@ -169,21 +169,10 @@ const workerWorkflowSource = (name: string): string => `
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 export default defineWorkflow({
   name: ${JSON.stringify(name)},
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Exercise detached process ownership.",
     output: Schema.Struct({ summary: Schema.String }),
   })],
@@ -321,23 +310,12 @@ test("detached workflow update inherits run options, applies explicit overrides,
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 const Output = Schema.Struct({ summary: Schema.String });
 
 export default defineWorkflow({
   name: "update-control-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Build with previous options.",
     output: Output,
   })],
@@ -420,23 +398,12 @@ test("resume (allowTerminalPreviousRun) starts a fresh run from an already-termi
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 const Output = Schema.Struct({ summary: Schema.String });
 
 export default defineWorkflow({
   name: "resume-control-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Build after resume.",
     output: Output,
   })],
@@ -516,23 +483,12 @@ test("update (without allowTerminalPreviousRun) still rejects a previous run tha
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 const Output = Schema.Struct({ summary: Schema.String });
 
 export default defineWorkflow({
   name: "reject-control-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Never runs.",
     output: Output,
   })],

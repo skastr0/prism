@@ -3,7 +3,6 @@ import { isLeft } from "effect/Either";
 import type { Either } from "effect/Either";
 import type { ParseError } from "effect/ParseResult";
 import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
-import { workflowHarnessDefaultModel, workflowHarnessDefaultProvider } from "./workflow-harness-detection.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
 
@@ -218,6 +217,17 @@ export class WorkflowModelResolutionError extends Error {
   override readonly name = "WorkflowModelResolutionError";
 }
 
+export type WorkflowTaskModelResolutionSource = "task" | "default" | "cli-fallback";
+
+export interface WorkflowTaskModelResolution {
+  readonly model: string;
+  /** Harness-side inference provider (e.g. hermes `--provider xai-oauth`), from the modelspace target or harness default. */
+  readonly provider?: string;
+  /** Harness-bound model variant, such as Codex reasoning effort. */
+  readonly variant?: string;
+  readonly source: WorkflowTaskModelResolutionSource;
+}
+
 const isWorkflowModelProfileRef = (value: unknown): value is WorkflowModelProfileRef =>
   typeof value === "object" &&
   value !== null &&
@@ -237,9 +247,6 @@ const modelTargetForWorker = (
   }
   return ref.targets?.[worker];
 };
-
-const firstModelString = (target: WorkflowModelTarget | undefined): string | undefined =>
-  firstModelChoice(target)?.model;
 
 /** First concrete {model, provider?} pair in a modelspace target (direct or ordered-list form). */
 const firstModelChoice = (
@@ -282,25 +289,12 @@ const describeModelRef = (ref: WorkflowModelProfileRef | WorkflowModelRef): stri
 };
 
 /**
- * Resolves the CLI --model fallback (if supplied); otherwise the harness's
- * cheap-fast registry default (workflow-harness-detection.ts). CLI intent
- * always wins over the baked-in default when both are available.
- *
- * Intentionally NOT consulted by the final catch-all below: a task with no
- * model info at all resolves to `undefined` there so per-worker CLIs that
- * tolerate an omitted --model flag (e.g. opencode) keep doing so.
+ * Resolves a task's model to a concrete string: `worker.model` (or the
+ * modelspace profile it points at) wins; otherwise only the CLI `--model`
+ * fallback is consulted. A task with no model info at all resolves to
+ * `undefined` so per-worker CLIs that tolerate an omitted --model flag
+ * (e.g. opencode) keep doing so.
  */
-const resolveFallbackModel = (
-  worker: string | undefined,
-  fallbackModel: string | undefined,
-): WorkflowTaskModelResolution | undefined => {
-  if (fallbackModel !== undefined) return { model: fallbackModel, source: "cli-fallback" };
-  const defaultModel = worker !== undefined ? workflowHarnessDefaultModel(worker) : undefined;
-  if (defaultModel === undefined) return undefined;
-  const defaultProvider = worker !== undefined ? workflowHarnessDefaultProvider(worker) : undefined;
-  return { model: defaultModel, ...(defaultProvider !== undefined ? { provider: defaultProvider } : {}), source: "default" };
-};
-
 export const resolveWorkflowTaskModelResolution = (
   task: AnyWorkflowTask,
   options: { readonly worker?: string; readonly fallbackModel?: string } = {},

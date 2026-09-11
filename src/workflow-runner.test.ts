@@ -23,24 +23,7 @@ import {
   resolveWorkflowTaskModelResolution,
   type AnyWorkflowTask,
   type PhaseContract,
-  type WorkflowAgentRef,
 } from "./workflows.js";
-
-const builder = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["grok"],
-} as const satisfies WorkflowAgentRef;
-
-const reviewer = {
-  ...builder,
-  name: "simplicity-reviewer",
-  description: "Simplicity reviewer",
-} as const satisfies WorkflowAgentRef;
 
 const PatchReport = Schema.Struct({ summary: Schema.String });
 const ReviewReport = Schema.Struct({ verdict: Schema.Literal("pass", "needs-work") });
@@ -63,19 +46,8 @@ describe("workflow runner", () => {
 import { Schema } from ${JSON.stringify(effectSpecifier)};
 import { defineTask, defineWorkflow, runWorkflow } from ${JSON.stringify(prismSpecifier)};
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "sdk-test",
-  name: "worker",
-  description: "Stub worker",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["codex-cli"],
-};
-
 const task = defineTask({
   id: "summarize",
-  agent,
   prompt: "Summarize the input.",
   output: Schema.Struct({ summary: Schema.String }),
 });
@@ -114,7 +86,6 @@ console.log(JSON.stringify(result));
         tasks: [
           {
             id: "summarize",
-            agent: { plugin: "sdk-test", name: "worker" },
             output: { summary: "ran outside project" },
             cached: false,
           },
@@ -128,13 +99,11 @@ console.log(JSON.stringify(result));
   test("executes tasks sequentially and decodes outputs", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
     });
     const review = defineTask({
       id: "review",
-      agent: reviewer,
       prompt: "Review the slice.",
       output: ReviewReport,
     });
@@ -154,8 +123,8 @@ console.log(JSON.stringify(result));
       runId: null,
       workflow: "runner-smoke",
       tasks: [
-        { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" }, cached: false, status: "completed", metadata: contractMetadata },
-        { id: "review", agent: { plugin: "forge", name: "simplicity-reviewer" }, output: { verdict: "pass" }, cached: false, status: "completed", metadata: contractMetadata },
+        { id: "build", output: { summary: "built" }, cached: false, status: "completed", metadata: contractMetadata },
+        { id: "review", output: { verdict: "pass" }, cached: false, status: "completed", metadata: contractMetadata },
       ],
     });
     expect(result.tasks.map((task) => task.metadata)).toEqual([contractMetadata, contractMetadata]);
@@ -164,7 +133,6 @@ console.log(JSON.stringify(result));
   test("fails before handoff when task output does not decode", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
     });
@@ -178,14 +146,12 @@ console.log(JSON.stringify(result));
   test("does not execute downstream tasks after a decode failure", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: { maxRepairs: 0, maxDecodeRepairs: 0 },
     });
     const review = defineTask({
       id: "review",
-      agent: reviewer,
       prompt: "Review the slice.",
       output: ReviewReport,
     });
@@ -217,14 +183,12 @@ console.log(JSON.stringify(result));
     for (const { name, value } of invalidBudgets) {
       const valid = defineTask({
         id: "valid",
-        agent: builder,
         prompt: "This task must not execute.",
         output: PatchReport,
       });
       const finish = name === "maxRepairs" ? { maxRepairs: value } : { maxDecodeRepairs: value };
       const invalid = defineTask({
         id: "invalid",
-        agent: builder,
         prompt: "This task must not execute either.",
         output: PatchReport,
         finish,
@@ -249,7 +213,6 @@ console.log(JSON.stringify(result));
   test("accepts zero decode and finish repair budgets", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: { maxRepairs: 0, maxDecodeRepairs: 0 },
@@ -276,7 +239,6 @@ console.log(JSON.stringify(result));
   test("defaults finish criterion repair allowance to zero", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: {
@@ -303,7 +265,6 @@ console.log(JSON.stringify(result));
   test("keeps decode and finish repair budgets independent with monotonic executor attempts", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: {
@@ -355,7 +316,6 @@ console.log(JSON.stringify(result));
   test("bounds decode repair exhaustion without borrowing from the finish budget", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: { maxDecodeRepairs: 1, maxRepairs: 3 },
@@ -379,7 +339,6 @@ console.log(JSON.stringify(result));
     try {
       const build = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build the slice.",
         output: PatchReport,
         finish: {
@@ -434,7 +393,6 @@ console.log(JSON.stringify(result));
   test("includes the effective decode repair allowance in task cache identity", () => {
     const base = {
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
     } as const;
@@ -459,7 +417,6 @@ console.log(JSON.stringify(result));
   test("keeps harness session persistence outside task cache identity", () => {
     const base = {
       id: "build",
-      agent: builder,
       prompt: "Study the session.",
       output: PatchReport,
       cacheKey: "session-study-v1",
@@ -484,7 +441,6 @@ console.log(JSON.stringify(result));
     const invalid = {
       ...defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build.",
         output: PatchReport,
       }),
@@ -508,7 +464,6 @@ console.log(JSON.stringify(result));
   test("repairs malformed worker JSON before failing the task", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: { maxDecodeRepairs: 1 },
@@ -534,7 +489,6 @@ console.log(JSON.stringify(result));
     expect(result.tasks[0]).toMatchObject(
       {
         id: "build",
-        agent: { plugin: "forge", name: "builder" },
         output: { summary: "repaired" },
         cached: false,
         metadata: {
@@ -566,8 +520,9 @@ console.log(JSON.stringify(result));
       "const args = process.argv.slice(2);",
       "const resumeIndex = args.indexOf('--resume');",
       "const agentIndex = args.indexOf('--agent');",
+      "const pluginDirIndex = args.indexOf('--plugin-dir');",
       "const prompt = args.at(-1);",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, agent: agentIndex >= 0 ? args[agentIndex + 1] : undefined, prompt }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, agent: agentIndex >= 0 ? args[agentIndex + 1] : undefined, pluginDir: pluginDirIndex >= 0 ? args[pluginDirIndex + 1] : undefined, prompt }) + '\\n');`,
       "const repaired = resumeIndex >= 0;",
       "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: repaired ? 'ok after repair' : 'bad' }), is_error: false, session_id: 'claude-session-1', duration_ms: 10, num_turns: repaired ? 2 : 1 }));",
       "",
@@ -578,7 +533,6 @@ console.log(JSON.stringify(result));
     try {
       const task = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build the slice.",
         output: PatchReport,
         worker: { worker: "claude-code" },
@@ -597,12 +551,14 @@ console.log(JSON.stringify(result));
         executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
       });
 
-      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; prompt: string });
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; pluginDir?: string; prompt: string });
       expect(calls).toHaveLength(2);
-      expect(calls[0]).toMatchObject({ agent: "builder" });
+      expect(calls[0]?.agent).toBeUndefined();
+      expect(calls[0]?.pluginDir).toBeUndefined();
       expect(calls[0]?.prompt).toContain("Build the slice.");
       expect(calls[1]).toMatchObject({ resume: "claude-session-1" });
       expect(calls[1]?.agent).toBeUndefined();
+      expect(calls[1]?.pluginDir).toBeUndefined();
       expect(calls[1]?.prompt).not.toContain("Build the slice.");
       expect(calls[1]?.prompt).toContain("summary must start with ok");
       expect(result.tasks[0]?.metadata).toMatchObject({
@@ -647,7 +603,6 @@ console.log(JSON.stringify(result));
     try {
       const task = defineTask({
         id: "study",
-        agent: builder,
         prompt: "Study this historical session.",
         output: PatchReport,
         worker: {
@@ -712,7 +667,6 @@ console.log(JSON.stringify(result));
     for (const { worker, adapter } of cases) {
       const task = defineTask({
         id: `study-${worker}`,
-        agent: builder,
         prompt: "Study this historical session.",
         output: PatchReport,
         worker: { worker, sessionPersistence: "ephemeral" },
@@ -797,7 +751,6 @@ console.log(JSON.stringify(result));
     try {
       const task = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build the slice.",
         output: PatchReport,
         worker: { worker: "antigravity-cli" },
@@ -864,8 +817,9 @@ console.log(JSON.stringify(result));
       "const args = process.argv.slice(2);",
       "const resumeIndex = args.indexOf('--resume');",
       "const agentIndex = args.indexOf('--agent');",
+      "const pluginDirIndex = args.indexOf('--plugin-dir');",
       "const prompt = args.at(-1);",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, agent: agentIndex >= 0 ? args[agentIndex + 1] : undefined, prompt }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, agent: agentIndex >= 0 ? args[agentIndex + 1] : undefined, pluginDir: pluginDirIndex >= 0 ? args[pluginDirIndex + 1] : undefined, prompt }) + '\\n');`,
       // Never emits session_id, so repair cannot resume; the fresh re-prompt is detectable
       // because the runner appends the repair instruction onto the original prompt.
       "const repaired = prompt.includes('did not satisfy the task finish requirements');",
@@ -878,7 +832,6 @@ console.log(JSON.stringify(result));
     try {
       const task = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build the slice.",
         output: PatchReport,
         worker: { worker: "claude-code" },
@@ -897,13 +850,14 @@ console.log(JSON.stringify(result));
         executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
       });
 
-      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; prompt: string });
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; pluginDir?: string; prompt: string });
       expect(calls).toHaveLength(2);
       expect(calls[0]?.resume).toBeUndefined();
       // The repair is a fresh invocation: no --resume, but a full re-prompt carrying the
       // original task prompt and the repair instruction.
       expect(calls[1]?.resume).toBeUndefined();
-      expect(calls[1]?.agent).toBe("builder");
+      expect(calls[1]?.agent).toBeUndefined();
+      expect(calls[1]?.pluginDir).toBeUndefined();
       expect(calls[1]?.prompt).toContain("Build the slice.");
       expect(calls[1]?.prompt).toContain("summary must start with ok");
       expect(result.tasks[0]?.status).toBe("completed");
@@ -926,7 +880,6 @@ console.log(JSON.stringify(result));
   test("does not repair ordinary executor failures", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: { maxRepairs: 1 },
@@ -947,7 +900,6 @@ console.log(JSON.stringify(result));
   test("runs dynamic workflows that construct downstream tasks from decoded outputs", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
     });
@@ -957,7 +909,6 @@ console.log(JSON.stringify(result));
         const patch = yield* wf.runTask(build);
         const review = defineTask({
           id: "review",
-          agent: reviewer,
           prompt: `Review this patch: ${patch.summary}`,
           output: ReviewReport,
         });
@@ -983,13 +934,11 @@ console.log(JSON.stringify(result));
   test("orders dynamic fan-out results by invocation ordinal", async () => {
     const slow = defineTask({
       id: "slow",
-      agent: builder,
       prompt: "Return slow output.",
       output: PatchReport,
     });
     const fast = defineTask({
       id: "fast",
-      agent: reviewer,
       prompt: "Return fast output.",
       output: ReviewReport,
     });
@@ -1025,14 +974,12 @@ console.log(JSON.stringify(result));
   test("passes mixed task-level worker models through the executor seam", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build with Grok Build.",
       output: PatchReport,
       worker: { model: "grok-build" },
     });
     const review = defineTask({
       id: "review",
-      agent: reviewer,
       prompt: "Review with Composer.",
       output: ReviewReport,
       worker: { model: "grok-composer-2.5-fast" },
@@ -1062,14 +1009,12 @@ console.log(JSON.stringify(result));
   test("passes mixed task-level workers through the executor seam", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build with Grok.",
       output: PatchReport,
       worker: { worker: "grok", model: "grok-build" },
     });
     const review = defineTask({
       id: "review",
-      agent: reviewer,
       prompt: "Review with Codex.",
       output: ReviewReport,
       worker: { worker: "codex-cli", model: "gpt-5.5-codex" },
@@ -1099,7 +1044,6 @@ console.log(JSON.stringify(result));
   test("paces executor concurrency below unbounded author fan-out", async () => {
     const tasks = Array.from({ length: WORKFLOW_TASK_CONCURRENCY + 3 }, (_, index) => defineTask({
       id: `task-${index}`,
-      agent: builder,
       prompt: `Run task ${index}.`,
       output: PatchReport,
     }));
@@ -1135,19 +1079,16 @@ console.log(JSON.stringify(result));
   test("cancels every active fan-out executor before rejecting an unisolated task failure", async () => {
     const blockers = ["block-a", "block-b", "block-c"].map((id) => defineTask({
       id,
-      agent: builder,
       prompt: `Block ${id}.`,
       output: PatchReport,
     }));
     const failure = defineTask({
       id: "fail",
-      agent: builder,
       prompt: "Fail immediately.",
       output: PatchReport,
     });
     const later = defineTask({
       id: "later",
-      agent: builder,
       prompt: "Must not start.",
       output: PatchReport,
     });
@@ -1211,19 +1152,16 @@ console.log(JSON.stringify(result));
   test("does not cancel fan-out siblings when the failing task is fault-isolated", async () => {
     const blockers = ["block-a", "block-b", "block-c"].map((id) => defineTask({
       id,
-      agent: builder,
       prompt: `Block ${id}.`,
       output: PatchReport,
     }));
     const failure = defineTask({
       id: "fail",
-      agent: builder,
       prompt: "Fail in isolation.",
       output: PatchReport,
     });
     const later = defineTask({
       id: "later",
-      agent: builder,
       prompt: "Run after isolated fan-out.",
       output: PatchReport,
     });
@@ -1303,7 +1241,6 @@ console.log(JSON.stringify(result));
     // task runs to completion; the failed one is recorded, and the run does not abort.
     const tasks = Array.from({ length: 5 }, (_, index) => defineTask({
       id: `task-${index}`,
-      agent: builder,
       prompt: `Run task ${index}.`,
       output: PatchReport,
       finish: { maxRepairs: 0, maxDecodeRepairs: 0 },
@@ -1336,7 +1273,6 @@ console.log(JSON.stringify(result));
   test("repairs malformed schema output before yielding to downstream workflow code", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: { maxDecodeRepairs: 1 },
@@ -1370,7 +1306,6 @@ console.log(JSON.stringify(result));
   test("repairs arbitrary Effect finish criteria before completing a task", async () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: {
@@ -1407,7 +1342,6 @@ console.log(JSON.stringify(result));
     const contexts: unknown[] = [];
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: {
@@ -1443,7 +1377,6 @@ console.log(JSON.stringify(result));
       metadata: expect.objectContaining({ attemptId: "primary-1" }),
       task: {
         id: "build",
-        agent: { plugin: "forge", name: "builder" },
       },
       evidence: {
         summary: "done",
@@ -1463,7 +1396,6 @@ console.log(JSON.stringify(result));
     const prompts: string[] = [];
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
       finish: {
@@ -1507,7 +1439,6 @@ console.log(JSON.stringify(result));
     try {
       const build = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build the slice.",
         output: PatchReport,
         finish: {
@@ -1560,15 +1491,15 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-fault-iso-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
+      const leaf = (id: string) => defineTask({ id, prompt: `Run ${id}.`, output: PatchReport });
       // WFE-009: pin b to a single attempt — this test asserts fault isolation on the first
       // hard failure, not the new executor-retry budget (a separate, dedicated test below).
       const [a, b, c] = [
         leaf("a"),
-        defineTask({ id: "b", agent: builder, prompt: "Run b.", output: PatchReport, worker: { retry: { maxAttempts: 1 } } }),
+        defineTask({ id: "b", prompt: "Run b.", output: PatchReport, worker: { retry: { maxAttempts: 1 } } }),
         leaf("c"),
       ];
-      const fusion = defineTask({ id: "fusion", agent: reviewer, prompt: "Fuse the leaves.", output: ReviewReport });
+      const fusion = defineTask({ id: "fusion", prompt: "Fuse the leaves.", output: ReviewReport });
       const workflow = defineWorkflow({
         name: "fault-isolation-crash-fanout",
         run: (wf) => Effect.gen(function* () {
@@ -1609,9 +1540,9 @@ console.log(JSON.stringify(result));
     // The guaranteed-failing worker feeds fusion: it exhausts its objective decode-repair
     // budget, is recorded failed with a non-empty error, and the fusion verdict is still
     // produced from the surviving siblings.
-    const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
+    const leaf = (id: string) => defineTask({ id, prompt: `Run ${id}.`, output: PatchReport });
     const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
-    const fusion = defineTask({ id: "fusion", agent: reviewer, prompt: "Fuse the leaves.", output: ReviewReport });
+    const fusion = defineTask({ id: "fusion", prompt: "Fuse the leaves.", output: ReviewReport });
     const workflow = defineWorkflow({
       name: "fault-isolation-repair-exhaustion-fanout",
       run: (wf) => Effect.gen(function* () {
@@ -1674,7 +1605,6 @@ console.log(JSON.stringify(result));
       // on the first hard failure, not the new executor-retry budget.
       const build = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build the slice.",
         output: PatchReport,
         worker: { retry: { maxAttempts: 1 } },
@@ -1713,12 +1643,12 @@ console.log(JSON.stringify(result));
         this.metadata = metadata;
       }
     }
-    const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
+    const leaf = (id: string) => defineTask({ id, prompt: `Run ${id}.`, output: PatchReport });
     // WFE-009: pin b to a single attempt — this test asserts OBS-006 forensics carry-through
     // on the first hard failure, not the new executor-retry budget.
     const [a, b] = [
       leaf("a"),
-      defineTask({ id: "b", agent: builder, prompt: "Run b.", output: PatchReport, worker: { retry: { maxAttempts: 1 } } }),
+      defineTask({ id: "b", prompt: "Run b.", output: PatchReport, worker: { retry: { maxAttempts: 1 } } }),
     ];
     const workflow = defineWorkflow({
       name: "runner-obs-006-isolated-failure-metadata",
@@ -1758,7 +1688,6 @@ console.log(JSON.stringify(result));
       try {
         const build = defineTask({
           id: "build",
-          agent: builder,
           prompt: "Build.",
           output: PatchReport,
           worker: { retry: { backoffMs: 1 } },
@@ -1796,7 +1725,7 @@ console.log(JSON.stringify(result));
       const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-terminal-"));
       const store = await WorkflowStore.open(join(root, "runs.sqlite"));
       try {
-        const build = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+        const build = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
         const workflow = defineWorkflow({ name: "executor-retry-non-retryable", tasks: [build] as const });
         const runId = store.createRun(workflow.name);
         let calls = 0;
@@ -1834,7 +1763,7 @@ console.log(JSON.stringify(result));
       const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-agy-exempt-"));
       const store = await WorkflowStore.open(join(root, "runs.sqlite"));
       try {
-        const build = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+        const build = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
         const workflow = defineWorkflow({ name: "executor-retry-agy-exempt", tasks: [build] as const });
         const runId = store.createRun(workflow.name);
         let calls = 0;
@@ -1862,7 +1791,6 @@ console.log(JSON.stringify(result));
       try {
         const build = defineTask({
           id: "build",
-          agent: builder,
           prompt: "Build.",
           output: PatchReport,
           worker: { retry: { maxAttempts: 3, backoffMs: 1 } },
@@ -1906,7 +1834,6 @@ console.log(JSON.stringify(result));
       try {
         const build = defineTask({
           id: "build",
-          agent: builder,
           prompt: "Build.",
           output: PatchReport,
           worker: { retry: { backoffMs: 1 } },
@@ -1957,8 +1884,8 @@ console.log(JSON.stringify(result));
   test("awaits forked task fibers so a failed fork does not orphan its result or the run", async () => {
     // Effect.fork fan-out: both forked fibers are joined and their results recorded — the
     // failing fork is isolated, not orphaned, and the run completes.
-    const a = defineTask({ id: "a", agent: builder, prompt: "Run a.", output: PatchReport });
-    const b = defineTask({ id: "b", agent: reviewer, prompt: "Run b.", output: ReviewReport });
+    const a = defineTask({ id: "a", prompt: "Run a.", output: PatchReport });
+    const b = defineTask({ id: "b", prompt: "Run b.", output: ReviewReport });
     const workflow = defineWorkflow({
       name: "forked-fanout-isolation",
       run: (wf) => Effect.gen(function* () {
@@ -1989,7 +1916,6 @@ console.log(JSON.stringify(result));
     // that declares no finish still self-heals a malformed attempt-0 on a repair attempt.
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
     });
@@ -2039,7 +1965,6 @@ console.log(JSON.stringify(result));
     try {
       const task = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build the slice.",
         output: PatchReport,
         worker: { worker: "grok" },
@@ -2079,12 +2004,6 @@ console.log(JSON.stringify(result));
   });
 
   test("phase contract criteria attach as a default judge criterion", async () => {
-    const explorer = {
-      ...builder,
-      name: "explorer",
-      description: "Exploration specialist",
-    } as const satisfies WorkflowAgentRef;
-
     const Exploration = Schema.Struct({
       assumption: Schema.String,
       options: Schema.Array(Schema.String),
@@ -2135,12 +2054,6 @@ console.log(JSON.stringify(result));
   });
 
   test("phase contract criteria fail closed on empty or trivial output", async () => {
-    const explorer = {
-      ...builder,
-      name: "explorer",
-      description: "Exploration specialist",
-    } as const satisfies WorkflowAgentRef;
-
     const Exploration = Schema.Struct({
       assumption: Schema.String,
       options: Schema.Array(Schema.String),
@@ -2170,12 +2083,6 @@ console.log(JSON.stringify(result));
   });
 
   test("phase finish inherit:false opts out of contract criteria", async () => {
-    const explorer = {
-      ...builder,
-      name: "explorer",
-      description: "Exploration specialist",
-    } as const satisfies WorkflowAgentRef;
-
     const Exploration = Schema.Struct({
       assumption: Schema.String,
       options: Schema.Array(Schema.String),
@@ -2209,7 +2116,7 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-attempt-success-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      const task = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
       const workflow = defineWorkflow({ name: "attempt-success", tasks: [task] as const });
       const result = await runWorkflow(workflow, {
         store,
@@ -2218,7 +2125,6 @@ console.log(JSON.stringify(result));
           metadata: {
             adapter: "codex-cli",
             model: "gpt-5.6-codex",
-            nativeAgent: "builder",
             sessionId: "session-success",
           },
         }),
@@ -2233,7 +2139,6 @@ console.log(JSON.stringify(result));
         status: "completed",
         adapter: "codex-cli",
         model: "gpt-5.6-codex",
-        nativeAgent: "builder",
         sessionId: "session-success",
       });
       expect(attempts[0]?.failure).toBeUndefined();
@@ -2250,7 +2155,6 @@ console.log(JSON.stringify(result));
     try {
       const task = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build.",
         output: PatchReport,
         finish: {
@@ -2280,7 +2184,6 @@ console.log(JSON.stringify(result));
             metadata: {
               adapter: "claude-code",
               model: "claude-sonnet",
-              nativeAgent: "builder",
               sessionId: "repair-session-1",
             },
           };
@@ -2311,7 +2214,6 @@ console.log(JSON.stringify(result));
     try {
       const task = defineTask({
         id: "build",
-        agent: builder,
         prompt: "Build.",
         output: PatchReport,
         finish: {
@@ -2362,7 +2264,7 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-attempt-adapter-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      const task = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
       const workflow = defineWorkflow({ name: "attempt-adapter-failure", tasks: [task] as const });
       const runId = store.createRun(workflow.name);
       const adapterError = Object.assign(new Error("provider account mismatch"), {
@@ -2370,7 +2272,6 @@ console.log(JSON.stringify(result));
         metadata: {
           adapter: "codex-cli",
           model: "gpt-5.6-codex",
-          nativeAgent: "builder",
           sessionId: "adapter-session",
           exitCode: 1,
         },
@@ -2392,7 +2293,6 @@ console.log(JSON.stringify(result));
           status: "failed",
           adapter: "codex-cli",
           model: "gpt-5.6-codex",
-          nativeAgent: "builder",
           sessionId: "adapter-session",
           failure: { kind: "executor", message: "provider account mismatch" },
           metadata: expect.objectContaining({ exitCode: 1 }),
@@ -2419,7 +2319,7 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-attempt-cache-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      const task = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
       const workflow = defineWorkflow({ name: "attempt-cache-hit", tasks: [task] as const });
       await runWorkflow(workflow, {
         store,
@@ -2452,7 +2352,7 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-author-failure-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      const task = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
       const authorError = Object.assign(new Error("author program rejected output"), {
         name: "AuthorProgramError",
       });
@@ -2496,8 +2396,8 @@ console.log(JSON.stringify(result));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
       const blockers = ["block-a", "block-b"].map((id) =>
-        defineTask({ id, agent: builder, prompt: `Block ${id}.`, output: PatchReport }));
-      const failure = defineTask({ id: "fail", agent: builder, prompt: "Fail.", output: PatchReport });
+        defineTask({ id, prompt: `Block ${id}.`, output: PatchReport }));
+      const failure = defineTask({ id: "fail", prompt: "Fail.", output: PatchReport });
       const workflow = defineWorkflow({
         name: "attempt-sibling-cancellation",
         run: (wf) => Effect.all(
@@ -2569,7 +2469,7 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-attempt-stop-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      const task = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
       const workflow = defineWorkflow({ name: "attempt-external-stop", tasks: [task] as const });
       const runId = store.createRun(workflow.name);
       const controller = new AbortController();
@@ -2623,7 +2523,7 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-attempt-crash-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      const task = defineTask({ id: "build", prompt: "Build.", output: PatchReport });
       const workflow = defineWorkflow({ name: "attempt-runner-crash", tasks: [task] as const });
       const runId = store.createRun(workflow.name);
       let markStarted!: () => void;
@@ -2698,8 +2598,8 @@ console.log(JSON.stringify(result));
   });
 });
 
-describe("agent-less workflow tasks normalize to the anonymous sentinel", () => {
-  test("runs a bare worker task under the sentinel identity", async () => {
+describe("agent-less workflow tasks", () => {
+  test("runs and persists a bare worker task", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-agentless-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
@@ -2716,24 +2616,23 @@ describe("agent-less workflow tasks normalize to the anonymous sentinel", () => 
       });
 
       expect(result.tasks[0]?.output).toEqual({ summary: "bare output" });
-      expect(result.tasks[0]?.agent).toEqual({ plugin: "prism", name: "anonymous" });
 
       const attempts = store.listRunTaskAttempts(result.runId!);
       expect(attempts).toHaveLength(1);
-      expect(attempts[0]?.nativeAgent).toBe("anonymous");
 
-      const persisted = store.listRunTasks(result.runId!)[0];
-      expect(persisted?.agent).toEqual({ plugin: "prism", name: "anonymous" });
+      const persisted = store.listRunTasks(result.runId!);
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.taskId).toBe("bare");
 
       const snapshots = store.listRunTaskSnapshots(result.runId!);
-      expect(snapshots[0]?.agent?.name).toBe("anonymous");
+      expect(snapshots[0]?.taskId).toBe("bare");
     } finally {
       store.close();
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  test("resolves a sentinel task model from worker.model and cli fallback", () => {
+  test("resolves a bare task model from worker.model and cli fallback", () => {
     const bare = defineTask({
       id: "bare",
       prompt: "Do the work.",
@@ -2754,18 +2653,5 @@ describe("agent-less workflow tasks normalize to the anonymous sentinel", () => 
     });
     expect(resolveWorkflowTaskModel(bareNoModel)).toBeUndefined();
     expect(resolveWorkflowTaskModel(bareNoModel, { fallbackModel: "sonnet" })).toBe("sonnet");
-
-    const bareResolver = defineTask({
-      id: "bare-resolver",
-      prompt: "Do the work.",
-      output: PatchReport,
-      worker: {
-        worker: "claude-code",
-        modelResolver: () => "picked",
-      },
-    });
-    expect(() => resolveWorkflowTaskModel(bareResolver)).toThrow(
-      /has no model target for worker/,
-    );
   });
 });

@@ -4,28 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
 import { ClaudeWorkflowWorkerError, runClaudeWorkflowTask } from "./workflow-claude-worker.js";
-import { anonymousWorkflowAgent, type WorkflowAgentRef } from "./workflows.js";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["claude-code"],
-} as const satisfies WorkflowAgentRef;
 
 const task = {
   kind: "workflow-task" as const,
   id: "build",
-  agent,
   prompt: "Do the thing.",
   output: Schema.Struct({ summary: Schema.String }),
 };
 
-describe("runClaudeWorkflowTask plugin-free dispatch", () => {
-  test("omits --agent for anonymousWorkflowAgent", async () => {
+describe("runClaudeWorkflowTask agent-free dispatch", () => {
+  test("never emits --agent or --plugin-dir", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-claude-anonymous-"));
     try {
       const fakeClaude = join(root, "fake-claude-anonymous.mjs");
@@ -39,10 +27,7 @@ describe("runClaudeWorkflowTask plugin-free dispatch", () => {
       ].join("\n"));
       await chmod(fakeClaude, 0o755);
 
-      const result = await runClaudeWorkflowTask({
-        ...task,
-        agent: anonymousWorkflowAgent,
-      }, {
+      const result = await runClaudeWorkflowTask(task, {
         cwd: root,
         bin: fakeClaude,
         resolvedPermission: "legacy",
@@ -51,6 +36,7 @@ describe("runClaudeWorkflowTask plugin-free dispatch", () => {
       expect(result.output).toEqual({ summary: "ok" });
       const args = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
       expect(args).not.toContain("--agent");
+      expect(args).not.toContain("--plugin-dir");
       expect(args).not.toContain("anonymous");
     } finally {
       await rm(root, { recursive: true, force: true });

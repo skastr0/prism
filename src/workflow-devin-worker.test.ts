@@ -17,15 +17,6 @@ import type { StableSessionId } from "./workflow-session.js";
 const failureTask = {
   kind: "workflow-task" as const,
   id: "devin-nonzero-exit",
-  agent: {
-    kind: "agent-ref" as const,
-    plugin: "test",
-    name: "agent",
-    description: "test agent",
-    sourceHash: "a".repeat(64),
-    manifestHash: "a".repeat(64),
-    installs: ["devin"],
-  },
   prompt: "Return JSON",
   output: Schema.Struct({ ok: Schema.Boolean }),
 };

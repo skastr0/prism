@@ -273,25 +273,24 @@ export const assertWorkflowWorkerPermission = (
       mapDevinPermissionMode(mode);
       return;
     case "grok":
-      buildGrokArgs({ cwd: "/", agent: "anonymous", prompt: "p", permission: mode });
+      buildGrokArgs({ cwd: "/", prompt: "p", permission: mode });
       return;
     case "hermes":
       buildHermesArgs({ prompt: "p", permission: mode });
       return;
     case "kimi-code":
-      buildKimiArgs({ prompt: "p", skillsDir: "/", permission: mode });
+      buildKimiArgs({ prompt: "p", permission: mode });
       return;
     case "omp":
       buildOmpArgs({
         cwd: "/",
-        systemPromptPath: "/anonymous.md",
         prompt: "p",
         permission: mode,
         restrictedTools,
       });
       return;
     case "opencode":
-      buildOpenCodeArgs({ cwd: "/", agent: "anonymous", prompt: "p", permission: mode });
+      buildOpenCodeArgs({ cwd: "/", prompt: "p", permission: mode });
       return;
     default:
       return;

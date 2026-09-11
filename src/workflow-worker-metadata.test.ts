@@ -1,17 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WorkflowOutputParseError } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
-import type { WorkflowAgentRef } from "./workflows.js";
-
-const builder = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["grok"],
-} as const satisfies WorkflowAgentRef;
 
 describe("workflow worker metadata", () => {
   test("omits empty stderr metadata", () => {
@@ -97,13 +86,12 @@ describe("workflow worker contract", () => {
     const instruction = workflowWorkerJsonInstruction({
       kind: "workflow-task",
       id: "build",
-      agent: builder,
       prompt: "Build it.",
       output: {} as never,
     });
 
     expect(instruction).toContain("Task id: build");
-    expect(instruction).toContain("Agent identity: forge.builder");
+    expect(instruction).not.toContain("Agent identity");
     expect(instruction).toContain(`Contract version: ${WORKFLOW_WORKER_JSON_CONTRACT_VERSION}`);
     expect(instruction).toContain("Return exactly one JSON value and nothing else");
   });

@@ -4,22 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
 import { KimiWorkflowWorkerError, runKimiWorkflowTask } from "./workflow-kimi-worker.js";
-import type { WorkflowAgentRef } from "./workflows.js";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["kimi-code"],
-} as const satisfies WorkflowAgentRef;
 
 const task = {
   kind: "workflow-task" as const,
   id: "build",
-  agent,
   prompt: "Do the thing.",
   output: Schema.Struct({ summary: Schema.String }),
 };

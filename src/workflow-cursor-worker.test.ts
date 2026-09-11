@@ -5,22 +5,10 @@ import { join } from "node:path";
 import { Schema } from "effect";
 import { CursorWorkflowWorkerError, runCursorWorkflowTask } from "./workflow-cursor-worker.js";
 import type { StableSessionId } from "./workflow-session.js";
-import type { WorkflowAgentRef } from "./workflows.js";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["cursor"],
-} as const satisfies WorkflowAgentRef;
 
 const task = {
   kind: "workflow-task" as const,
   id: "build",
-  agent,
   prompt: "Do the thing.",
   output: Schema.Struct({ summary: Schema.String }),
 };
@@ -66,7 +54,6 @@ describe("runCursorWorkflowTask success", () => {
         adapter: "cursor",
         sessionId: "cursor-session-1",
         model: "composer-2.5-fast",
-        agentSelection: "prompted-contract",
       });
     } finally {
       await rm(root, { recursive: true, force: true });

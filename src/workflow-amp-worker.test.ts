@@ -18,22 +18,10 @@ import {
   validateAmpCatalogPins,
 } from "./workflow-amp-worker.js";
 import type { HarnessTypesSnapshot } from "./harness-types.js";
-import type { WorkflowAgentRef } from "./workflows.js";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["amp-code"],
-} as const satisfies WorkflowAgentRef;
 
 const task = {
   kind: "workflow-task" as const,
   id: "build",
-  agent,
   prompt: "Do the thing.",
   output: Schema.Struct({ summary: Schema.String }),
 };

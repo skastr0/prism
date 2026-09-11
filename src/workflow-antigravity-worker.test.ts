@@ -227,15 +227,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "retry-test",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean, attempt: Schema.Number }),
       };
@@ -286,15 +277,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "conversation-id",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean }),
       };
@@ -347,15 +329,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "empty-stdout-warning",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean, attempt: Schema.Number }),
       };
@@ -398,15 +371,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "missing-conversation",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean }),
       };
@@ -449,15 +413,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "malformed-output-metadata",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean }),
       };
@@ -516,15 +471,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "abort-backoff",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean }),
       };
@@ -584,15 +530,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "retry-exhausted",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean }),
       };
@@ -622,15 +559,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "pty-setup-failure",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean }),
       };
@@ -671,15 +599,6 @@ describe("runAntigravityWorkflowTask retries", () => {
       const task = {
         kind: "workflow-task" as const,
         id: "capability-preflight",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
         prompt: "Return JSON {\"ok\": true}",
         output: Schema.Struct({ ok: Schema.Boolean }),
       };

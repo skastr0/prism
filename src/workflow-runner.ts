@@ -63,10 +63,6 @@ export type WorkflowRunTaskResultStatus = "completed" | "failed" | "escalated";
 
 export interface WorkflowRunTaskResult {
   readonly id: string;
-  readonly agent: {
-    readonly plugin: string;
-    readonly name: string;
-  };
   readonly output: unknown;
   readonly cached: boolean;
   readonly status: WorkflowRunTaskResultStatus;
@@ -240,11 +236,6 @@ interface RunCancellationBarrier {
 const isWorkflowTaskExecution = (value: unknown): value is WorkflowTaskExecution =>
   typeof value === "object" && value !== null && "output" in value;
 
-const taskAgent = (task: AnyWorkflowTask) => ({
-  plugin: task.agent.plugin,
-  name: task.agent.name,
-});
-
 const workflowContractMetadata = {
   contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
   instructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
@@ -375,7 +366,6 @@ const judgeCriterionDefinition = (criterion: WorkflowJudgeFinishCriterion<unknow
 
 const taskJudgeMetadata = (task: AnyWorkflowTask): WorkflowJudgeTaskMetadata => ({
   id: task.id,
-  agent: taskAgent(task),
   ...(task.cacheKey !== undefined ? { cacheKey: task.cacheKey } : {}),
   ...(task.worker !== undefined ? { worker: task.worker } : {}),
 });
@@ -561,7 +551,6 @@ const failedTaskResult = (
   if (rawText !== undefined) output.rawText = rawText;
   return {
     id: task.id,
-    agent: taskAgent(task),
     output,
     cached,
     status: error instanceof WorkflowTaskEscalatedError ? "escalated" : "failed",
@@ -825,7 +814,6 @@ const recordRunTaskIfPersisted = (input: {
   readonly runId: string | null;
   readonly ordinal: number;
   readonly identity: WorkflowTaskIdentity;
-  readonly agent: { readonly plugin: string; readonly name: string };
   readonly status: "completed" | "failed" | "escalated";
   readonly cached: boolean;
   readonly output: unknown;
@@ -839,7 +827,6 @@ const recordRunTaskIfPersisted = (input: {
       runId: input.runId,
       ordinal: input.ordinal,
       identity: input.identity,
-      agent: input.agent,
       status: input.status,
       cached: input.cached,
       output: input.output,
@@ -1032,8 +1019,6 @@ const executeWorkflowTask = async (input: {
     attributes: {
       "task.id": task.id,
       "task.ordinal": ordinal,
-      "agent.plugin": task.agent.plugin,
-      "agent.name": task.agent.name,
       "task.cache_key": identity.cacheKey,
     },
   });
@@ -1334,7 +1319,6 @@ const executeWorkflowTask = async (input: {
           runId,
           ordinal,
           identity,
-          agent: taskAgent(task),
           status: "failed",
           cached: false,
           output,
@@ -1364,7 +1348,6 @@ const executeWorkflowTask = async (input: {
           runId,
           ordinal,
           identity,
-          agent: taskAgent(task),
           status: "failed",
           cached: cacheHit,
           output: rawOutput,
@@ -1448,7 +1431,6 @@ const executeWorkflowTask = async (input: {
           runId,
           ordinal,
           identity,
-          agent: taskAgent(task),
           status: "escalated",
           cached: cacheHit,
           output: decodedOutput,
@@ -1463,7 +1445,6 @@ const executeWorkflowTask = async (input: {
         runId,
         ordinal,
         identity,
-        agent: taskAgent(task),
         status: "failed",
         cached: cacheHit,
         output: rawOutput,
@@ -1500,7 +1481,6 @@ const executeWorkflowTask = async (input: {
     if (!cacheHit) {
       const cacheWrite = store?.recordCompleted({
         identity,
-        agent: taskAgent(task),
         output: decodedOutput,
         metadata: finalMetadata,
         ...(mockOutput ? { outputSource: "mock-output" as const } : {}),
@@ -1522,14 +1502,13 @@ const executeWorkflowTask = async (input: {
       runId,
       ordinal,
       identity,
-      agent: taskAgent(task),
       status: "completed",
       cached: cacheHit,
       output: decodedOutput,
       metadata: finalMetadata,
     });
     if (repairs > 0) taskSpan.annotate("task.repairs", repairs);
-    return { id: task.id, agent: taskAgent(task), output: decodedOutput, cached: cacheHit, status: "completed", metadata: finalMetadata };
+    return { id: task.id, output: decodedOutput, cached: cacheHit, status: "completed", metadata: finalMetadata };
   };
 
   try {
@@ -1552,7 +1531,6 @@ const executeWorkflowTask = async (input: {
         runId,
         ordinal,
         identity,
-        agent: taskAgent(task),
         status: "failed",
         cached: cacheHit,
         output: result.output,

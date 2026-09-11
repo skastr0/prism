@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Schema } from "effect";
 import {
   assertOmpWorkflowModel,
@@ -13,30 +13,14 @@ import {
 import { WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
 import type { StableSessionId } from "./workflow-session.js";
-import { anonymousWorkflowAgent, defineTask, type WorkflowAgentRef } from "./workflows.js";
+import { defineTask } from "./workflows.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["omp"],
-} as const satisfies WorkflowAgentRef;
 
 const task = {
   kind: "workflow-task" as const,
   id: "build",
-  agent,
   prompt: "Do the thing.",
   output: Schema.Struct({ summary: Schema.String }),
-};
-
-const writeText = async (path: string, content: string): Promise<void> => {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content);
 };
 
 const fakeOmpEventStream = (callsFile: string, sessionId: string): string => [
@@ -61,7 +45,6 @@ describe("OMP workflow argv", () => {
   test("uses scripting, model, profile, permission, tool, and exact-resume flags", () => {
     const args = buildOmpArgs({
       cwd: "/repo",
-      systemPromptPath: "/repo/.omp/agents/builder.md",
       model: "gpt-5.6-luna",
       provider: "openai",
       profile: "isolated",
@@ -76,7 +59,6 @@ describe("OMP workflow argv", () => {
       "--mode", "json",
       "--print",
       "--cwd", "/repo",
-      "--append-system-prompt", "/repo/.omp/agents/builder.md",
       "--no-title",
       "--profile", "isolated",
       "--provider", "openai",
@@ -93,7 +75,6 @@ describe("OMP workflow argv", () => {
   test("restricted mode with no allowlist disables every tool", () => {
     expect(buildOmpArgs({
       cwd: "/repo",
-      systemPromptPath: "/agent.md",
       prompt: "p",
       permission: "restricted",
     })).toContain("--no-tools");
@@ -107,7 +88,6 @@ describe("OMP workflow argv", () => {
     ] as const) {
       expect(() => buildOmpArgs({
         cwd: "/repo",
-        systemPromptPath: "/agent.md",
         prompt: "p",
         permission,
       })).toThrow(WorkflowPermissionError);
@@ -162,46 +142,9 @@ describe("OMP JSON event stream", () => {
 });
 
 describe("OMP workflow execution", () => {
-  test("loads the project compiled agent before global and captures its own session", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-omp-worker-"));
-    const previousHome = process.env.HOME;
-    try {
-      process.env.HOME = join(root, "home");
-      const projectAgent = join(root, ".omp", "agents", "builder.md");
-      const globalAgent = join(process.env.HOME, ".omp", "agent", "agents", "builder.md");
-      await writeText(projectAgent, "project compiled agent\n");
-      await writeText(globalAgent, "global compiled agent\n");
-      const callsFile = join(root, "calls.jsonl");
-      const fakeOmp = join(root, "fake-omp.mjs");
-      await writeFile(fakeOmp, fakeOmpEventStream(callsFile, "019f-project-session"));
-      await chmod(fakeOmp, 0o755);
-
-      const result = await runOmpWorkflowTask(task, {
-        cwd: root,
-        bin: fakeOmp,
-        model: "gpt-5.6-luna",
-        resolvedPermission: "legacy",
-      });
-
-      expect(result.output).toEqual({ summary: "ok" });
-      expect(result.metadata?.sessionId).toBe("019f-project-session");
-      const argv = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
-      expect(argv.slice(
-        argv.indexOf("--append-system-prompt"),
-        argv.indexOf("--append-system-prompt") + 2,
-      )).toEqual(["--append-system-prompt", projectAgent]);
-      expect(argv).not.toContain(globalAgent);
-    } finally {
-      process.env.HOME = previousHome;
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
   test("passes --no-session and never exposes the transient OMP session id", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-ephemeral-"));
     try {
-      const projectAgent = join(root, ".omp", "agents", "builder.md");
-      await writeText(projectAgent, "project compiled agent\n");
       const callsFile = join(root, "calls.jsonl");
       const fakeOmp = join(root, "fake-omp-ephemeral.mjs");
       await writeFile(fakeOmp, [
@@ -233,11 +176,9 @@ describe("OMP workflow execution", () => {
     }
   });
 
-  test("repairs by resuming the exact OMP session with the same compiled agent", async () => {
+  test("repairs by resuming the exact OMP session", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-worker-"));
     try {
-      const projectAgent = join(root, ".omp", "agents", "builder.md");
-      await writeText(projectAgent, "project compiled agent\n");
       const callsFile = join(root, "calls.jsonl");
       const fakeOmp = join(root, "fake-omp.mjs");
       await writeFile(fakeOmp, fakeOmpEventStream(callsFile, "019f-ignored"));
@@ -266,7 +207,6 @@ describe("OMP workflow execution", () => {
         "--resume",
         "019f-resume-me",
       ]);
-      expect(argv).toContain(projectAgent);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -276,8 +216,6 @@ describe("OMP workflow execution", () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-worker-"));
     const previousBin = process.env.PRISM_WORKFLOW_OMP_BIN;
     try {
-      const projectAgent = join(root, ".omp", "agents", "builder.md");
-      await writeText(projectAgent, "project compiled agent\n");
       const callsFile = join(root, "calls.jsonl");
       const fakeOmp = join(root, "fake-omp.mjs");
       await writeFile(fakeOmp, fakeOmpEventStream(callsFile, "019f-profiled-session"));
@@ -340,65 +278,12 @@ describe("OMP workflow execution", () => {
     }
   });
 
-  test("plugin-free anonymous agent uses a temp system prompt instead of requiring refresh", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-omp-anonymous-"));
-    const previousHome = process.env.HOME;
-    try {
-      process.env.HOME = join(root, "empty-home");
-      const callsFile = join(root, "calls.jsonl");
-      const fakeOmp = join(root, "fake-omp.mjs");
-      await writeFile(fakeOmp, fakeOmpEventStream(callsFile, "019f-anonymous-session"));
-      await chmod(fakeOmp, 0o755);
-
-      const result = await runOmpWorkflowTask({
-        ...task,
-        agent: anonymousWorkflowAgent,
-      }, {
-        cwd: root,
-        bin: fakeOmp,
-        resolvedPermission: "legacy",
-      });
-
-      expect(result.output).toEqual({ summary: "ok" });
-      const argv = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
-      const promptPath = argv[argv.indexOf("--append-system-prompt") + 1];
-      expect(promptPath).toContain("prism-omp-anonymous-");
-      expect(promptPath).toEndWith("anonymous.md");
-      expect(argv).toContain("--print");
-    } finally {
-      process.env.HOME = previousHome;
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("fails closed before spawn when the compiled OMP agent is absent", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-omp-worker-"));
-    const previousHome = process.env.HOME;
-    try {
-      process.env.HOME = join(root, "empty-home");
-      await expect(runOmpWorkflowTask(task, {
-        cwd: root,
-        bin: join(root, "must-not-spawn"),
-        resolvedPermission: "legacy",
-      })).rejects.toThrow(OmpWorkflowWorkerError);
-      await expect(runOmpWorkflowTask(task, {
-        cwd: root,
-        bin: join(root, "must-not-spawn"),
-        resolvedPermission: "legacy",
-      })).rejects.toThrow("Run prism refresh <plugin> --harness omp");
-    } finally {
-      process.env.HOME = previousHome;
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("runOmpWorkflowTask provider errors", () => {
   test("fails closed with the assistant errorMessage instead of empty output", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-provider-error-"));
     try {
-      const projectAgent = join(root, ".omp", "agents", "builder.md");
-      await writeText(projectAgent, "project compiled agent\n");
       const fakeOmp = join(root, "fake-omp-provider-error.mjs");
       await writeFile(fakeOmp, [
         "#!/usr/bin/env node",
@@ -423,8 +308,6 @@ describe("runOmpWorkflowTask failure metadata (OBS-006)", () => {
   test("non-zero exit attaches adapter + stderr excerpt to the thrown error", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-fail-"));
     try {
-      const projectAgent = join(root, ".omp", "agents", "builder.md");
-      await writeText(projectAgent, "project compiled agent\n");
       const fakeOmp = join(root, "fake-omp-fail.mjs");
       await writeFile(fakeOmp, [
         "#!/usr/bin/env node",
@@ -455,8 +338,6 @@ describe("runOmpWorkflowTask failure metadata (OBS-006)", () => {
   test("captures the session id from a partial event stream before a non-zero exit", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-fail-"));
     try {
-      const projectAgent = join(root, ".omp", "agents", "builder.md");
-      await writeText(projectAgent, "project compiled agent\n");
       const fakeOmp = join(root, "fake-omp-partial-fail.mjs");
       await writeFile(fakeOmp, [
         "#!/usr/bin/env node",

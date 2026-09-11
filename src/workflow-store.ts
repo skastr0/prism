@@ -49,10 +49,6 @@ export type WorkflowTaskOutputSource = "mock-output";
 
 export interface CompletedWorkflowTaskRecord {
   readonly identity: WorkflowTaskIdentity;
-  readonly agent: {
-    readonly plugin: string;
-    readonly name: string;
-  };
   readonly output: unknown;
   readonly metadata?: Record<string, unknown>;
   readonly outputSource?: WorkflowTaskOutputSource;
@@ -140,7 +136,6 @@ export interface WorkflowRunTaskCompactSummary {
   };
   readonly workerAdapter: string | null;
   readonly model: string | null;
-  readonly nativeAgent: string | null;
   readonly repairCount: number;
   readonly repairMode: string | null;
   readonly durationMs: number | null;
@@ -437,7 +432,6 @@ export interface WorkflowTaskAttemptRecord {
   readonly finishedAt: string | null;
   readonly adapter?: string;
   readonly model?: string;
-  readonly nativeAgent?: string;
   readonly sessionId?: string;
   readonly failure?: WorkflowTaskAttemptFailure;
   readonly usage?: WorkflowUsage;
@@ -449,9 +443,6 @@ interface TaskRecordRow {
   readonly task_id: string;
   readonly cache_key: string;
   readonly prompt_hash: string;
-  readonly agent_manifest_hash: string;
-  readonly agent_plugin: string;
-  readonly agent_name: string;
   readonly status: string;
   readonly output_json: string;
   readonly metadata_json: string | null;
@@ -483,8 +474,6 @@ interface RunTaskRow {
   readonly cache_key: string;
   readonly status: WorkflowRunTaskStatus;
   readonly cached: 0 | 1;
-  readonly agent_plugin: string;
-  readonly agent_name: string;
   readonly output_json: string;
   readonly metadata_json: string | null;
 }
@@ -515,7 +504,6 @@ interface TaskAttemptRow {
   readonly finished_at: string | null;
   readonly adapter: string | null;
   readonly model: string | null;
-  readonly native_agent: string | null;
   readonly session_id: string | null;
   readonly failure_kind: WorkflowTaskAttemptFailureKind | null;
   readonly failure_message: string | null;
@@ -570,11 +558,6 @@ interface RunTaskSnapshotRow {
   readonly prompt: string;
   readonly cache_key: string;
   readonly prompt_hash: string;
-  readonly agent_manifest_hash: string;
-  readonly agent_plugin: string;
-  readonly agent_name: string;
-  readonly agent_description: string;
-  readonly agent_source_hash: string;
   readonly worker_json: string | null;
   readonly output_schema_json: string | null;
   readonly finish_criteria_json: string;
@@ -587,7 +570,7 @@ export const projectWorkflowStoreDir = (prismHome: string, cwd: string = process
 export const defaultWorkflowStorePath = (prismHome: string, cwd: string = process.cwd()): string =>
   join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
-export const WORKFLOW_STORE_SCHEMA_VERSION = 5;
+export const WORKFLOW_STORE_SCHEMA_VERSION = 6;
 
 /**
  * AR-001: the task-cache resource identity used to key `workflow_task_records`
@@ -598,13 +581,13 @@ export const WORKFLOW_STORE_SCHEMA_VERSION = 5;
  * `scopeKey` is a fixed namespace constant for now — external caller-chosen
  * scoping, `agent-run://` addressing, lineage, and world_refs are AR-002+
  * (out of scope here). `stableKey` folds `(taskId, cacheKey)` and
- * `semanticHash` folds `(promptHash, agentManifestHash)`, so identical
- * agent+prompt+schema+harness+model content yields the same resource id
+ * `semanticHash` folds `(promptHash)`, so identical
+ * prompt+schema+harness+model content yields the same resource id
  * regardless of which workflow produced it, while every dimension the old
  * 5-column primary key ANDed together still participates in the new one —
  * no existing per-workflow cache hit stops hitting.
  */
-const WORKFLOW_TASK_CACHE_SCOPE_KEY = "workflow-task-cache-v1";
+const WORKFLOW_TASK_CACHE_SCOPE_KEY = "workflow-task-cache-v2";
 
 interface WorkflowTaskResourceKey {
   readonly scopeKey: string;
@@ -615,7 +598,19 @@ interface WorkflowTaskResourceKey {
 const workflowTaskResourceKey = (identity: WorkflowTaskIdentity): WorkflowTaskResourceKey => ({
   scopeKey: WORKFLOW_TASK_CACHE_SCOPE_KEY,
   stableKey: stableJsonHash({ taskId: identity.taskId, cacheKey: identity.cacheKey }),
-  semanticHash: stableJsonHash({ promptHash: identity.promptHash, agentManifestHash: identity.agentManifestHash }),
+  semanticHash: stableJsonHash({ promptHash: identity.promptHash }),
+});
+
+/** Pre-v6 key derivation, used only to replay legacy rows before v6 clears the cache table. */
+const legacyWorkflowTaskResourceKey = (input: {
+  readonly taskId: string;
+  readonly cacheKey: string;
+  readonly promptHash: string;
+  readonly agentManifestHash: string;
+}): WorkflowTaskResourceKey => ({
+  scopeKey: "workflow-task-cache-v1",
+  stableKey: stableJsonHash({ taskId: input.taskId, cacheKey: input.cacheKey }),
+  semanticHash: stableJsonHash({ promptHash: input.promptHash, agentManifestHash: input.agentManifestHash }),
 });
 
 /**
@@ -720,7 +715,6 @@ const serializeAttemptMetadata = (
   readonly json: string | null;
   readonly adapter: string | null;
   readonly model: string | null;
-  readonly nativeAgent: string | null;
   readonly sessionId: string | null;
 } => {
   const normalized = normalizeWorkflowSessionMetadata(metadata);
@@ -730,7 +724,6 @@ const serializeAttemptMetadata = (
       json: null,
       adapter: null,
       model: null,
-      nativeAgent: null,
       sessionId: null,
     };
   }
@@ -744,7 +737,6 @@ const serializeAttemptMetadata = (
     json,
     adapter: stableSession?.adapter ?? stringMetadata(normalized, "adapter"),
     model: stringMetadata(persisted, "model"),
-    nativeAgent: stringMetadata(persisted, "nativeAgent"),
     sessionId: stableSession?.sessionId ?? externalSessionPointer(persisted),
   };
 };
@@ -1323,8 +1315,7 @@ const migrateWorkflowStoreToVersion4 = (db: WorkflowDatabase): void => {
     `);
 
     for (const row of legacyRows) {
-      const key = workflowTaskResourceKey({
-        workflow: row.workflow,
+      const key = legacyWorkflowTaskResourceKey({
         taskId: row.task_id,
         cacheKey: row.cache_key,
         promptHash: row.prompt_hash,
@@ -1485,13 +1476,10 @@ const migrateWorkflowStoreToVersion5 = (db: WorkflowDatabase): void => {
       readonly workflow: string;
       readonly task_id: string;
       readonly cache_key: string;
-      readonly agent_plugin: string;
-      readonly agent_name: string;
       readonly output_json: string;
       readonly metadata_json: string | null;
     }, []>(`
-      select rowid as row_id, workflow, task_id, cache_key, agent_plugin,
-             agent_name, output_json, metadata_json
+      select rowid as row_id, workflow, task_id, cache_key, output_json, metadata_json
       from workflow_task_records
     `).all();
     const deleteTaskCache = db.query("delete from workflow_task_records where rowid = ?");
@@ -1503,7 +1491,6 @@ const migrateWorkflowStoreToVersion5 = (db: WorkflowDatabase): void => {
             workflow: row.workflow,
             taskId: row.task_id,
             cacheKey: row.cache_key,
-            agent: { plugin: row.agent_plugin, name: row.agent_name },
           },
           JSON.parse(row.output_json) as unknown,
           row.metadata_json === null ? undefined : JSON.parse(row.metadata_json) as unknown,
@@ -1727,6 +1714,18 @@ const migrateWorkflowStoreToVersion5 = (db: WorkflowDatabase): void => {
   })();
 };
 
+const migrateWorkflowStoreToVersion6 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
+    const columns = db.query<{ readonly name: string }, []>(
+      "pragma table_info(workflow_task_attempts);",
+    ).all();
+    if (columns.some((column) => column.name === "native_agent")) {
+      db.exec("alter table workflow_task_attempts drop column native_agent;");
+    }
+    db.exec("pragma user_version = 6;");
+  })();
+};
+
 export class WorkflowStore {
   initialRetentionCleanup: WorkflowRetentionCleanupReport | null = null;
 
@@ -1808,6 +1807,9 @@ export class WorkflowStore {
       }
       if (schemaVersion <= 4) {
         migrateWorkflowStoreToVersion5(db);
+      }
+      if (schemaVersion <= 5) {
+        migrateWorkflowStoreToVersion6(db);
       }
     } catch (error) {
       db?.close();
@@ -2119,8 +2121,8 @@ export class WorkflowStore {
     const allowMockSourced = options.allowMockSourced === true;
     const key = workflowTaskResourceKey(identity);
     const row = this.db.query<TaskRecordRow, [string, string, string]>(`
-      select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-             agent_plugin, agent_name, status, output_json, metadata_json, output_source, created_at, updated_at
+      select workflow, task_id, cache_key, prompt_hash,
+             status, output_json, metadata_json, output_source, created_at, updated_at
       from workflow_task_records
       where scope_key = ?
         and stable_key = ?
@@ -2139,11 +2141,6 @@ export class WorkflowStore {
         taskId: row.task_id,
         cacheKey: row.cache_key,
         promptHash: row.prompt_hash,
-        agentManifestHash: row.agent_manifest_hash,
-      },
-      agent: {
-        plugin: row.agent_plugin,
-        name: row.agent_name,
       },
       output: JSON.parse(row.output_json) as unknown,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
@@ -2274,11 +2271,10 @@ export class WorkflowStore {
     readonly taskId?: string;
     readonly cacheKey?: string;
     readonly promptHash?: string;
-    readonly agentManifestHash?: string;
   } = {}): WorkflowCacheRecord[] {
     const rows = this.db.query<TaskRecordRow, []>(`
-      select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-             agent_plugin, agent_name, status, output_json, metadata_json, output_source, created_at, updated_at
+      select workflow, task_id, cache_key, prompt_hash,
+             status, output_json, metadata_json, output_source, created_at, updated_at
       from workflow_task_records
       where status = 'completed'
       order by updated_at desc, created_at desc, workflow asc, task_id asc
@@ -2288,18 +2284,12 @@ export class WorkflowStore {
       .filter((row) => options.taskId === undefined || row.task_id === options.taskId)
       .filter((row) => options.cacheKey === undefined || row.cache_key === options.cacheKey)
       .filter((row) => options.promptHash === undefined || row.prompt_hash === options.promptHash)
-      .filter((row) => options.agentManifestHash === undefined || row.agent_manifest_hash === options.agentManifestHash)
       .map((row) => ({
         identity: {
           workflow: row.workflow,
           taskId: row.task_id,
           cacheKey: row.cache_key,
           promptHash: row.prompt_hash,
-          agentManifestHash: row.agent_manifest_hash,
-        },
-        agent: {
-          plugin: row.agent_plugin,
-          name: row.agent_name,
         },
         status: row.status,
         output: JSON.parse(row.output_json) as unknown,
@@ -2519,8 +2509,8 @@ export class WorkflowStore {
       this.db.query(`
         insert into workflow_task_attempts (
           run_id, ordinal, attempt, task_id, status,
-          adapter, model, native_agent, session_id, metadata_json
-        ) values (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
+          adapter, model, session_id, metadata_json
+        ) values (?, ?, ?, ?, 'running', ?, ?, ?, ?)
       `).run(
         input.runId,
         input.ordinal,
@@ -2528,7 +2518,6 @@ export class WorkflowStore {
         input.taskId,
         metadata.adapter,
         metadata.model,
-        metadata.nativeAgent,
         metadata.sessionId,
         metadata.json,
       );
@@ -2571,20 +2560,18 @@ export class WorkflowStore {
             finished_at = datetime('now'),
             adapter = coalesce(?, adapter),
             model = coalesce(?, model),
-            native_agent = coalesce(?, native_agent),
             session_id = coalesce(?, session_id),
             failure_kind = ?,
             failure_message = ?,
             metadata_json = case when ? = 1 then ? else metadata_json end
         where run_id = ? and ordinal = ? and attempt = ? and status = 'running'
         returning run_id, ordinal, attempt, task_id, status, started_at, finished_at,
-                  adapter, model, native_agent, session_id, failure_kind,
+                  adapter, model, session_id, failure_kind,
                   failure_message, metadata_json, usage_json
       `).get(
         input.status,
         metadata.adapter,
         metadata.model,
-        metadata.nativeAgent,
         metadata.sessionId,
         input.failure?.kind ?? null,
         input.failure === undefined ? null : redactWorkflowText(input.failure.message),
@@ -2631,7 +2618,7 @@ export class WorkflowStore {
     this.failDeadPidRuns();
     const rows = this.db.query<TaskAttemptRow, [string]>(`
       select run_id, ordinal, attempt, task_id, status, started_at, finished_at,
-             adapter, model, native_agent, session_id, failure_kind,
+             adapter, model, session_id, failure_kind,
              failure_message, metadata_json, usage_json
       from workflow_task_attempts
       where run_id = ?
@@ -2647,7 +2634,6 @@ export class WorkflowStore {
       finishedAt: row.finished_at,
       ...(row.adapter !== null ? { adapter: row.adapter } : {}),
       ...(row.model !== null ? { model: row.model } : {}),
-      ...(row.native_agent !== null ? { nativeAgent: row.native_agent } : {}),
       ...(row.session_id !== null ? { sessionId: row.session_id } : {}),
       ...(row.failure_kind !== null && row.failure_message !== null
         ? { failure: { kind: row.failure_kind, message: row.failure_message } }
@@ -2691,7 +2677,7 @@ export class WorkflowStore {
           failure_message = ?
       where run_id = ? and status = 'running'
       returning run_id, ordinal, attempt, task_id, status, started_at, finished_at,
-                adapter, model, native_agent, session_id, failure_kind,
+                adapter, model, session_id, failure_kind,
                 failure_message, metadata_json, usage_json
     `).all(
       attemptTerminal.status,
@@ -3255,7 +3241,6 @@ export class WorkflowStore {
         repairCount: patch.repairCount ?? repairCountMetadata(metadata) ?? existing?.repairCount ?? 0,
         workerAdapter: stringMetadata(metadata, "adapter") ?? patch.workerAdapter ?? existing?.workerAdapter ?? null,
         model: stringMetadata(metadata, "model") ?? patch.model ?? existing?.model ?? null,
-        nativeAgent: stringMetadata(metadata, "nativeAgent") ?? patch.nativeAgent ?? existing?.nativeAgent ?? null,
         repairMode: repairModeMetadata(metadata) ?? patch.repairMode ?? existing?.repairMode ?? null,
         externalSessionPointer: externalSessionPointer(metadata) ?? patch.externalSessionPointer ?? existing?.externalSessionPointer ?? null,
         durationMs,
@@ -3398,7 +3383,6 @@ export class WorkflowStore {
         repairCount: Math.max(0, attempts.length - 1),
         workerAdapter: latest.adapter ?? null,
         model: latest.model ?? null,
-        nativeAgent: latest.nativeAgent ?? null,
         externalSessionPointer: latest.sessionId ?? null,
         metadata: latest.metadata,
         repairMode: repairModeMetadata(latest.metadata),

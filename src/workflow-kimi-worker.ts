@@ -115,7 +115,7 @@ const assertKimiPermission = (mode: WorkflowPermissionMode): void => {
 export const buildKimiArgs = (input: {
   readonly model?: string;
   readonly prompt: string;
-  readonly skillsDir: string;
+  readonly skillsDir?: string;
   readonly sessionId?: string;
   readonly permission?: WorkflowPermissionMode;
 }): ReadonlyArray<string> => {
@@ -131,8 +131,7 @@ export const buildKimiArgs = (input: {
     "stream-json",
     "--prompt",
     input.prompt,
-    "--skills-dir",
-    input.skillsDir,
+    ...(input.skillsDir !== undefined ? ["--skills-dir", input.skillsDir] : []),
   ];
 };
 
@@ -141,17 +140,23 @@ export const runKimiWorkflowTask = async (
   options: KimiWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_KIMI_BIN ?? "kimi";
-  const roleSkill = generatedRoleSkillName(task.agent.name);
+  const roleSkill = task.agent === undefined ? undefined : generatedRoleSkillName(task.agent.name);
   const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
-  const prompt = options.repair !== undefined
-    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
-    : `You are assigned the ${roleSkill} Prism role. ${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const basePrompt =
+    options.repair !== undefined
+      ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+      : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const prompt = roleSkill === undefined
+    ? basePrompt
+    : `You are assigned the ${roleSkill} Prism role. ${basePrompt}`;
   const kimiHome = options.kimiHome ?? defaultKimiCodeHome();
 
   const args = buildKimiArgs({
     model: options.model,
     prompt,
-    skillsDir: join(kimiHome, "plugins", "managed", generatedKimiPluginId(task.agent.plugin), "skills"),
+    ...(task.agent !== undefined
+      ? { skillsDir: join(kimiHome, "plugins", "managed", generatedKimiPluginId(task.agent.plugin), "skills") }
+      : {}),
     sessionId,
     permission: options.resolvedPermission,
   });
@@ -208,11 +213,15 @@ export const runKimiWorkflowTask = async (
       prompted: true,
       agentSelection: "prompted-contract",
       source: "prism-workflow",
-      agent: {
-        plugin: task.agent.plugin,
-        name: task.agent.name,
-        manifestHash: task.agent.manifestHash,
-      },
+      ...(task.agent !== undefined
+        ? {
+          agent: {
+            plugin: task.agent.plugin,
+            name: task.agent.name,
+            manifestHash: task.agent.manifestHash,
+          },
+        }
+        : {}),
       model: options.model,
       durationMs,
       sessionId: kimiSessionIdFromStream(stdout) ?? sessionId,

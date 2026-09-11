@@ -63,7 +63,7 @@ export type WorkflowRunTaskResultStatus = "completed" | "failed" | "escalated";
 
 export interface WorkflowRunTaskResult {
   readonly id: string;
-  readonly agent: {
+  readonly agent?: {
     readonly plugin: string;
     readonly name: string;
   };
@@ -240,10 +240,8 @@ interface RunCancellationBarrier {
 const isWorkflowTaskExecution = (value: unknown): value is WorkflowTaskExecution =>
   typeof value === "object" && value !== null && "output" in value;
 
-const taskAgent = (task: AnyWorkflowTask) => ({
-  plugin: task.agent.plugin,
-  name: task.agent.name,
-});
+const taskAgent = (task: AnyWorkflowTask): { readonly plugin: string; readonly name: string } | undefined =>
+  task.agent === undefined ? undefined : { plugin: task.agent.plugin, name: task.agent.name };
 
 const workflowContractMetadata = {
   contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
@@ -375,7 +373,7 @@ const judgeCriterionDefinition = (criterion: WorkflowJudgeFinishCriterion<unknow
 
 const taskJudgeMetadata = (task: AnyWorkflowTask): WorkflowJudgeTaskMetadata => ({
   id: task.id,
-  agent: taskAgent(task),
+  ...(task.agent !== undefined ? { agent: taskAgent(task)! } : {}),
   ...(task.cacheKey !== undefined ? { cacheKey: task.cacheKey } : {}),
   ...(task.worker !== undefined ? { worker: task.worker } : {}),
 });
@@ -825,7 +823,7 @@ const recordRunTaskIfPersisted = (input: {
   readonly runId: string | null;
   readonly ordinal: number;
   readonly identity: WorkflowTaskIdentity;
-  readonly agent: { readonly plugin: string; readonly name: string };
+  readonly agent?: { readonly plugin: string; readonly name: string };
   readonly status: "completed" | "failed" | "escalated";
   readonly cached: boolean;
   readonly output: unknown;
@@ -1032,8 +1030,9 @@ const executeWorkflowTask = async (input: {
     attributes: {
       "task.id": task.id,
       "task.ordinal": ordinal,
-      "agent.plugin": task.agent.plugin,
-      "agent.name": task.agent.name,
+      ...(task.agent !== undefined
+        ? { "agent.plugin": task.agent.plugin, "agent.name": task.agent.name }
+        : {}),
       "task.cache_key": identity.cacheKey,
     },
   });
@@ -1087,7 +1086,7 @@ const executeWorkflowTask = async (input: {
         ...(pendingRepair?.mode === "native-continuation" ? pendingRepair.previousMetadata : {}),
         ...(task.worker?.worker !== undefined ? { adapter: task.worker.worker } : {}),
         ...(typeof task.worker?.model === "string" ? { model: task.worker.model } : {}),
-        nativeAgent: task.agent.name,
+        ...(task.agent !== undefined ? { nativeAgent: task.agent.name } : {}),
       }), pendingRepair);
     };
     let activeAttempt: number | undefined;

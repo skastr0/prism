@@ -19,6 +19,8 @@ import {
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
   defineTask,
   defineWorkflow,
+  resolveWorkflowTaskModel,
+  resolveWorkflowTaskModelResolution,
   type AnyWorkflowTask,
   type PhaseContract,
   type WorkflowAgentRef,
@@ -2090,19 +2092,17 @@ console.log(JSON.stringify(result));
 
     const exploreContract = {
       name: "explore",
-      orbit: "delivery",
+      sop: "delivery",
       plugin: "core",
-      agents: { explorer },
       output: Exploration,
       criteria: ["Surface at least one option", "Name the core assumption"],
-    } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+    } as const satisfies PhaseContract<"explore", undefined, typeof Exploration>;
 
     const judgeGoals: string[] = [];
     const workflow = defineWorkflow({
       name: "runner-phase-criteria",
       run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
         id: "scope",
-        agent: ctx.agents.explorer,
         prompt: "Explore.",
         finish: {
           criteria: [{
@@ -2148,18 +2148,16 @@ console.log(JSON.stringify(result));
 
     const exploreContract = {
       name: "explore",
-      orbit: "delivery",
+      sop: "delivery",
       plugin: "core",
-      agents: { explorer },
       output: Exploration,
       criteria: ["Surface at least one option", "Name the core assumption"],
-    } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+    } as const satisfies PhaseContract<"explore", undefined, typeof Exploration>;
 
     const workflow = defineWorkflow({
       name: "runner-phase-criteria-fail",
       run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
         id: "scope",
-        agent: ctx.agents.explorer,
         prompt: "Explore.",
       })),
     });
@@ -2185,18 +2183,16 @@ console.log(JSON.stringify(result));
 
     const exploreContract = {
       name: "explore",
-      orbit: "delivery",
+      sop: "delivery",
       plugin: "core",
-      agents: { explorer },
       output: Exploration,
       criteria: ["Surface at least one option"],
-    } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+    } as const satisfies PhaseContract<"explore", undefined, typeof Exploration>;
 
     const workflow = defineWorkflow({
       name: "runner-phase-inherit-false",
       run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
         id: "scope",
-        agent: ctx.agents.explorer,
         prompt: "Explore.",
         finish: { inherit: false },
       })),
@@ -2699,5 +2695,79 @@ console.log(JSON.stringify(result));
     // environment's ICU locale data — proof the fix is not a no-op.
     const localeOrder = [...keys].sort((left, right) => left.localeCompare(right));
     expect(localeOrder).not.toEqual(manualCodePointOrder);
+  });
+});
+
+describe("agent-less workflow tasks", () => {
+  test("runs a bare worker task and records no agent identity", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-agentless-"));
+    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+    try {
+      const task = defineTask({
+        id: "bare",
+        prompt: "Do the work.",
+        output: PatchReport,
+        worker: { worker: "claude-code", model: "claude-opus-4-8" },
+      });
+      const workflow = defineWorkflow({ name: "agentless", tasks: [task] as const });
+      const result = await runWorkflow(workflow, {
+        store,
+        executeTask: async () => ({ summary: "bare output", filesChanged: [] }),
+      });
+
+      expect(result.tasks[0]?.output).toEqual({ summary: "bare output" });
+      expect(result.tasks[0]?.agent).toBeUndefined();
+
+      const attempts = store.listRunTaskAttempts(result.runId!);
+      expect(attempts).toHaveLength(1);
+      // The store column is NULL for an agent-less attempt; the record
+      // projection omits the key, so read it as null.
+      expect(attempts[0]?.nativeAgent ?? null).toBeNull();
+
+      const persisted = store.listRunTasks(result.runId!)[0];
+      expect(persisted?.agent).toBeUndefined();
+
+      const snapshots = store.listRunTaskSnapshots(result.runId!);
+      expect(snapshots[0]?.agent).toBeUndefined();
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves an agent-less task model from worker.model and cli fallback", () => {
+    const bare = defineTask({
+      id: "bare",
+      prompt: "Do the work.",
+      output: PatchReport,
+      worker: { worker: "claude-code", model: "claude-opus-4-8" },
+    });
+    expect(resolveWorkflowTaskModel(bare)).toBe("claude-opus-4-8");
+    expect(resolveWorkflowTaskModelResolution(bare)).toEqual({
+      model: "claude-opus-4-8",
+      source: "task",
+    });
+
+    const bareNoModel = defineTask({
+      id: "bare-no-model",
+      prompt: "Do the work.",
+      output: PatchReport,
+      worker: { worker: "claude-code" },
+    });
+    expect(resolveWorkflowTaskModel(bareNoModel)).toBeUndefined();
+    expect(resolveWorkflowTaskModel(bareNoModel, { fallbackModel: "sonnet" })).toBe("sonnet");
+
+    const bareResolver = defineTask({
+      id: "bare-resolver",
+      prompt: "Do the work.",
+      output: PatchReport,
+      worker: {
+        worker: "claude-code",
+        modelResolver: () => "picked",
+      },
+    });
+    expect(() => resolveWorkflowTaskModel(bareResolver)).toThrow(
+      /modelResolver but no agent/,
+    );
   });
 });

@@ -73,11 +73,16 @@ interface RawOrbit {
 }
 interface RawSopPhase {
   readonly name: string;
-  readonly purpose: string;
+  readonly sop?: string;
+  readonly plugin?: string;
   readonly input?: unknown;
   readonly output?: unknown;
-  readonly acceptanceCriteria: ReadonlyArray<string>;
-  readonly escalation?: string;
+  readonly criteria?: ReadonlyArray<string>;
+  readonly framing?: {
+    readonly purpose?: string;
+    readonly when?: string;
+    readonly escalation?: string;
+  };
 }
 interface RawSop {
   readonly plugin: string;
@@ -141,6 +146,7 @@ export interface CatalogSopPhaseDetail {
   readonly acceptanceCriteriaCount: number;
   readonly hasInputContract: boolean;
   readonly hasOutputContract: boolean;
+  readonly when?: string;
   readonly escalation?: string;
   readonly acceptanceCriteria: ReadonlyArray<string>;
 }
@@ -284,17 +290,22 @@ const projectSopPhaseDetail = (
   sopKey: string,
   phaseKey: string,
   phase: RawSopPhase,
-): CatalogSopPhaseDetail => ({
-  ref: `sops.${namespace}.${sopKey}.phases.${phaseKey}`,
-  key: phaseKey,
-  name: phase.name,
-  purpose: phase.purpose,
-  acceptanceCriteriaCount: phase.acceptanceCriteria.length,
-  hasInputContract: phase.input !== undefined,
-  hasOutputContract: phase.output !== undefined,
-  ...(phase.escalation !== undefined ? { escalation: phase.escalation } : {}),
-  acceptanceCriteria: [...phase.acceptanceCriteria],
-});
+): CatalogSopPhaseDetail => {
+  const criteria = phase.criteria ?? [];
+  const framing = phase.framing ?? {};
+  return {
+    ref: `sops.${namespace}.${sopKey}.phases.${phaseKey}`,
+    key: phaseKey,
+    name: phase.name,
+    purpose: framing.purpose ?? "",
+    acceptanceCriteriaCount: criteria.length,
+    hasInputContract: phase.input !== undefined,
+    hasOutputContract: phase.output !== undefined,
+    ...(framing.when !== undefined ? { when: framing.when } : {}),
+    ...(framing.escalation !== undefined ? { escalation: framing.escalation } : {}),
+    acceptanceCriteria: [...criteria],
+  };
+};
 
 const projectSopDetails = (
   sops: RawGroup<RawSop>,
@@ -841,36 +852,36 @@ export const pickDefaultAgentRef = (catalog: WorkflowCatalog): string =>
   pickDefaultAgent(catalog)?.ref ?? "agents.forge.explorer";
 
 /**
- * Pick 1-2 workers for the scaffold's example tasks, restricted to harnesses
- * the chosen agent is actually compiled for (`agent.installs`) that also have
- * a Prism workflow-worker module (`catalog.workers`) — never a harness the
- * generated workflow can't run against out of the box (PQ-176 footgun #2).
- * Two workers reproduce the illustrative cross-harness fan-out; one worker
- * degrades to a single task when the agent is installed on only one workflow
- * harness. Falls back to "claude-code" alone when the agent has no recorded
- * installs (e.g. an empty/minimal catalog) since it's the most commonly
- * available workflow worker.
+ * Pick 1-2 workers for the scaffold's example tasks from the catalog's
+ * workflow-worker set — never a harness the generated workflow can't run
+ * against out of the box (PQ-176 footgun #2). Agent installs are no longer
+ * consulted: tasks are agent-optional, so the workers are the dispatch
+ * surface. Two workers reproduce the illustrative cross-harness fan-out; a
+ * one-worker catalog degrades to a single task. Falls back to "claude-code"
+ * alone when the catalog lists no workers (e.g. an empty/minimal catalog)
+ * since it's the most commonly available workflow worker.
  */
 export const pickDefaultWorkers = (
   catalog: WorkflowCatalog,
-  agent: CatalogAgent | undefined,
 ): readonly [string] | readonly [string, string] => {
-  const workerSet = new Set(catalog.workers);
-  const runnable = (agent?.installs ?? []).filter((harness) => workerSet.has(harness));
-  if (runnable.length === 0) return ["claude-code"];
-  // Prefer claude-code first when it's installed — the most broadly
+  if (catalog.workers.length === 0) return ["claude-code"];
+  // Prefer claude-code first when it's available — the most broadly
   // authenticated default harness — so fan-out order reads predictably
-  // instead of drifting with the (alphabetical) installs list.
-  const ordered = runnable.includes("claude-code")
-    ? ["claude-code", ...runnable.filter((harness) => harness !== "claude-code")]
-    : runnable;
+  // instead of drifting with the (alphabetical) workers list.
+  const ordered = catalog.workers.includes("claude-code")
+    ? ["claude-code", ...catalog.workers.filter((harness) => harness !== "claude-code")]
+    : [...catalog.workers];
   return ordered.length >= 2 ? [ordered[0]!, ordered[1]!] : [ordered[0]!];
 };
 
-/** A complete, validating starter workflow source that uses a real discovered agent ref and installed workers. */
+/**
+ * A complete, validating starter workflow source. Tasks are agent-less by
+ * default (a bare worker + prompt + model); when an `agentRef` is supplied the
+ * scaffold keeps the agent-bound form.
+ */
 export const scaffoldWorkflowSource = (
   name: string,
-  agentRef: string,
+  agentRef: string | undefined,
   workers: readonly [string] | readonly [string, string],
 ): string => {
   const header = `/**
@@ -882,12 +893,11 @@ export const scaffoldWorkflowSource = (
  *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
  *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts --max-concurrent-tasks 2
  *
- * Discover other agents/orbits/models with: prism workflow catalog
+ * Discover agents, SOP phases, and model profiles with: prism workflow catalog
  */
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
-import { agents } from "prism/refs";
-
+${agentRef !== undefined ? `import { agents } from "prism/refs";\n` : ""}
 const Result = Schema.Struct({
   worker: Schema.String,
   summary: Schema.String,
@@ -898,8 +908,7 @@ const Result = Schema.Struct({
   const probe = `const probe = (id: string, worker: ${workerUnion}) =>
   defineTask({
     id,
-    agent: ${agentRef},
-    prompt: \`Run under the \${worker} harness and return a one-line summary in "summary". Set worker="\${worker}".\`,
+${agentRef !== undefined ? `    agent: ${agentRef},\n` : ""}    prompt: \`Run under the \${worker} harness and return a one-line summary in "summary". Set worker="\${worker}".\`,
     output: Result,
     cacheKey: \`${name}-\${worker}-v1\`,
     worker: { worker },

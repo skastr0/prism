@@ -173,7 +173,9 @@ export const runDevinWorkflowTask = async (
   const basePrompt =
     options.repair !== undefined
       ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
-      : `You are executing a Prism workflow task (agent ${task.agent.plugin}/${task.agent.name}). ${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+      : task.agent !== undefined
+        ? `You are executing a Prism workflow task (agent ${task.agent.plugin}/${task.agent.name}). ${task.prompt}${workflowWorkerJsonInstruction(task)}`
+        : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
 
 
   const workDir = await mkdtemp(join(tmpdir(), "prism-devin-workflow-"));
@@ -186,7 +188,9 @@ export const runDevinWorkflowTask = async (
     await writeFile(
       agentConfigPath,
       buildAgentConfigYaml([
-        `Prism workflow agent: ${task.agent.plugin}/${task.agent.name}.`,
+        ...(task.agent !== undefined
+          ? [`Prism workflow agent: ${task.agent.plugin}/${task.agent.name}.`]
+          : []),
         "Follow the task prompt exactly. Prefer structured JSON when instructed.",
       ]),
       "utf8",
@@ -282,11 +286,15 @@ export const runDevinWorkflowTask = async (
         prompted: true,
         agentSelection: "prompted-contract",
         source: "prism-workflow",
-        agent: {
-          plugin: task.agent.plugin,
-          name: task.agent.name,
-          manifestHash: task.agent.manifestHash,
-        },
+        ...(task.agent !== undefined
+          ? {
+            agent: {
+              plugin: task.agent.plugin,
+              name: task.agent.name,
+              manifestHash: task.agent.manifestHash,
+            },
+          }
+          : {}),
         model: options.model,
         durationMs,
         sessionId: capturedSessionId,

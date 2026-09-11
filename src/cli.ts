@@ -454,8 +454,8 @@ workflow
         return;
       }
       const agent = pickDefaultAgent(result.catalog);
-      const agentRef = agent?.ref ?? "agents.forge.explorer";
-      const workers = pickDefaultWorkers(result.catalog, agent);
+      const agentRef = agent?.ref;
+      const workers = pickDefaultWorkers(result.catalog);
       const source = scaffoldWorkflowSource(name, agentRef, workers);
       if (options.print === true) {
         await writeStdout(source);
@@ -465,7 +465,7 @@ workflow
       await ensureDir(dirname(outPath));
       await writeFile(outPath, source, "utf8");
       await writeStdout(
-        `Wrote ${outPath} (agent: ${agentRef}; workers: ${workers.join(", ")}).\nNext: prism workflow validate ${outPath}\n`,
+        `Wrote ${outPath} (agent: ${agentRef ?? "(none)"}; workers: ${workers.join(", ")}).\nNext: prism workflow validate ${outPath}\n`,
       );
     } catch (error) {
       printCliError(error, "Workflow scaffold failed");

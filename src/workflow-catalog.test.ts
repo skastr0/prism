@@ -79,15 +79,22 @@ const fixture: GeneratedSurface = {
         phases: {
           explore: {
             name: "explore",
-            purpose: "Map the space before committing.",
-            acceptanceCriteria: ["Hypothesis is falsifiable"],
-            escalation: "Ask a human when the audience is unclear",
+            sop: "beacon",
+            plugin: "forge",
+            criteria: ["Hypothesis is falsifiable"],
+            framing: {
+              purpose: "Map the space before committing.",
+              escalation: "Ask a human when the audience is unclear",
+            },
             input: { type: "object", properties: { brief: { type: "string" } } },
           },
           build: {
             name: "build",
-            purpose: "Build the thing the phase contract describes.",
-            acceptanceCriteria: [],
+            sop: "beacon",
+            plugin: "forge",
+            framing: {
+              purpose: "Build the thing the phase contract describes.",
+            },
           },
         },
       },
@@ -250,39 +257,33 @@ const catalogWithInstalls = (installs: ReadonlyArray<string>, workers: ReadonlyA
 });
 
 describe("pickDefaultWorkers", () => {
-  test("picks two workers when the agent is installed on 2+ workflow-worker harnesses", () => {
+  test("picks the first two catalog workers, claude-code first when present", () => {
     const catalog = catalogWithInstalls(["claude-code", "grok", "cursor"], ["claude-code", "grok", "codex-cli"]);
-    const agent = pickDefaultAgent(catalog);
-    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "grok"]);
+    expect(pickDefaultWorkers(catalog)).toEqual(["claude-code", "grok"]);
   });
 
-  test("degrades to one worker when only one install is a workflow-worker harness (PQ-176 footgun #2)", () => {
-    // cursor is a real harness but has no workflow-worker module — it must
-    // never be picked, and the agent isn't installed on any other worker.
-    const catalog = catalogWithInstalls(["claude-code", "cursor"], ["claude-code", "grok", "codex-cli"]);
-    const agent = pickDefaultAgent(catalog);
-    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code"]);
+  test("degrades to one worker when the catalog lists one worker module", () => {
+    const catalog = catalogWithInstalls(["claude-code", "cursor"], ["claude-code"]);
+    expect(pickDefaultWorkers(catalog)).toEqual(["claude-code"]);
   });
 
-  test("never picks a worker the agent has no install for", () => {
+  test("never picks a harness with no workflow-worker module", () => {
     const catalog = catalogWithInstalls(["claude-code"], ["claude-code", "grok", "codex-cli"]);
-    const agent = pickDefaultAgent(catalog);
-    const workers = pickDefaultWorkers(catalog, agent);
-    expect(workers).toEqual(["claude-code"]);
-    expect(workers).not.toContain("grok");
+    const workers = pickDefaultWorkers(catalog);
+    expect(workers).toEqual(["claude-code", "grok"]);
+    expect(workers).not.toContain("cursor");
   });
 
-  test("falls back to claude-code when the agent has no recorded installs", () => {
-    expect(pickDefaultWorkers(catalogWithInstalls([], ["grok"]), undefined)).toEqual(["claude-code"]);
+  test("falls back to claude-code when the catalog lists no workers", () => {
+    expect(pickDefaultWorkers(catalogWithInstalls([], []))).toEqual(["claude-code"]);
   });
 
-  test("prefers claude-code first even when it sorts later in installs", () => {
+  test("prefers claude-code first even when it sorts later in the worker list", () => {
     const catalog = catalogWithInstalls(
       ["amp-code", "claude-code", "codex-cli"],
       ["amp-code", "claude-code", "codex-cli"],
     );
-    const agent = pickDefaultAgent(catalog);
-    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "amp-code"]);
+    expect(pickDefaultWorkers(catalog)).toEqual(["claude-code", "amp-code"]);
   });
 });
 
@@ -292,6 +293,13 @@ describe("scaffoldWorkflowSource", () => {
     expect(src).toContain(`name: "my-flow"`);
     expect(src).toContain("agent: agents.forge.explorer,");
     expect(src).toContain('from "prism/refs"');
+  });
+
+  test("agent-less scaffold omits the agent and the refs import", () => {
+    const agentLess = scaffoldWorkflowSource("bare-flow", undefined, ["claude-code"]);
+    expect(agentLess).not.toContain("agent:");
+    expect(agentLess).not.toContain('from "prism/refs"');
+    expect(agentLess).toContain('probe("a", "claude-code")');
   });
 
   test("never instructs git add — workflows live outside the project repo", () => {

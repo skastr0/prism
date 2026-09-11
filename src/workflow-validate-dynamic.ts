@@ -5,80 +5,54 @@ import {
   phase,
   type AnyWorkflowTask,
   type DynamicWorkflowDefinition,
-  type WorkflowAgentRef,
   type WorkflowRuntime,
   type WorkflowTaskOutput,
 } from "./workflows.js";
 
-export interface WorkflowPhaseAgentFinding {
+export interface WorkflowPhaseFinding {
   readonly taskId: string | null;
   readonly phase: string;
-  readonly agent: { readonly plugin: string; readonly name: string };
-  readonly allowedAgents: ReadonlyArray<{ readonly plugin: string; readonly name: string }>;
   readonly message: string;
 }
-
 
 export interface PhaseStampedTaskBinding {
   readonly taskId: string | null;
   readonly phase: string;
-  readonly agent: { readonly plugin: string; readonly name: string };
 }
 
-interface RawOrbitAgent {
+interface RawSopPhase {
+  readonly name: string;
+  readonly sop: string;
+}
+
+interface RawTypedSop {
   readonly plugin: string;
   readonly name: string;
+  readonly phases?: Readonly<Record<string, RawSopPhase>>;
 }
 
-interface RawOrbitPhase {
-  readonly name: string;
-  readonly orbit: string;
-  readonly agents: Readonly<Record<string, RawOrbitAgent>>;
-}
-
-interface RawTypedOrbit {
-  readonly plugin: string;
-  readonly name: string;
-  readonly phases?: Readonly<Record<string, RawOrbitPhase>>;
-}
-
-const phaseAgentKey = (agent: { readonly plugin: string; readonly name: string }): string =>
-  `${agent.plugin}:${agent.name}`;
-
-const allowedAgentsFromSet = (allowed: ReadonlySet<string>): ReadonlyArray<{ readonly plugin: string; readonly name: string }> =>
-  [...allowed].map((entry) => {
-    const [plugin, name] = entry.split(":");
-    return { plugin: plugin!, name: name! };
-  });
-
-/** Build orbit:phase -> allowed agent identities from the compiled generated surface. */
-export const phaseAgentAllowlistFromSurface = (
+/**
+ * Build the set of `sop:phase` tags present in the compiled generated surface.
+ * Stamped tasks resolve against this set; executor assignment is not part of
+ * the SOP graph (tasks are agent-optional).
+ */
+export const sopPhaseTagsFromSurface = (
   surface: GeneratedSurface | null,
-): ReadonlyMap<string, ReadonlySet<string>> => {
-  const allowlist = new Map<string, Set<string>>();
-  if (surface === null) return allowlist;
+): ReadonlySet<string> => {
+  const tags = new Set<string>();
+  if (surface === null) return tags;
 
-  for (const group of Object.values(surface.orbits)) {
-    for (const orbit of Object.values(group ?? {})) {
-      const typed = orbit as RawTypedOrbit;
+  for (const group of Object.values(surface.sops)) {
+    for (const sop of Object.values(group ?? {})) {
+      const typed = sop as RawTypedSop;
       if (typed.phases === undefined) continue;
       for (const phaseEntry of Object.values(typed.phases)) {
-        const phaseTag = `${phaseEntry.orbit}:${phaseEntry.name}`;
-        const allowed = allowlist.get(phaseTag) ?? new Set<string>();
-        for (const agent of Object.values(phaseEntry.agents)) {
-          allowed.add(phaseAgentKey(agent));
-        }
-        allowlist.set(phaseTag, allowed);
+        tags.add(`${typed.name}:${phaseEntry.name}`);
       }
     }
   }
-  return allowlist;
+  return tags;
 };
-
-const bindingAgent = (agent: WorkflowAgentRef): { readonly plugin: string; readonly name: string } => ({
-  plugin: agent.plugin,
-  name: agent.name,
-});
 
 /** Collect phase-stamped tasks from a statically declared workflow task list. */
 export const phaseStampedBindingsFromTasks = (
@@ -87,17 +61,13 @@ export const phaseStampedBindingsFromTasks = (
   tasks.flatMap((task) =>
     task.phase === undefined
       ? []
-      : [{
-        taskId: task.id,
-        phase: task.phase,
-        agent: bindingAgent(task.agent),
-      }],
+      : [{ taskId: task.id, phase: task.phase }],
   );
 
 /**
  * Execute a dynamic workflow against a probe runtime that records dispatched
  * tasks without running harness workers. Uses the real `wf.phase` / `runTask`
- * DSL path so stamped phases and agents come from the loaded workflow graph.
+ * DSL path so stamped phases come from the loaded workflow graph.
  */
 export const probeDynamicWorkflowPhaseTasks = async (
   workflow: DynamicWorkflowDefinition<string>,
@@ -109,11 +79,7 @@ export const probeDynamicWorkflowPhaseTasks = async (
     ): Effect.Effect<WorkflowTaskOutput<Task>, WorkflowRuntimeError> =>
       Effect.sync(() => {
         if (task.phase !== undefined) {
-          captured.push({
-            taskId: task.id,
-            phase: task.phase,
-            agent: bindingAgent(task.agent),
-          });
+          captured.push({ taskId: task.id, phase: task.phase });
         }
         return {} as WorkflowTaskOutput<Task>;
       }),
@@ -125,59 +91,30 @@ export const probeDynamicWorkflowPhaseTasks = async (
 
 const findingForBinding = (
   binding: PhaseStampedTaskBinding,
-  allowlist: ReadonlyMap<string, ReadonlySet<string>>,
+  phaseTags: ReadonlySet<string>,
   hasTypedPhases: boolean,
-): WorkflowPhaseAgentFinding | null => {
+): WorkflowPhaseFinding | null => {
   if (!hasTypedPhases) return null;
 
-  const allowed = allowlist.get(binding.phase);
+  if (phaseTags.has(binding.phase)) return null;
+
   const taskLabel = binding.taskId ?? "<unknown>";
-
-  if (allowed === undefined) {
-    return {
-      taskId: binding.taskId,
-      phase: binding.phase,
-      agent: binding.agent,
-      allowedAgents: [],
-      message:
-        `task '${taskLabel}' is stamped phase '${binding.phase}' but that phase is not ` +
-        "present in the compiled workflow surface (run `prism refresh` for this project)",
-    };
-  }
-
-  if (allowed.size === 0) {
-    return {
-      taskId: binding.taskId,
-      phase: binding.phase,
-      agent: binding.agent,
-      allowedAgents: [],
-      message:
-        `task '${taskLabel}' is stamped phase '${binding.phase}' but the compiled manifest ` +
-        "assigns no agents to that phase",
-    };
-  }
-
-  const agentKey = phaseAgentKey(binding.agent);
-  if (allowed.has(agentKey)) return null;
-
-  const allowedAgents = allowedAgentsFromSet(allowed);
   return {
     taskId: binding.taskId,
     phase: binding.phase,
-    agent: binding.agent,
-    allowedAgents,
     message:
-      `task '${taskLabel}' is stamped phase '${binding.phase}' but agent ` +
-      `'${binding.agent.plugin}:${binding.agent.name}' is not assigned to that phase ` +
-      `(allowed: ${allowedAgents.map((a) => `${a.plugin}:${a.name}`).join(", ")})`,
+      `task '${taskLabel}' is stamped phase '${binding.phase}' but that phase is not ` +
+      "present in the compiled SOP surface (run `prism refresh` for this project)",
   };
 };
 
-const dedupeBindings = (bindings: ReadonlyArray<PhaseStampedTaskBinding>): ReadonlyArray<PhaseStampedTaskBinding> => {
+const dedupeBindings = (
+  bindings: ReadonlyArray<PhaseStampedTaskBinding>,
+): ReadonlyArray<PhaseStampedTaskBinding> => {
   const seen = new Set<string>();
   const unique: PhaseStampedTaskBinding[] = [];
   for (const binding of bindings) {
-    const dedupeKey = `${binding.taskId ?? ""}|${binding.phase}|${phaseAgentKey(binding.agent)}`;
+    const dedupeKey = `${binding.taskId ?? ""}|${binding.phase}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     unique.push(binding);
@@ -185,25 +122,19 @@ const dedupeBindings = (bindings: ReadonlyArray<PhaseStampedTaskBinding>): Reado
   return unique;
 };
 
-/** Fail-closed validation for phase-stamped tasks against the compiled allowlist. */
-export const validatePhaseAgentBindings = (
+/** Fail-closed validation for phase-stamped tasks against the compiled SOP surface. */
+export const validatePhaseBindings = (
   bindings: ReadonlyArray<PhaseStampedTaskBinding>,
   surface: GeneratedSurface | null,
-): ReadonlyArray<WorkflowPhaseAgentFinding> => {
-  const allowlist = phaseAgentAllowlistFromSurface(surface);
-  const hasTypedPhases = allowlist.size > 0;
-  const findings: WorkflowPhaseAgentFinding[] = [];
+): ReadonlyArray<WorkflowPhaseFinding> => {
+  const phaseTags = sopPhaseTagsFromSurface(surface);
+  const hasTypedPhases = phaseTags.size > 0;
+  const findings: WorkflowPhaseFinding[] = [];
   for (const binding of dedupeBindings(bindings)) {
-    const finding = findingForBinding(binding, allowlist, hasTypedPhases);
+    const finding = findingForBinding(binding, phaseTags, hasTypedPhases);
     if (finding) findings.push(finding);
   }
   return findings;
-};
-
-const parseAgentsDotRef = (value: string): { readonly plugin: string; readonly name: string } | null => {
-  const match = /^agents\.([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$/u.exec(value.trim());
-  if (!match) return null;
-  return { plugin: match[1]!, name: match[2]! };
 };
 
 const parsePhaseTag = (value: string): string | null => {
@@ -211,27 +142,30 @@ const parsePhaseTag = (value: string): string | null => {
   return trimmed.includes(":") && trimmed.length > 0 ? trimmed : null;
 };
 
-const orbitVarBindings = (source: string): ReadonlyMap<string, { readonly namespace: string; readonly orbitKey: string }> => {
-  const bindings = new Map<string, { readonly namespace: string; readonly orbitKey: string }>();
-  const bindingPattern = /const\s+(\w+)\s*=\s*orbits\.(\w+)\.(\w+)\s*;/gu;
+const sopVarBindings = (source: string): ReadonlyMap<string, { readonly namespace: string; readonly sopKey: string }> => {
+  const bindings = new Map<string, { readonly namespace: string; readonly sopKey: string }>();
+  const bindingPattern = /const\s+(\w+)\s*=\s*sops\.(\w+)\.(\w+)\s*;/gu;
   for (const match of source.matchAll(bindingPattern)) {
-    bindings.set(match[1]!, { namespace: match[2]!, orbitKey: match[3]! });
+    bindings.set(match[1]!, { namespace: match[2]!, sopKey: match[3]! });
   }
   return bindings;
 };
 
-const resolvePhaseFromSurface = (
+const resolvePhaseTagFromSurface = (
   surface: GeneratedSurface | null,
   namespace: string,
-  orbitKey: string,
+  sopKey: string,
   phaseKey: string,
-): { readonly phaseTag: string; readonly allowed: ReadonlySet<string> } | null => {
+): string | null => {
   if (surface === null) return null;
-  const orbit = surface.orbits[namespace]?.[orbitKey] as RawTypedOrbit | undefined;
-  const phaseEntry = orbit?.phases?.[phaseKey];
-  if (phaseEntry === undefined) return null;
-  const allowed = new Set(Object.values(phaseEntry.agents).map(phaseAgentKey));
-  return { phaseTag: `${phaseEntry.orbit}:${phaseEntry.name}`, allowed };
+  const sop = surface.sops[namespace]?.[sopKey] as RawTypedSop | undefined;
+  const phaseEntry = sop?.phases?.[phaseKey];
+  if (phaseEntry !== undefined) {
+    return `${phaseEntry.sop ?? sop?.name ?? sopKey}:${phaseEntry.name}`;
+  }
+  // The SOP or phase may have been removed from the compiled surface; keep the
+  // parsed tag so validation can report the stale binding.
+  return `${sop?.name ?? sopKey}:${phaseKey}`;
 };
 
 const extractBalancedBlock = (source: string, openBraceIndex: number): string | null => {
@@ -250,9 +184,8 @@ const extractBalancedBlock = (source: string, openBraceIndex: number): string | 
 /**
  * Residual-risk fallback when the probe runtime cannot execute the author's
  * `run` program (e.g. imports side effects, non-probe-safe logic). Regex-bound
- * to explicit `phase:` literals and `wf.phase(orbits.*.phases.*)` call sites
- * within a short post-match window — tasks built indirectly or outside those
- * shapes may false-negative.
+ * to explicit `phase:` literals within a short post-match window — tasks built
+ * indirectly or outside those shapes may false-negative.
  */
 const scanExplicitPhaseTasks = (source: string): ReadonlyArray<PhaseStampedTaskBinding> => {
   const bindings: PhaseStampedTaskBinding[] = [];
@@ -270,13 +203,10 @@ const scanExplicitPhaseTasks = (source: string): ReadonlyArray<PhaseStampedTaskB
     if (phaseValue === null) continue;
 
     const idMatch = /id:\s*["'`]([^"'`]+)["'`]/u.exec(block);
-    const agentMatch = /agent:\s*agents\.(\w+)\.(\w+)/u.exec(block);
-    if (!agentMatch) continue;
 
     bindings.push({
       taskId: idMatch?.[1] ?? null,
       phase: phaseValue,
-      agent: { plugin: agentMatch[1]!, name: agentMatch[2]! },
     });
   }
   return bindings;
@@ -287,44 +217,25 @@ const scanWfPhaseBlocks = (
   surface: GeneratedSurface | null,
 ): ReadonlyArray<PhaseStampedTaskBinding> => {
   const bindings: PhaseStampedTaskBinding[] = [];
-  const bindingsMap = orbitVarBindings(source);
-  const phaseCallPattern = /\.phase\(\s*(?:orbits\.(\w+)\.(\w+)|(\w+))\.phases\.(\w+)/gu;
+  const bindingsMap = sopVarBindings(source);
+  const phaseCallPattern = /\.phase\(\s*(?:sops\.(\w+)\.(\w+)|(\w+))\.phases\.(\w+)/gu;
 
   for (const match of source.matchAll(phaseCallPattern)) {
     const namespace = match[1] ?? bindingsMap.get(match[3]!)?.namespace;
-    const orbitKey = match[2] ?? bindingsMap.get(match[3]!)?.orbitKey;
+    const sopKey = match[2] ?? bindingsMap.get(match[3]!)?.sopKey;
     const phaseKey = match[4];
-    if (namespace === undefined || orbitKey === undefined || phaseKey === undefined) continue;
+    if (namespace === undefined || sopKey === undefined || phaseKey === undefined) continue;
 
-    const resolved = resolvePhaseFromSurface(surface, namespace, orbitKey, phaseKey);
-    if (resolved === null) continue;
+    const phaseTag = resolvePhaseTagFromSurface(surface, namespace, sopKey, phaseKey);
+    if (phaseTag === null) continue;
 
     const callIndex = match.index ?? 0;
     const slice = source.slice(callIndex, callIndex + 2_500);
     const idMatch = /id:\s*["'`]([^"'`]+)["'`]/u.exec(slice);
-    const directAgent = /agent:\s*agents\.(\w+)\.(\w+)/u.exec(slice);
-    const slotAgent = new RegExp(
-      `agent:\\s*(?:\\w+\\.)?phases\\.${phaseKey}\\.agents\\.(\\w+)`,
-      "u",
-    ).exec(slice);
-    const ctxAgent = /agent:\s*\w+\.agents\.(\w+)/u.exec(slice);
-
-    let agent: { readonly plugin: string; readonly name: string } | null = null;
-    if (directAgent) {
-      agent = { plugin: directAgent[1]!, name: directAgent[2]! };
-    } else if (slotAgent || ctxAgent) {
-      const slot = slotAgent?.[1] ?? ctxAgent?.[1];
-      const orbit = surface?.orbits[namespace]?.[orbitKey] as RawTypedOrbit | undefined;
-      const phaseEntry = orbit?.phases?.[phaseKey];
-      const raw = slot !== undefined ? phaseEntry?.agents[slot] : undefined;
-      if (raw) agent = { plugin: raw.plugin, name: raw.name };
-    }
-    if (agent === null) continue;
 
     bindings.push({
       taskId: idMatch?.[1] ?? null,
-      phase: resolved.phaseTag,
-      agent,
+      phase: phaseTag,
     });
   }
   return bindings;
@@ -336,24 +247,19 @@ export const scanDynamicPhaseTaskBindings = (
   surface: GeneratedSurface | null,
 ): ReadonlyArray<PhaseStampedTaskBinding> => {
   const bindings = [...scanExplicitPhaseTasks(source), ...scanWfPhaseBlocks(source, surface)];
-  return dedupeBindings(
-    bindings.map((binding) => {
-      const directRef = parseAgentsDotRef(`agents.${binding.agent.plugin}.${binding.agent.name}`);
-      return directRef === null ? binding : { ...binding, agent: directRef };
-    }),
-  );
+  return dedupeBindings(bindings);
 };
 
 /**
- * Collect phase-agent findings for a dynamic workflow: probe the loaded graph
- * first, then union regex-discovered bindings the probe may have missed.
+ * Collect phase findings for a dynamic workflow: probe the loaded graph first,
+ * then union regex-discovered bindings the probe may have missed.
  */
-export const collectDynamicPhaseAgentFindings = async (
+export const collectDynamicPhaseFindings = async (
   workflow: DynamicWorkflowDefinition<string>,
   source: string,
   surface: GeneratedSurface | null,
-): Promise<ReadonlyArray<WorkflowPhaseAgentFinding>> => {
+): Promise<ReadonlyArray<WorkflowPhaseFinding>> => {
   const probed = await probeDynamicWorkflowPhaseTasks(workflow);
   const scanned = scanDynamicPhaseTaskBindings(source, surface);
-  return validatePhaseAgentBindings([...probed, ...scanned], surface);
+  return validatePhaseBindings([...probed, ...scanned], surface);
 };

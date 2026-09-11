@@ -165,22 +165,21 @@ describe("workflow runner tracing", () => {
     });
   });
 
-  test("dynamic run: wf.phase spans land in the trace with orbit and phase attributes", async () => {
+  test("dynamic run: wf.phase spans land in the trace with sop and phase attributes", async () => {
     await withStore(async (store) => {
       const exploreContract = {
         name: "explore",
-        orbit: "delivery",
+        sop: "delivery",
         plugin: "core",
-        agents: { explorer: agent },
         output: Report,
-        framing: { telos: "Reduce ambiguity." },
-      } as const satisfies PhaseContract<"explore", { readonly explorer: typeof agent }, typeof Report>;
+        framing: { purpose: "Reduce ambiguity." },
+      } as const satisfies PhaseContract<"explore", undefined, typeof Report>;
 
       const workflow = defineWorkflow({
         name: "trace-phase",
         run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
           id: "scope",
-          agent: ctx.agents.explorer,
+          agent,
           prompt: "Explore.",
         })),
       });
@@ -199,7 +198,7 @@ describe("workflow runner tracing", () => {
       expect(program?.parentSpanId).toBe(root?.spanId ?? "");
       expect(phaseSpan?.parentSpanId).toBe(program?.spanId ?? "");
       expect(phaseSpan?.status).toBe("ok");
-      expect(phaseSpan?.attributes.orbit).toBe("delivery");
+      expect(phaseSpan?.attributes.sop).toBe("delivery");
       expect(phaseSpan?.attributes.phase).toBe("explore");
       expect(task?.parentSpanId).toBe(phaseSpan?.spanId ?? "");
       expect(phaseSpan?.attributes["agent.plugin"]).toBeUndefined();
@@ -273,12 +272,12 @@ describe("trace tree rendering", () => {
     expect(tree[0]?.children[0]?.span.spanId).toBe("b");
   });
 
-  test("human render labels workflow.phase spans as orbit:phase", () => {
+  test("human render labels workflow.phase spans as sop:phase", () => {
     const rendered = renderWorkflowTraceHuman([
       span({
         spanId: "a",
         name: "workflow.phase.forge:build",
-        attributes: { orbit: "forge", phase: "build" },
+        attributes: { sop: "forge", phase: "build" },
         startNs: 0n,
         endNs: 2_000_000_000n,
       }),

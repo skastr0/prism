@@ -1,7 +1,8 @@
 import { Effect, Schema } from "effect";
+import { isLeft } from "effect/Either";
 import type { Either } from "effect/Either";
 import type { ParseError } from "effect/ParseResult";
-import type { WorkflowRuntimeError } from "./workflow-errors.js";
+import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
 import { workflowHarnessDefaultModel, workflowHarnessDefaultProvider } from "./workflow-harness-detection.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
@@ -54,7 +55,7 @@ export interface WorkflowAgentRef {
 
 export interface WorkflowTaskSummary {
   readonly id: string;
-  readonly agent: {
+  readonly agent?: {
     readonly plugin: string;
     readonly name: string;
   };
@@ -326,6 +327,11 @@ export const resolveWorkflowTaskModelResolution = (
   }
 
   if (task.worker?.modelResolver !== undefined) {
+    if (task.agent === undefined) {
+      throw new WorkflowModelResolutionError(
+        `task '${task.id}' declares worker.modelResolver but no agent; a modelResolver picks from an agent's model targets — pass worker.model directly instead`,
+      );
+    }
     const agentTarget = task.agent.model?.targets?.[worker ?? ""];
     if (agentTarget === undefined) {
       throw new WorkflowModelResolutionError(
@@ -341,7 +347,7 @@ export const resolveWorkflowTaskModelResolution = (
     );
   }
 
-  if (task.agent.model?.modelspace !== undefined || task.agent.model?.profile !== undefined) {
+  if (task.agent?.model?.modelspace !== undefined || task.agent?.model?.profile !== undefined) {
     const target = modelTargetForWorker(task.agent.model, worker);
     const choice = firstModelChoice(target);
     if (choice !== undefined) return { ...choice, source: "profile" };
@@ -383,7 +389,7 @@ export type WorkflowJudgeVerdict =
 
 export interface WorkflowJudgeTaskMetadata {
   readonly id: string;
-  readonly agent: {
+  readonly agent?: {
     readonly plugin: string;
     readonly name: string;
   };
@@ -429,11 +435,14 @@ export interface WorkflowFinishOptions<Output> {
 
 export interface WorkflowTaskDefinition<
   Id extends string,
-  Agent extends WorkflowAgentRef,
   Output extends WorkflowOutputSchema,
 > {
   readonly id: Id;
-  readonly agent: Agent;
+  /**
+   * Optional executor identity. A task may run on a bare worker with a prompt
+   * and a model; a compiled agent ref is not required.
+   */
+  readonly agent?: WorkflowAgentRef;
   readonly prompt: string;
   readonly output: Output;
   readonly phase?: string;
@@ -444,13 +453,12 @@ export interface WorkflowTaskDefinition<
 
 export interface WorkflowTask<
   Id extends string = string,
-  Agent extends WorkflowAgentRef = WorkflowAgentRef,
   Output extends WorkflowOutputSchema = WorkflowOutputSchema,
-> extends WorkflowTaskDefinition<Id, Agent, Output> {
+> extends WorkflowTaskDefinition<Id, Output> {
   readonly kind: "workflow-task";
 }
 
-export type AnyWorkflowTask = WorkflowTask<string, WorkflowAgentRef, WorkflowOutputSchema>;
+export type AnyWorkflowTask = WorkflowTask<string, WorkflowOutputSchema>;
 
 export type WorkflowTaskOutput<Task extends AnyWorkflowTask> = Schema.Schema.Type<Task["output"]>;
 
@@ -508,7 +516,7 @@ export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
   isRecord(value) &&
   value.kind === "workflow-task" &&
   typeof value.id === "string" &&
-  isWorkflowAgentRef(value.agent) &&
+  (value.agent === undefined || isWorkflowAgentRef(value.agent)) &&
   typeof value.prompt === "string" &&
   Schema.isSchema(value.output) &&
   (value.cacheKey === undefined || typeof value.cacheKey === "string") &&
@@ -521,22 +529,27 @@ export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyA
 }
 
 export interface PhaseFraming {
-  readonly telos?: string;
+  readonly purpose?: string;
   readonly when?: string;
-  readonly coordination?: string;
   readonly escalation?: string;
 }
 
+/**
+ * A SOP phase contract. The generated `sops.<plugin>.<sop>.phases.<phase>`
+ * value from `prism/refs/sops` satisfies this shape directly: `name`, `sop`,
+ * `plugin`, optional `input`/`output` schemas, optional `criteria`, and
+ * optional `framing`.
+ */
 export interface PhaseContract<
   Name extends string,
-  Agents extends Readonly<Record<string, WorkflowAgentRef>>,
-  Output extends WorkflowOutputSchema,
+  Input extends WorkflowOutputSchema | undefined,
+  Output extends WorkflowOutputSchema | undefined,
 > {
   readonly name: Name;
-  readonly orbit: string;
+  readonly sop: string;
   readonly plugin: string;
-  readonly agents: Agents;
-  readonly output: Output;
+  readonly input?: Input;
+  readonly output?: Output;
   readonly criteria?: readonly string[];
   readonly framing?: PhaseFraming;
 }
@@ -545,11 +558,16 @@ export type PhaseTaskFinishOptions<Output> = WorkflowFinishOptions<Output> & {
   readonly inherit?: boolean;
 };
 
+/** Decoded TypeScript value of a phase input contract (unknown when no contract). */
+export type PhaseTaskInputValue<Input extends WorkflowOutputSchema | undefined> =
+  Input extends WorkflowOutputSchema ? Schema.Schema.Type<Input> : unknown;
+
 export type PhaseTaskDefinition<
   Id extends string,
-  Agent extends WorkflowAgentRef,
+  Input extends WorkflowOutputSchema | undefined = undefined,
   Output extends WorkflowOutputSchema = WorkflowOutputSchema,
-> = Omit<WorkflowTaskDefinition<Id, Agent, Output>, "output" | "phase" | "finish"> & {
+> = Omit<WorkflowTaskDefinition<Id, Output>, "output" | "phase" | "finish"> & {
+  readonly input?: PhaseTaskInputValue<Input>;
   readonly output?: Output;
   readonly phase?: string;
   readonly finish?: PhaseTaskFinishOptions<Schema.Schema.Type<Output>>;
@@ -557,43 +575,49 @@ export type PhaseTaskDefinition<
 };
 
 export type PhaseCtxTask<
-  Agents extends Readonly<Record<string, WorkflowAgentRef>>,
-  DefaultOutput extends WorkflowOutputSchema,
+  Input extends WorkflowOutputSchema | undefined,
+  DefaultOutput extends WorkflowOutputSchema | undefined,
 > = <
   const Id extends string,
-  const Agent extends Agents[keyof Agents],
-  const TaskOutput extends WorkflowOutputSchema = DefaultOutput,
+  const TaskOutput extends WorkflowOutputSchema = Extract<DefaultOutput, WorkflowOutputSchema>,
 >(
-  def: PhaseTaskDefinition<Id, Agent, TaskOutput>,
-) => Effect.Effect<WorkflowTaskOutput<WorkflowTask<Id, Agent, TaskOutput>>, WorkflowRuntimeError>;
+  def: PhaseTaskDefinition<Id, Input, TaskOutput>,
+) => Effect.Effect<WorkflowTaskOutput<WorkflowTask<Id, TaskOutput>>, WorkflowRuntimeError>;
 
 export interface PhaseCtx<
   Name extends string,
-  Agents extends Readonly<Record<string, WorkflowAgentRef>>,
-  DefaultOutput extends WorkflowOutputSchema,
+  Input extends WorkflowOutputSchema | undefined,
+  DefaultOutput extends WorkflowOutputSchema | undefined,
 > {
   readonly name: Name;
-  readonly orbit: string;
+  readonly sop: string;
   readonly plugin: string;
-  readonly agents: Agents;
   readonly phase: string;
-  readonly task: PhaseCtxTask<Agents, DefaultOutput>;
+  readonly task: PhaseCtxTask<Input, DefaultOutput>;
 }
 
+type AnyPhaseContract = PhaseContract<
+  string,
+  WorkflowOutputSchema | undefined,
+  WorkflowOutputSchema | undefined
+>;
+
 const composePhaseFramingPreamble = (
-  contract: PhaseContract<string, Readonly<Record<string, WorkflowAgentRef>>, WorkflowOutputSchema>,
+  contract: AnyPhaseContract,
   prompt: string,
 ): string => {
   const framing = contract.framing;
   if (framing === undefined) return prompt;
   const lines: string[] = [];
-  if (framing.telos !== undefined) lines.push(`Telos: ${framing.telos}`);
+  if (framing.purpose !== undefined) lines.push(`Purpose: ${framing.purpose}`);
   if (framing.when !== undefined) lines.push(`When: ${framing.when}`);
-  if (framing.coordination !== undefined) lines.push(`Coordination: ${framing.coordination}`);
   if (framing.escalation !== undefined) lines.push(`Escalation: ${framing.escalation}`);
   if (lines.length === 0) return prompt;
-  return `## Phase ${contract.orbit}:${contract.name}\n${lines.join("\n")}\n\n${prompt}`;
+  return `## Phase ${contract.sop}:${contract.name}\n${lines.join("\n")}\n\n${prompt}`;
 };
+
+const renderPhaseInputBlock = (value: unknown): string =>
+  ["## Input", "", "```json", JSON.stringify(value, null, 2), "```"].join("\n");
 
 const isSubstantiveWorkflowValue = (value: unknown): boolean => {
   if (value === null || value === undefined) return false;
@@ -622,7 +646,7 @@ const defaultPhaseJudgeCriterion = <Output>(
 });
 
 const mergePhaseTaskFinish = <Output>(
-  contract: PhaseContract<string, Readonly<Record<string, WorkflowAgentRef>>, WorkflowOutputSchema>,
+  contract: AnyPhaseContract,
   authorFinish: PhaseTaskFinishOptions<Output> | undefined,
 ): WorkflowFinishOptions<Output> | undefined => {
   const inherit = authorFinish?.inherit !== false;
@@ -645,25 +669,44 @@ const mergePhaseTaskFinish = <Output>(
 
 const createPhaseCtx = <
   const Name extends string,
-  const Agents extends Readonly<Record<string, WorkflowAgentRef>>,
-  const Output extends WorkflowOutputSchema,
+  const Input extends WorkflowOutputSchema | undefined,
+  const Output extends WorkflowOutputSchema | undefined,
 >(
   runtime: Pick<WorkflowRuntime, "runTask">,
-  contract: PhaseContract<Name, Agents, Output>,
+  contract: PhaseContract<Name, Input, Output>,
   phaseKey: string,
-): PhaseCtx<Name, Agents, Output> => {
-  const task: PhaseCtxTask<Agents, Output> = (def) => {
+): PhaseCtx<Name, Input, Output> => {
+  const task: PhaseCtxTask<Input, Output> = (def) => {
     const {
       brief,
       finish: authorFinish,
       output: outputOverride,
       phase: phaseOverride,
+      input: taskInput,
       ...rest
     } = def;
-    const output = (outputOverride ?? contract.output) as WorkflowOutputSchema;
-    const prompt = brief === false
+    const output = outputOverride ?? contract.output;
+    if (output === undefined) {
+      throw new Error(
+        `phase '${phaseKey}' declares no output schema; declare one on the SOP phase or pass \`output\` to ctx.task()`,
+      );
+    }
+
+    let inputBlock = "";
+    if (contract.input !== undefined) {
+      const decoded = Schema.decodeUnknownEither(contract.input)(taskInput);
+      if (isLeft(decoded)) {
+        return Effect.fail(new WorkflowTaskInputError(phaseKey, decoded.left));
+      }
+      inputBlock = renderPhaseInputBlock(decoded.right);
+    } else if (taskInput !== undefined) {
+      inputBlock = renderPhaseInputBlock(taskInput);
+    }
+
+    const framedPrompt = brief === false
       ? rest.prompt
       : composePhaseFramingPreamble(contract, rest.prompt);
+    const prompt = inputBlock.length > 0 ? `${framedPrompt}\n\n${inputBlock}` : framedPrompt;
     const finish = mergePhaseTaskFinish(
       contract,
       authorFinish as PhaseTaskFinishOptions<unknown> | undefined,
@@ -674,15 +717,14 @@ const createPhaseCtx = <
       output,
       phase: phaseOverride ?? phaseKey,
       ...(finish !== undefined ? { finish } : {}),
-    } as WorkflowTaskDefinition<string, WorkflowAgentRef, WorkflowOutputSchema>);
+    } as WorkflowTaskDefinition<string, WorkflowOutputSchema>);
     return runtime.runTask(workflowTask) as Effect.Effect<WorkflowTaskOutput<AnyWorkflowTask>, WorkflowRuntimeError>;
   };
 
   return {
     name: contract.name,
-    orbit: contract.orbit,
+    sop: contract.sop,
     plugin: contract.plugin,
-    agents: contract.agents,
     phase: phaseKey,
     task,
   };
@@ -690,22 +732,22 @@ const createPhaseCtx = <
 
 export const phase = <
   const Name extends string,
-  const Agents extends Readonly<Record<string, WorkflowAgentRef>>,
-  const Output extends WorkflowOutputSchema,
+  const Input extends WorkflowOutputSchema | undefined,
+  const Output extends WorkflowOutputSchema | undefined,
   Result,
   Err = WorkflowRuntimeError,
 >(
   runtime: Pick<WorkflowRuntime, "runTask">,
-  contract: PhaseContract<Name, Agents, Output>,
-  fn: (ctx: PhaseCtx<Name, Agents, Output>) => Effect.Effect<Result, Err, never>,
+  contract: PhaseContract<Name, Input, Output>,
+  fn: (ctx: PhaseCtx<Name, Input, Output>) => Effect.Effect<Result, Err, never>,
 ): Effect.Effect<Result, Err | WorkflowRuntimeError, never> =>
   Effect.gen(function* () {
-    const phaseKey = `${contract.orbit}:${contract.name}`;
+    const phaseKey = `${contract.sop}:${contract.name}`;
     const ctx = createPhaseCtx(runtime, contract, phaseKey);
     return yield* fn(ctx);
   }).pipe(
-    Effect.withSpan(`workflow.phase.${contract.orbit}:${contract.name}`, {
-      attributes: { orbit: contract.orbit, phase: contract.name },
+    Effect.withSpan(`workflow.phase.${contract.sop}:${contract.name}`, {
+      attributes: { sop: contract.sop, phase: contract.name },
     }),
   );
 
@@ -713,13 +755,13 @@ export interface WorkflowRuntime {
   runTask: <Task extends AnyWorkflowTask>(task: Task) => Effect.Effect<WorkflowTaskOutput<Task>, WorkflowRuntimeError>;
   phase: <
     const Name extends string,
-    const Agents extends Readonly<Record<string, WorkflowAgentRef>>,
-    const Output extends WorkflowOutputSchema,
+    const Input extends WorkflowOutputSchema | undefined,
+    const Output extends WorkflowOutputSchema | undefined,
     Result,
     Err = WorkflowRuntimeError,
   >(
-    contract: PhaseContract<Name, Agents, Output>,
-    fn: (ctx: PhaseCtx<Name, Agents, Output>) => Effect.Effect<Result, Err, never>,
+    contract: PhaseContract<Name, Input, Output>,
+    fn: (ctx: PhaseCtx<Name, Input, Output>) => Effect.Effect<Result, Err, never>,
   ) => Effect.Effect<Result, Err | WorkflowRuntimeError, never>;
 }
 
@@ -763,19 +805,17 @@ export const workflowSummary = (
   dynamic: "run" in workflow,
   tasks: workflow.tasks.map((task) => ({
     id: task.id,
-    agent: {
-      plugin: task.agent.plugin,
-      name: task.agent.name,
-    },
+    ...(task.agent !== undefined
+      ? { agent: { plugin: task.agent.plugin, name: task.agent.name } }
+      : {}),
     ...(task.cacheKey ? { cacheKey: task.cacheKey } : {}),
   })),
 });
 
 export const defineTask = <
   const Id extends string,
-  const Agent extends WorkflowAgentRef,
   const Output extends WorkflowOutputSchema,
->(definition: WorkflowTaskDefinition<Id, Agent, Output>): WorkflowTask<Id, Agent, Output> => ({
+>(definition: WorkflowTaskDefinition<Id, Output>): WorkflowTask<Id, Output> => ({
   kind: "workflow-task",
   ...definition,
 });

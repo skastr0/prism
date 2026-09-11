@@ -3,8 +3,9 @@ import { createRequire } from "node:module";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { buildCompileManifestForTarget, emptyCompileManifest } from "./compile-manifest.js";
+import { phase, type AnyWorkflowTask } from "../workflows.js";
 import type { AgentCacheDescriptor } from "./cache.js";
 import type { ComposedAgent } from "./compose.js";
 import { emptyRegistry } from "./registry.js";
@@ -777,11 +778,14 @@ void exploreAgent;
     expect(output).toContain('"explore": {');
     expect(output).toContain('"build": {');
     expect(output).toContain('name: "explore"');
+    expect(output).toContain('sop: "beacon"');
+    expect(output).toContain('plugin: "forge"');
     expect(output).toContain('purpose: "Map the space before committing."');
-    expect(output).toContain('acceptanceCriteria: ["Hypothesis is falsifiable"]');
+    expect(output).toContain('criteria: ["Hypothesis is falsifiable"]');
     expect(output).toContain('escalation: "Ask a human when the audience is unclear"');
     expect(output).toContain('input: Schema.Struct({ "brief": Schema.String }),');
     expect(output).toContain('output: Schema.Struct({ "summary": Schema.String }),');
+    expect(output).toContain("framing: {");
     expect(output).not.toContain('./agents.ts');
     expect(output).not.toContain("sourcePath");
     expect(output).not.toContain("renderPhaseAgents");
@@ -811,11 +815,13 @@ import { sops } from "./sops.ts";
 
 const explore = sops.forge.beacon.phases.explore;
 const _name: string = explore.name;
-const _criteria: ReadonlyArray<string> = explore.acceptanceCriteria;
-const _escalation: string | undefined = explore.escalation;
+const _sop: string = explore.sop;
+const _plugin: string = explore.plugin;
+const _criteria: ReadonlyArray<string> = explore.criteria ?? [];
+const _escalation: string | undefined = explore.framing?.escalation;
 const _input: Schema.Schema.Any | undefined = explore.input;
 const _output: Schema.Schema.Any | undefined = explore.output;
-void _name; void _criteria; void _escalation; void _input; void _output;
+void _name; void _sop; void _plugin; void _criteria; void _escalation; void _input; void _output;
 `,
     });
 
@@ -830,8 +836,13 @@ void _name; void _criteria; void _escalation; void _input; void _output;
             readonly beacon: {
               readonly phases: {
                 readonly explore: {
-                  readonly input: Schema.Schema.Any;
-                  readonly acceptanceCriteria: ReadonlyArray<string>;
+                  readonly name: "explore";
+                  readonly sop: "beacon";
+                  readonly plugin: "forge";
+                  readonly input: Schema.Schema.AnyNoContext;
+                  readonly output: Schema.Schema.AnyNoContext;
+                  readonly criteria: ReadonlyArray<string>;
+                  readonly framing: { readonly purpose?: string; readonly escalation?: string };
                 };
                 readonly build: { readonly input?: unknown };
               };
@@ -843,8 +854,27 @@ void _name; void _criteria; void _escalation; void _input; void _output;
       const inputSchema = explore.input as Schema.Schema<unknown>;
       expect(Schema.decodeUnknownSync(inputSchema)({ brief: "hello" })).toEqual({ brief: "hello" });
       expect(() => Schema.decodeUnknownSync(inputSchema)({})).toThrow();
-      expect(explore.acceptanceCriteria).toEqual(["Hypothesis is falsifiable"]);
+      expect(explore.criteria).toEqual(["Hypothesis is falsifiable"]);
+      expect(explore.framing.escalation).toBe("Ask a human when the audience is unclear");
       expect(mod.sops.forge.beacon.phases.build.input).toBeUndefined();
+
+      // Binding parity: the generated phase value flows through the real
+      // `phase()` DSL with a typed input, no casts.
+      const captured: AnyWorkflowTask[] = [];
+      const runtime = {
+        runTask: (task: AnyWorkflowTask) =>
+          Effect.sync(() => {
+            captured.push(task);
+            return {};
+          }) as never,
+      };
+      await Effect.runPromise(
+        phase(runtime, explore, (ctx) =>
+          ctx.task({ id: "scope", input: { brief: "typed" }, prompt: "go" })),
+      );
+      expect(captured[0]?.phase).toBe("beacon:explore");
+      expect(captured[0]?.prompt).toContain("## Phase beacon:explore");
+      expect(captured[0]?.prompt).toContain('"brief": "typed"');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

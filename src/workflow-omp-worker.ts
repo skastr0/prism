@@ -92,7 +92,7 @@ type OmpWorkflowSessionArgs =
 
 export const buildOmpArgs = (input: {
   readonly cwd: string;
-  readonly systemPromptPath: string;
+  readonly systemPromptPath?: string;
   readonly model?: string;
   readonly provider?: string;
   readonly profile?: string;
@@ -117,8 +117,9 @@ export const buildOmpArgs = (input: {
     "json",
     "--cwd",
     input.cwd,
-    "--append-system-prompt",
-    input.systemPromptPath,
+    ...(input.systemPromptPath !== undefined
+      ? ["--append-system-prompt", input.systemPromptPath]
+      : []),
     "--no-title",
     ...(input.sessionPersistence === "ephemeral" ? ["--no-session"] : []),
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
@@ -231,10 +232,12 @@ export const runOmpWorkflowTask = async (
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const systemPromptPath = await resolveInstalledAgentPrompt(options.cwd, task.agent.name);
+  const systemPromptPath = task.agent === undefined
+    ? undefined
+    : await resolveInstalledAgentPrompt(options.cwd, task.agent.name);
   const args = buildOmpArgs({
     cwd: options.cwd,
-    systemPromptPath,
+    ...(systemPromptPath !== undefined ? { systemPromptPath } : {}),
     model: options.model,
     provider: options.provider,
     profile: options.profile,
@@ -285,7 +288,7 @@ export const runOmpWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(stream.text),
     metadata: {
       adapter: "omp-cli",
-      nativeAgent: task.agent.name,
+      ...(task.agent !== undefined ? { nativeAgent: task.agent.name } : {}),
       model: options.model,
       durationMs,
       sessionPersistence,

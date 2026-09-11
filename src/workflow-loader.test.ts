@@ -627,7 +627,7 @@ describe("workflow loader", () => {
     expect(summary.tasks).toEqual([]);
   });
 
-  test("validate rejects a dynamic task outside the compiled phase-agent graph", async () => {
+  test("validate rejects a dynamic task outside the compiled SOP phase graph", async () => {
     const root = await createTempRoot();
     const prismHome = join(root, ".prism-home");
     const { key } = deriveProjectKey(root);
@@ -641,22 +641,18 @@ describe("workflow loader", () => {
       "  },",
       "};",
     ].join("\n"));
-    await writeFile(join(generatedDir, "orbits.ts"), [
-      "export const orbits = {",
+    await writeFile(join(generatedDir, "sops.ts"), [
+      "export const sops = {",
       "  forge: {",
-      "    forge: {",
+      "    beacon: {",
       "      plugin: 'forge',",
-      "      name: 'forge',",
-      "      sequence: ['explore'],",
+      "      name: 'beacon',",
       "      phases: {",
       "        explore: {",
       "          name: 'explore',",
-      "          orbit: 'forge',",
+      "          sop: 'beacon',",
       "          plugin: 'forge',",
-      "          agents: { explorer: { plugin: 'forge', name: 'explorer' } },",
-      "          criteria: [],",
-      "          io: { inputs: [], outputs: [] },",
-      "          framing: {},",
+      "          framing: { purpose: 'Map the space.' },",
       "        },",
       "      },",
       "    },",
@@ -668,16 +664,6 @@ describe("workflow loader", () => {
     await writeFile(file, `
 import { Effect, Schema } from "effect";
 import { defineWorkflow } from "prism";
-
-const explorer = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "explorer",
-  description: "Explores.",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["claude-code"],
-};
 
 const builder = {
   kind: "agent-ref" as const,
@@ -691,9 +677,8 @@ const builder = {
 
 const exploreContract = {
   name: "explore",
-  orbit: "forge",
+  sop: "beacon",
   plugin: "forge",
-  agents: { explorer },
   output: Schema.Struct({ summary: Schema.String }),
   framing: {},
   criteria: [],
@@ -703,7 +688,6 @@ export default defineWorkflow({
   name: "phase-warning-smoke",
   run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
     id: "scope",
-    agent: builder,
     prompt: "go",
   })),
 });
@@ -713,14 +697,36 @@ export default defineWorkflow({
     const previousCwd = process.cwd();
     process.env.PRISM_HOME = prismHome;
     try {
+      // A valid bound phase passes the SOP phase graph check.
       await expect(
         validateWorkflowFile(file, { prismHome, skipTypecheck: true, cwd: root }),
+      ).resolves.toMatchObject({ name: "phase-warning-smoke" });
+
+      // A stale literal phase tag fails closed with the phase-ref message.
+      const staleFile = join(root, "phase-stale.workflow.ts");
+      await writeFile(staleFile, `
+import { Effect, Schema } from "effect";
+import { defineWorkflow } from "prism";
+
+export default defineWorkflow({
+  name: "phase-stale-smoke",
+  run: (wf) => wf.runTask({
+    kind: "workflow-task",
+    id: "scope",
+    phase: "beacon:removed",
+    prompt: "go",
+    output: Schema.Struct({ summary: Schema.String }),
+  }),
+});
+`);
+      await expect(
+        validateWorkflowFile(staleFile, { prismHome, skipTypecheck: true, cwd: root }),
       ).rejects.toThrow(
-        "workflow 'phase-warning-smoke' failed phase-agent graph validation for 1 task binding(s)",
+        "workflow 'phase-stale-smoke' failed SOP phase graph validation for 1 task binding(s)",
       );
       await expect(
-        validateWorkflowFile(file, { prismHome, skipTypecheck: true, cwd: root }),
-      ).rejects.toThrow("task 'scope' is stamped phase 'forge:explore' but agent 'forge:builder' is not assigned");
+        validateWorkflowFile(staleFile, { prismHome, skipTypecheck: true, cwd: root }),
+      ).rejects.toThrow("task 'scope' is stamped phase 'beacon:removed' but that phase is not present");
     } finally {
       process.chdir(previousCwd);
       if (previousPrismHome === undefined) delete process.env.PRISM_HOME;

@@ -315,10 +315,10 @@ const spanLabel = (span: WorkflowSpanRecord): string => {
     parts.push(String(attributes["workflow"]));
   }
   if (span.name.startsWith("workflow.phase.")) {
-    const orbit = attributes["orbit"];
+    const sop = attributes["sop"];
     const phase = attributes["phase"];
-    if (typeof orbit === "string" && typeof phase === "string") {
-      parts[0] = `phase ${orbit}:${phase}`;
+    if (typeof sop === "string" && typeof phase === "string") {
+      parts[0] = `phase ${sop}:${phase}`;
     }
   }
   if (span.name === "workflow.task") {

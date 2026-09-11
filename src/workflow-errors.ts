@@ -9,6 +9,17 @@ export class WorkflowTaskDecodeError extends Error {
   }
 }
 
+/** A `ctx.task({ input })` value failed the bound SOP phase's input contract. */
+export class WorkflowTaskInputError extends Error {
+  override readonly name = "WorkflowTaskInputError";
+  constructor(
+    readonly phase: string,
+    readonly cause: unknown,
+  ) {
+    super(`workflow phase '${phase}' task input failed schema decode`);
+  }
+}
+
 export class WorkflowRunStoppedError extends Error {
   override readonly name = "WorkflowRunStoppedError";
   constructor(readonly runId: string) {
@@ -52,6 +63,7 @@ export type WorkflowRuntimeError =
   | WorkflowBunRuntimeUnavailableError
   | WorkflowUnsupportedHarnessError
   | WorkflowTaskDecodeError
+  | WorkflowTaskInputError
   | WorkflowTaskEscalatedError
   | WorkflowRunStoppedError
   | Error;

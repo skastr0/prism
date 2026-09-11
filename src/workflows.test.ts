@@ -8,6 +8,7 @@ import {
   phase,
   resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
+  workflowSummary,
   WorkflowModelResolutionError,
   type PhaseContract,
   type WorkflowAgentRef,
@@ -18,6 +19,7 @@ import {
   type WorkflowRuntime,
   type WorkflowTaskOutput,
 } from "./workflows.js";
+import { workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { WORKFLOW_HARNESS_IDS, workflowHarnessDefaultModel } from "./workflow-harness-detection.js";
 import { resolveWorkflowTaskPermission } from "./workflow-workers.js";
 import { buildAmpArgs } from "./workflow-amp-worker.js";
@@ -165,7 +167,7 @@ describe("workflow authoring primitives", () => {
 
     expect(workflow.kind).toBe("workflow");
     expect(workflow.tasks[0]?.kind).toBe("workflow-task");
-    expect(workflow.tasks[0]?.agent.name).toBe("builder");
+    expect(workflow.tasks[0]?.agent?.name).toBe("builder");
     expect(workflow.tasks[0]?.cacheKey).toBe("workflow-refs-build");
   });
 
@@ -203,7 +205,7 @@ describe("workflow authoring primitives", () => {
     });
 
     const model = resolveWorkflowTaskModel(build);
-    const args = buildOpenCodeArgs({ cwd: "/tmp", agent: build.agent.name, model, prompt: build.prompt, permission: "legacy" });
+    const args = buildOpenCodeArgs({ cwd: "/tmp", agent: build.agent!.name, model, prompt: build.prompt, permission: "legacy" });
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "crof/kimi-k2.6"]);
   });
 
@@ -219,7 +221,7 @@ describe("workflow authoring primitives", () => {
 
     const claude = taskFor("claude-code");
     const claudeArgs = buildClaudeArgs({
-      agent: claude.agent.name,
+      agent: claude.agent!.name,
       model: resolveWorkflowTaskModel(claude),
       prompt: claude.prompt,
       permission: "legacy",
@@ -239,7 +241,7 @@ describe("workflow authoring primitives", () => {
     const grok = taskFor("grok");
     expect(buildGrokArgs({
       cwd: "/tmp",
-      agent: grok.agent.name,
+      agent: grok.agent!.name,
       model: resolveWorkflowTaskModel(grok),
       prompt: grok.prompt,
       permission: "legacy",
@@ -529,7 +531,7 @@ describe("workflow authoring primitives", () => {
       worker: { worker: "opencode" },
     });
     const permission = resolveWorkflowTaskPermission(task, "sandbox-read-only");
-    expect(() => buildOpenCodeArgs({ cwd: "/tmp", agent: task.agent.name, prompt: task.prompt, permission }))
+    expect(() => buildOpenCodeArgs({ cwd: "/tmp", agent: task.agent!.name, prompt: task.prompt, permission }))
       .toThrow(WorkflowPermissionError);
   });
 
@@ -558,15 +560,17 @@ describe("workflow authoring primitives", () => {
 });
 
 describe("workflow phase DSL", () => {
+  const ExploreInput = Schema.Struct({ brief: Schema.String });
+
   const exploreContract = {
     name: "explore",
-    orbit: "delivery",
+    sop: "beacon",
     plugin: "core",
-    agents: { explorer },
+    input: ExploreInput,
     output: Exploration,
-    framing: { telos: "Reduce ambiguity before build." },
+    framing: { purpose: "Reduce ambiguity before build." },
     criteria: ["Surface at least one option", "Name the core assumption"],
-  } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+  } as const satisfies PhaseContract<"explore", typeof ExploreInput, typeof Exploration>;
 
   const mockRuntime = (
     runTask: WorkflowRuntime["runTask"],
@@ -582,7 +586,7 @@ describe("workflow phase DSL", () => {
       run: (wf) => phase(wf, exploreContract, (ctx) => Effect.gen(function* () {
         return yield* ctx.task({
           id: "scope",
-          agent: ctx.agents.explorer,
+          input: { brief: "typed" },
           prompt: "Explore the goal.",
         });
       })),
@@ -594,9 +598,11 @@ describe("workflow phase DSL", () => {
     }) as never)));
 
     expect(result).toEqual({ assumption: "typed default", options: ["a"] });
-    expect(prompts[0]).toContain("## Phase delivery:explore");
-    expect(prompts[0]).toContain("Telos: Reduce ambiguity before build.");
+    expect(prompts[0]).toContain("## Phase beacon:explore");
+    expect(prompts[0]).toContain("Purpose: Reduce ambiguity before build.");
     expect(prompts[0]).toContain("Explore the goal.");
+    expect(prompts[0]).toContain("## Input");
+    expect(prompts[0]).toContain('"brief": "typed"');
   });
 
   test("phase ctx.task allows explicit output overrides", async () => {
@@ -605,7 +611,7 @@ describe("workflow phase DSL", () => {
       run: (wf) => phase(wf, exploreContract, (ctx) => Effect.gen(function* () {
         return yield* ctx.task({
           id: "summarize",
-          agent: ctx.agents.explorer,
+          input: { brief: "typed" },
           prompt: "Return a patch report.",
           output: PatchReport,
         });
@@ -618,13 +624,13 @@ describe("workflow phase DSL", () => {
     expect(result).toEqual({ summary: "override", filesChanged: ["src/workflows.ts"] });
   });
 
-  test("phase ctx.task injects orbit:phase into dispatched tasks", async () => {
+  test("phase ctx.task injects sop:phase into dispatched tasks", async () => {
     let capturedPhase: string | undefined;
     const workflow = defineWorkflow({
       name: "phase-annotation",
       run: (wf) => phase(wf, exploreContract, (ctx) => ctx.task({
         id: "scope",
-        agent: ctx.agents.explorer,
+        input: { brief: "typed" },
         prompt: "go",
       })),
     });
@@ -633,16 +639,56 @@ describe("workflow phase DSL", () => {
       capturedPhase = task.phase;
       return { assumption: "a", options: [] };
     }) as never)));
-    expect(capturedPhase).toBe("delivery:explore");
+    expect(capturedPhase).toBe("beacon:explore");
   });
 
-  test("brief:false skips framing preamble injection", async () => {
+  test("phase ctx.task fails with a typed input error when the contract input does not decode", async () => {
+    const workflow = defineWorkflow({
+      name: "phase-bad-input",
+      run: (wf) => phase(wf, exploreContract, (ctx) => ctx.task({
+        id: "scope",
+        // @ts-expect-error number is not assignable to the contract's `brief: string`
+        input: { brief: 42 },
+        prompt: "go",
+      })),
+    });
+
+    const exit = await Effect.runPromiseExit(workflow.run!(mockRuntime(() =>
+      Effect.succeed({ assumption: "a", options: [] }) as never,
+    )));
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag !== "Failure") throw new Error("expected failure");
+    const failure = exit.cause;
+    expect(JSON.stringify(failure)).toContain("WorkflowTaskInputError");
+  });
+
+  test("phase ctx.task inherits judge criteria from acceptance criteria", async () => {
+    let capturedCriteria: ReadonlyArray<{ readonly name: string; readonly goal?: unknown }> = [];
+    const workflow = defineWorkflow({
+      name: "phase-inherit-criteria",
+      run: (wf) => phase(wf, exploreContract, (ctx) => ctx.task({
+        id: "scope",
+        input: { brief: "typed" },
+        prompt: "go",
+      })),
+    });
+
+    await Effect.runPromise(workflow.run!(mockRuntime((task) => Effect.sync(() => {
+      capturedCriteria = (task.finish?.criteria ?? []) as never;
+      return { assumption: "a", options: [] };
+    }) as never)));
+    const inherited = capturedCriteria.find((criterion) => criterion.name === "phase-contract");
+    expect(inherited).toBeDefined();
+    expect(String(inherited?.goal)).toContain("Surface at least one option");
+  });
+
+  test("brief:false skips framing preamble injection but keeps the typed input block", async () => {
     const prompts: string[] = [];
     const workflow = defineWorkflow({
       name: "phase-brief",
       run: (wf) => phase(wf, exploreContract, (ctx) => ctx.task({
         id: "scope",
-        agent: ctx.agents.explorer,
+        input: { brief: "typed" },
         prompt: "Bare prompt only.",
         brief: false,
       })),
@@ -652,6 +698,40 @@ describe("workflow phase DSL", () => {
       prompts.push(task.prompt);
       return { assumption: "a", options: [] };
     }) as never)));
-    expect(prompts[0]).toBe("Bare prompt only.");
+    expect(prompts[0]).toBe("Bare prompt only.\n\n## Input\n\n```json\n{\n  \"brief\": \"typed\"\n}\n```");
+  });
+});
+
+describe("agent-less tasks", () => {
+  test("isWorkflowTask accepts a missing agent and rejects a malformed one", () => {
+    const bare = defineTask({
+      id: "bare",
+      prompt: "Do the work.",
+      output: PatchReport,
+    });
+    expect(isWorkflowTask(bare)).toBe(true);
+    expect(isWorkflowTask({ ...bare, agent: undefined })).toBe(true);
+    expect(isWorkflowTask({ ...bare, agent: { plugin: "forge" } })).toBe(false);
+  });
+
+  test("workflowSummary omits the agent key for agent-less tasks", () => {
+    const bare = defineTask({ id: "bare", prompt: "Do the work.", output: PatchReport });
+    const bound = defineTask({ id: "bound", agent: builder, prompt: "Do the work.", output: PatchReport });
+    const summary = workflowSummary("/tmp/wf.ts", defineWorkflow({
+      name: "mixed",
+      tasks: [bare, bound] as const,
+    }));
+    expect(summary.tasks[0]).toEqual({ id: "bare" });
+    expect(summary.tasks[1]?.agent).toEqual({ plugin: "forge", name: "builder" });
+  });
+
+  test("workflowWorkerJsonInstruction omits the agent identity line when no agent is present", () => {
+    const bare = defineTask({ id: "bare", prompt: "Do the work.", output: PatchReport });
+    const instruction = workflowWorkerJsonInstruction(bare);
+    expect(instruction).not.toContain("Agent identity:");
+    const boundInstruction = workflowWorkerJsonInstruction(
+      defineTask({ id: "bound", agent: builder, prompt: "Do the work.", output: PatchReport }),
+    );
+    expect(boundInstruction).toContain("Agent identity: forge.builder");
   });
 });

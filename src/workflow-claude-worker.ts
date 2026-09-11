@@ -130,6 +130,7 @@ const claudeRoot = (): string => join(homedir(), ".claude");
 export const discoverClaudeGeneratedPlugin = (
   task: AnyWorkflowTask,
 ): ClaudeGeneratedPluginDiscovery => {
+  if (task.agent === undefined) return {};
   const pluginDir = join(claudeRoot(), "skills", generatedPluginIdForOwner(task.agent.plugin));
   if (!existsSync(pluginDir)) return {};
   return { pluginDir };
@@ -186,7 +187,7 @@ type ClaudeWorkflowSessionArgs =
   };
 
 export const buildClaudeArgs = (input: {
-  readonly agent: string;
+  readonly agent?: string;
   readonly model?: string;
   readonly prompt: string;
   readonly generatedPlugin?: ClaudeGeneratedPluginDiscovery;
@@ -213,7 +214,11 @@ export const buildClaudeArgs = (input: {
     "stream-json",
     "--verbose",
     ...(input.sessionPersistence === "ephemeral" ? ["--no-session-persistence"] : []),
-    ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : ["--agent", input.agent]),
+    ...(input.resumeSessionId !== undefined
+      ? ["--resume", input.resumeSessionId]
+      : input.agent !== undefined
+        ? ["--agent", input.agent]
+        : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
     ...(input.outputSchema !== undefined ? ["--json-schema", JSON.stringify(input.outputSchema)] : []),
@@ -243,7 +248,7 @@ export const runClaudeWorkflowTask = async (
   const generatedPlugin = discoverClaudeGeneratedPlugin(task);
   const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
   const args = buildClaudeArgs({
-    agent: task.agent.name,
+    ...(task.agent !== undefined ? { agent: task.agent.name } : {}),
     model: options.model,
     generatedPlugin,
     outputSchema,
@@ -316,7 +321,7 @@ export const runClaudeWorkflowTask = async (
     output: claudeEnvelopeOutput(envelope),
     metadata: {
       adapter: "claude-code",
-      nativeAgent: task.agent.name,
+      ...(task.agent !== undefined ? { nativeAgent: task.agent.name } : {}),
       model: options.model,
       durationMs,
       sessionPersistence,

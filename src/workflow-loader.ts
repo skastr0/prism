@@ -4,10 +4,9 @@ import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 import { resolvePrismHome } from "./prism-home.js";
 import { loadGeneratedSurface, type GeneratedSurface } from "./workflow-catalog.js";
 import {
-  collectDynamicPhaseAgentFindings,
+  collectDynamicPhaseFindings,
   phaseStampedBindingsFromTasks,
-  validatePhaseAgentBindings,
-  type WorkflowPhaseAgentFinding,
+  validatePhaseBindings,
 } from "./workflow-validate-dynamic.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
 // (globalThis.__prism_effect) as a module side-effect, so the workflow DSL
@@ -206,7 +205,7 @@ export const validateWorkflowFile = async (
 
   if (summary.dynamic) {
     const source = await readFile(resolved, "utf8");
-    const findings = await collectDynamicPhaseAgentFindings(
+    const findings = await collectDynamicPhaseFindings(
       workflow as DynamicWorkflowDefinition<string>,
       source,
       surface,
@@ -214,7 +213,7 @@ export const validateWorkflowFile = async (
     if (findings.length > 0) {
       const detail = findings.map((finding) => `  - ${finding.message}`).join("\n");
       throw new WorkflowValidationError(
-        `workflow '${summary.name}' failed phase-agent graph validation for ${findings.length} task binding(s):\n${detail}`,
+        `workflow '${summary.name}' failed SOP phase graph validation for ${findings.length} task binding(s):\n${detail}`,
       );
     }
     return {
@@ -226,11 +225,11 @@ export const validateWorkflowFile = async (
   }
 
   const tasks = workflow.tasks as ReadonlyArray<AnyWorkflowTask>;
-  const findings = validatePhaseAgentBindings(phaseStampedBindingsFromTasks(tasks), surface);
+  const findings = validatePhaseBindings(phaseStampedBindingsFromTasks(tasks), surface);
   if (findings.length > 0) {
     const detail = findings.map((finding) => `  - ${finding.message}`).join("\n");
     throw new WorkflowValidationError(
-      `workflow '${summary.name}' failed phase-agent graph validation for ${findings.length} task binding(s):\n${detail}`,
+      `workflow '${summary.name}' failed SOP phase graph validation for ${findings.length} task binding(s):\n${detail}`,
     );
   }
   const modelResolution = tasks.map(resolveTaskModelRow);

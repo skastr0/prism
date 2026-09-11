@@ -26,7 +26,6 @@ export interface WorkflowTaskIdentity {
   readonly taskId: string;
   readonly cacheKey: string;
   readonly promptHash: string;
-  readonly agentManifestHash: string;
 }
 
 export interface WorkflowJudgeIdentity {
@@ -45,14 +44,6 @@ export interface WorkflowRunTaskSnapshot {
   readonly prompt: string;
   readonly cacheKey: string;
   readonly promptHash: string;
-  readonly agentManifestHash: string;
-  readonly agent: {
-    readonly plugin: string;
-    readonly name: string;
-    readonly description: string;
-    readonly sourceHash: string;
-    readonly manifestHash: string;
-  };
   readonly worker?: {
     readonly worker?: string;
     readonly model?: string;
@@ -64,20 +55,20 @@ export interface WorkflowRunTaskSnapshot {
   readonly createdAt: string;
 }
 
-const WORKFLOW_TASK_IDENTITY_VERSION = 3;
+const WORKFLOW_TASK_IDENTITY_VERSION = 4;
 
 const workflowWorkerSemanticsVersion = (worker: string | null): string => {
   switch (worker) {
     case "claude-code":
     case "grok":
     case "opencode":
-      return "native-agent-v1";
+      return "native-cli-v1";
     case "amp-code":
     case "codex-cli":
     case "devin":
     case "hermes":
     case "kimi-code":
-      return "prompt-agent-v1";
+      return "prompt-cli-v1";
     case null:
       return "mock-or-custom-v1";
     default:
@@ -131,7 +122,6 @@ export const workflowTaskIdentity = (
         })) ?? [],
       },
     } as StableJsonValue),
-    agentManifestHash: task.agent.manifestHash,
   };
 };
 
@@ -184,14 +174,6 @@ export const workflowRunTaskSnapshotForTask = (input: {
     prompt: input.task.prompt,
     cacheKey: identity.cacheKey,
     promptHash: identity.promptHash,
-    agentManifestHash: identity.agentManifestHash,
-    agent: {
-      plugin: input.task.agent.plugin,
-      name: input.task.agent.name,
-      description: input.task.agent.description,
-      sourceHash: input.task.agent.sourceHash,
-      manifestHash: input.task.agent.manifestHash,
-    },
     ...(worker !== undefined ? { worker } : {}),
     outputSchema: taskOutputSchemaSnapshot(input.task),
     finishCriteria: taskFinishCriteria(input.task),

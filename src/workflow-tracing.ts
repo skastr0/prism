@@ -323,9 +323,6 @@ const spanLabel = (span: WorkflowSpanRecord): string => {
   }
   if (span.name === "workflow.task") {
     parts.push(span.taskId ?? String(attributes["task.id"] ?? ""));
-    const plugin = attributes["agent.plugin"];
-    const agent = attributes["agent.name"];
-    if (typeof plugin === "string" && typeof agent === "string") parts.push(`${plugin}/${agent}`);
     if (attributes["task.cached"] === true) parts.push("cached");
   }
   if (span.name === "task.executor") {

@@ -134,14 +134,8 @@ export const runHermesWorkflowTask = async (
     metadata: {
       adapter: "hermes",
       prompted: options.profile === undefined,
-      agentSelection: options.profile === undefined ? "prompted-contract" : "profile",
       source: "prism-workflow",
       profile: options.profile,
-      agent: {
-        plugin: task.agent.plugin,
-        name: task.agent.name,
-        manifestHash: task.agent.manifestHash,
-      },
       model: options.model,
       provider: options.provider,
       durationMs,

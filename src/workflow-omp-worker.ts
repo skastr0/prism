@@ -2,11 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exists, expandPath } from "./fs.js";
-import {
-  isAnonymousWorkflowAgent,
-  type AnyWorkflowTask,
-  type WorkflowPermissionMode,
-  type WorkflowSessionPersistence,
+import type {
+  AnyWorkflowTask,
+  WorkflowPermissionMode,
+  WorkflowSessionPersistence,
 } from "./workflows.js";
 import {
   parseWorkflowWorkerJsonOutput,
@@ -106,7 +105,6 @@ type OmpWorkflowSessionArgs =
 
 export const buildOmpArgs = (input: {
   readonly cwd: string;
-  readonly systemPromptPath: string;
   readonly model?: string;
   readonly provider?: string;
   readonly profile?: string;
@@ -132,8 +130,6 @@ export const buildOmpArgs = (input: {
     "--print",
     "--cwd",
     input.cwd,
-    "--append-system-prompt",
-    input.systemPromptPath,
     "--no-title",
     ...(input.sessionPersistence === "ephemeral" ? ["--no-session"] : []),
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
@@ -227,46 +223,6 @@ export const parseOmpJsonStream = (stdout: string): OmpJsonStreamResult => {
   };
 };
 
-const ANONYMOUS_OMP_SYSTEM_PROMPT = [
-  "You are executing a Prism workflow task.",
-  "Plugins are optional. There is no compiled OMP agent for this run.",
-  "Follow the user prompt exactly. Prefer structured JSON when instructed.",
-].join("\n");
-
-const resolveInstalledAgentPrompt = async (
-  cwd: string,
-  agentName: string,
-): Promise<string> => {
-  const candidates = [
-    join(expandPath(cwd), ".omp", "agents", `${agentName}.md`),
-    join(expandPath("~/.omp/agent"), "agents", `${agentName}.md`),
-  ];
-  for (const candidate of candidates) {
-    if (await exists(candidate)) return candidate;
-  }
-  throw new OmpWorkflowWorkerError(
-    `compiled OMP agent '${agentName}' is not installed. Expected ${candidates.join(" or ")}. Run prism refresh <plugin> --harness omp for this project or globally before running the workflow.`,
-  );
-};
-
-const resolveOmpSystemPrompt = async (
-  cwd: string,
-  task: AnyWorkflowTask,
-): Promise<{ readonly path: string; readonly cleanup?: () => Promise<void> }> => {
-  if (!isAnonymousWorkflowAgent(task.agent)) {
-    return { path: await resolveInstalledAgentPrompt(cwd, task.agent.name) };
-  }
-  const workDir = await mkdtemp(join(tmpdir(), "prism-omp-anonymous-"));
-  const path = join(workDir, "anonymous.md");
-  await writeFile(path, ANONYMOUS_OMP_SYSTEM_PROMPT, "utf8");
-  return {
-    path,
-    cleanup: async () => {
-      await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-    },
-  };
-};
-
 export const runOmpWorkflowTask = async (
   task: AnyWorkflowTask,
   options: OmpWorkflowWorkerOptions,
@@ -287,11 +243,9 @@ export const runOmpWorkflowTask = async (
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const systemPrompt = await resolveOmpSystemPrompt(options.cwd, task);
-  try {
+  {
     const args = buildOmpArgs({
       cwd: options.cwd,
-      systemPromptPath: systemPrompt.path,
       model: options.model,
       provider: options.provider,
       profile: options.profile,
@@ -354,7 +308,6 @@ export const runOmpWorkflowTask = async (
       output: parseWorkflowWorkerJsonOutput(stream.text),
       metadata: {
         adapter: "omp-cli",
-        nativeAgent: task.agent.name,
         model: options.model,
         durationMs,
         sessionPersistence,
@@ -362,7 +315,5 @@ export const runOmpWorkflowTask = async (
         ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),
       },
     };
-  } finally {
-    await systemPrompt.cleanup?.();
   }
 };

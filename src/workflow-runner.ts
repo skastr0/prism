@@ -1087,7 +1087,6 @@ const executeWorkflowTask = async (input: {
         ...(pendingRepair?.mode === "native-continuation" ? pendingRepair.previousMetadata : {}),
         ...(task.worker?.worker !== undefined ? { adapter: task.worker.worker } : {}),
         ...(typeof task.worker?.model === "string" ? { model: task.worker.model } : {}),
-        nativeAgent: task.agent.name,
       }), pendingRepair);
     };
     let activeAttempt: number | undefined;
@@ -1259,7 +1258,7 @@ const executeWorkflowTask = async (input: {
         }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
         if (executorSpan !== undefined) {
-          for (const key of ["adapter", "model", "nativeAgent", "sessionId"] as const) {
+          for (const key of ["adapter", "model", "sessionId"] as const) {
             const value = metadata?.[key];
             if (typeof value === "string") executorSpan.annotate(`worker.${key}`, value);
           }

@@ -60,7 +60,6 @@ const assertOpenCodePermission = (mode: WorkflowPermissionMode): void => {
 
 export const buildOpenCodeArgs = (input: {
   readonly cwd: string;
-  readonly agent: string;
   readonly model?: string;
   readonly prompt: string;
   readonly sessionId?: string;
@@ -73,8 +72,6 @@ export const buildOpenCodeArgs = (input: {
     "run",
     "--dir",
     input.cwd,
-    "--agent",
-    input.agent,
     // `--format json` emits a newline-delimited event stream that carries the session id on
     // every event: the only race-free source for the repair-loop continuation id.
     "--format",
@@ -141,7 +138,6 @@ export const runOpenCodeWorkflowTask = async (
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const args = buildOpenCodeArgs({
     cwd: options.cwd,
-    agent: task.agent.name,
     model: options.model,
     prompt,
     sessionId,
@@ -173,7 +169,6 @@ export const runOpenCodeWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(stream.text),
     metadata: {
       adapter: "opencode-cli",
-      nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
       sessionId: sessionId ?? stream.sessionId,

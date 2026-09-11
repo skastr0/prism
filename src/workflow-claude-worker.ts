@@ -1,13 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
-import {
-  isAnonymousWorkflowAgent,
-  type AnyWorkflowTask,
-  type WorkflowPermissionMode,
-  type WorkflowSessionPersistence,
-} from "./workflows.js";
+import { readFileSync } from "node:fs";
+import { type AnyWorkflowTask, type WorkflowPermissionMode, type WorkflowSessionPersistence } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import {
   summarizeWorkflowWorkerStderrForSession,
@@ -46,10 +38,6 @@ export class ClaudeWorkflowWorkerError extends Error {
 // back to the known repair-loop continuation id, if any.
 const claudeFailureSessionId = (stdout: string, fallback: string | undefined): string | undefined =>
   stableSessionIdFromJsonLines(stdout, ["session_id"]) ?? fallback;
-
-export interface ClaudeGeneratedPluginDiscovery {
-  readonly pluginDir?: string;
-}
 
 interface ClaudeJsonEnvelope {
   readonly result?: unknown;
@@ -124,18 +112,6 @@ const claudeEnvelopeOutput = (envelope: ClaudeJsonEnvelope): unknown => {
   return parseWorkflowWorkerJsonOutput(envelope.result);
 };
 
-// Hardcode Claude's config root to ~/.claude (where `prism sync` installs the generated
-// plugin/skill). Tests redirect by spawning with HOME set. (homedir() honors $HOME.)
-const claudeRoot = (): string => join(homedir(), ".claude");
-
-export const discoverClaudeGeneratedPlugin = (
-  task: AnyWorkflowTask,
-): ClaudeGeneratedPluginDiscovery => {
-  const pluginDir = join(claudeRoot(), "skills", generatedPluginIdForOwner(task.agent.plugin));
-  if (!existsSync(pluginDir)) return {};
-  return { pluginDir };
-};
-
 const assertClaudePermission = (
   mode: WorkflowPermissionMode,
   restrictedTools?: readonly string[],
@@ -187,10 +163,8 @@ type ClaudeWorkflowSessionArgs =
   };
 
 export const buildClaudeArgs = (input: {
-  readonly agent?: string;
   readonly model?: string;
   readonly prompt: string;
-  readonly generatedPlugin?: ClaudeGeneratedPluginDiscovery;
   readonly outputSchema?: WorkflowJsonSchema;
   readonly permission?: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
@@ -214,13 +188,8 @@ export const buildClaudeArgs = (input: {
     "stream-json",
     "--verbose",
     ...(input.sessionPersistence === "ephemeral" ? ["--no-session-persistence"] : []),
-    ...(input.resumeSessionId !== undefined
-      ? ["--resume", input.resumeSessionId]
-      : input.agent !== undefined
-        ? ["--agent", input.agent]
-        : []),
+    ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
-    ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
     ...(input.outputSchema !== undefined ? ["--json-schema", JSON.stringify(input.outputSchema)] : []),
     ...permissionArgs,
     input.prompt,
@@ -245,12 +214,9 @@ export const runClaudeWorkflowTask = async (
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const generatedPlugin = discoverClaudeGeneratedPlugin(task);
   const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
   const args = buildClaudeArgs({
-    agent: isAnonymousWorkflowAgent(task.agent) ? undefined : task.agent.name,
     model: options.model,
-    generatedPlugin,
     outputSchema,
     prompt,
     ...(sessionPersistence === "ephemeral"
@@ -321,7 +287,6 @@ export const runClaudeWorkflowTask = async (
     output: claudeEnvelopeOutput(envelope),
     metadata: {
       adapter: "claude-code",
-      nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
       sessionPersistence,

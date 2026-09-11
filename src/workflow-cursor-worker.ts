@@ -1,7 +1,3 @@
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { generatedCursorPluginId } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import {
@@ -31,20 +27,6 @@ export class CursorWorkflowWorkerError extends Error {
     if (metadata !== undefined) this.metadata = metadata;
   }
 }
-
-const cursorRoot = (): string => join(homedir(), ".cursor");
-
-export interface CursorGeneratedPluginDiscovery {
-  readonly pluginDir?: string;
-}
-
-export const discoverCursorGeneratedPlugin = (
-  task: AnyWorkflowTask,
-): CursorGeneratedPluginDiscovery => {
-  const pluginDir = join(cursorRoot(), "plugins", "local", generatedCursorPluginId(task.agent.plugin));
-  if (!existsSync(pluginDir)) return {};
-  return { pluginDir };
-};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -146,7 +128,6 @@ export const buildCursorArgs = (input: {
   readonly cwd: string;
   readonly model?: string;
   readonly resumeSessionId?: string;
-  readonly generatedPlugin?: CursorGeneratedPluginDiscovery;
   readonly permission?: WorkflowPermissionMode;
 }): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
@@ -172,9 +153,6 @@ export const buildCursorArgs = (input: {
     input.cwd,
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : []),
-    ...(input.generatedPlugin?.pluginDir !== undefined
-      ? ["--plugin-dir", input.generatedPlugin.pluginDir]
-      : []),
     ...permissionArgs,
     input.prompt,
   ];
@@ -190,13 +168,11 @@ export const runCursorWorkflowTask = async (
     : undefined;
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
-    : `You are assigned the Prism agent ${task.agent.plugin}.${task.agent.name} role. ${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const generatedPlugin = discoverCursorGeneratedPlugin(task);
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const args = buildCursorArgs({
     prompt,
     cwd: options.cwd,
     model: options.model,
-    generatedPlugin,
     permission: options.resolvedPermission,
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   });
@@ -248,14 +224,7 @@ export const runCursorWorkflowTask = async (
     metadata: {
       adapter: "cursor",
       prompted: true,
-      agentSelection: "prompted-contract",
       source: "prism-workflow",
-      nativeAgent: task.agent.name,
-      agent: {
-        plugin: task.agent.plugin,
-        name: task.agent.name,
-        manifestHash: task.agent.manifestHash,
-      },
       model: options.model,
       durationMs,
       ...summarizeWorkflowWorkerStderrForSession(stderr, "persistent"),

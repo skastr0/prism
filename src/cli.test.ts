@@ -193,9 +193,9 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   const refresh = await runCli(["workflow", "refresh-harness-types"], env, { cwd: root });
   expect(refresh.exitCode).toBe(0);
   expect(refresh.stdout).toContain(join(prismHome, "state", "harness-types", "harness-models.ts"));
-  expect(refresh.stdout).toContain("amp-code:");
+  expect(refresh.stdout).toContain("claude-code:");
   const models = await readFile(join(prismHome, "state", "harness-types", "harness-models.ts"), "utf8");
-  expect(models).toContain("ampCodeModelSlugs");
+  expect(models).toContain("claudeCodeModelSlugs");
   expect(models).not.toContain("projects/");
 
   const catalog = await runCli(["workflow", "catalog"], env, { cwd: root });
@@ -204,7 +204,7 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   expect(catalog.stdout).toContain("prism workflow models");
   expect(catalog.stdout).toContain("Installed harness slugs:");
 
-  const listed = await runCli(["workflow", "models", "--worker", "amp-code", "--json"], env, { cwd: root });
+  const listed = await runCli(["workflow", "models", "--worker", "claude-code", "--json"], env, { cwd: root });
   expect(listed.exitCode).toBe(0);
   const listedJson = JSON.parse(listed.stdout) as {
     snapshotPresent: boolean;
@@ -212,12 +212,12 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   };
   expect(listedJson.snapshotPresent).toBe(true);
   expect(listedJson.harnesses).toHaveLength(1);
-  expect(listedJson.harnesses[0]?.worker).toBe("amp-code");
+  expect(listedJson.harnesses[0]?.worker).toBe("claude-code");
   expect(listedJson.harnesses[0]?.modelCount).toBeGreaterThan(0);
 
-  const queried = await runCli(["workflow", "catalog", "--query", "low"], env, { cwd: root });
+  const queried = await runCli(["workflow", "catalog", "--query", "sonnet"], env, { cwd: root });
   expect(queried.exitCode).toBe(0);
-  expect(queried.stdout).toMatch(/low/i);
+  expect(queried.stdout).toMatch(/sonnet/i);
 
   const unknownWorker = await runCli(["workflow", "models", "--worker", "not-a-worker"], env, { cwd: root });
   expect(unknownWorker.exitCode).not.toBe(0);
@@ -248,10 +248,10 @@ import { defineTask, defineWorkflow } from "prism";
 export const workflow = defineWorkflow({
   name: "typed-harness",
   tasks: [defineTask({
-    id: "amp",
+    id: "claude",
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
-    worker: { worker: "amp-code", model: "low" },
+    worker: { worker: "claude-code", model: "sonnet" },
   })],
 });
 `);
@@ -275,10 +275,10 @@ import { defineTask, defineWorkflow } from "prism";
 export const workflow = defineWorkflow({
   name: "bad-harness",
   tasks: [defineTask({
-    id: "amp",
+    id: "claude",
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
-    worker: { worker: "amp-code", model: "not-a-mode" },
+    worker: { worker: "claude-code", model: "not-a-mode" },
   })],
 });
 `);

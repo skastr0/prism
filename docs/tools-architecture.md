@@ -53,8 +53,8 @@ schemas, slot schemas, shared helpers, and tests where applicable.
 
 **Compiler DSL artifact**
 
-TypeScript that configures `prism`: agents, traits, orbits, toolspaces,
-modelspaces, plugin manifests, and other compile-time declarations.
+TypeScript that configures `prism`: agents, sops, tools, modelspaces,
+skillspaces, plugin manifests, and other compile-time declarations.
 
 ## Laws
 
@@ -214,8 +214,8 @@ plugin for `orbit-core` owns that runtime tool. `survey`, `beacon`, `scribe`, an
 
 ### Permission Lane
 
-Agents, traits, orbits, and toolspaces determine which harness-final tool
-names are visible to each agent.
+Compiled agent tool surfaces and harness bindings determine which
+harness-final tool names are visible in each target.
 
 For a generic permission, the agent receives permission to the owner tool.
 

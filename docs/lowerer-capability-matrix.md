@@ -70,7 +70,7 @@ The `mcpConfig` surface is `unsupported` on every harness.
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` (live dispatch verified, smoke fixture pending) |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | CLI runtime + skill inject | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
-| Cursor | `native-plugin-bundle` for commands, agents, hooks | plugin subagents | direct skills + plugin orbit skills | CLI runtime | plugin command hooks | none for tools | `compile-verified` (workflow worker live-dispatchable) |
+| Cursor | `native-plugin-bundle` for commands, agents, hooks | plugin subagents | direct skills + plugin sop skills | CLI runtime | plugin command hooks | none for tools | `compile-verified` (workflow worker live-dispatchable) |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | CLI runtime | plugin hooks | none for generated bundle | `compile-verified` |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |
 | Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none | `live-proven` (live dispatch verified, smoke fixture pending) |
@@ -79,7 +79,7 @@ The `mcpConfig` surface is `unsupported` on every harness.
 
 Factory Droid remains closed at `compile-verified` with no workflow worker.
 Cursor now has a prompt-injected Agent CLI workflow worker (`agent --print
---output-format stream-json`). Compile emits plugin subagents, orbit skills,
+--output-format stream-json`). Compile emits plugin subagents, sop skills,
 and Claude-shaped plugin command hooks into `plugins/local/prism-generated-*`.
 
 Gemini CLI is not a supported target. Antigravity CLI is the replacement target.
@@ -101,7 +101,7 @@ Official Antigravity CLI plugins are staged under
 `~/.gemini/antigravity-cli/plugins/<plugin_name>/` with root `plugin.json`,
 optional `hooks.json`, and optional `skills/`, `agents/`, and `rules/`
 directories. Prism follows that native bundle shape for compiled rules, agents,
-targeted skills, concrete orbit skills, and hooks. Antigravity skills surface as
+targeted skills, concrete sop skills, and hooks. Antigravity skills surface as
 slash commands, so Prism does not write a separate direct command-file surface;
 unsupported direct `targets.commands: ["antigravity-cli"]` declarations fail
 manifest validation instead of being silently dropped. Hook lowering is
@@ -129,7 +129,7 @@ exclusively. Compile-phase Kimi output is a generated user-scoped plugin bundle 
 `<kimi-root>/plugins/managed/prism-generated-<plugin>/` with `kimi.plugin.json`,
 plus a managed `<kimi-root>/plugins/installed.json` record so Kimi loads the
 plugin as an enabled user-scoped plugin.
-Targeted skills, concrete orbit skills, command workflows, and compiled agents
+Targeted skills, concrete sop skills, command workflows, and compiled agents
 lower as Kimi skills; compiled agents are role/workflow skills because official
 Kimi has no headless agent/sub-agent file surface. The Prism workflow worker loads
 the generated plugin's `skills/` directory via `--skills-dir` and runs the role
@@ -147,7 +147,7 @@ are user-scoped.
 
 Pi uses generated local packages under `<pi-settings-root>/packages/prism-generated-<plugin>/`
 and a managed `settings.json#packages` entry. Prism bundles targeted skills,
-orbit skills, prompt-template commands, context injection, hooks, and canonical
+sop skills, prompt-template commands, context injection, hooks, and canonical
 tools into that package. Compiled agents lower to the pi-agents markdown discovery
 surface: `~/.pi/agents/<name>.md` globally and `.pi/agents/<name>.md` for project
 scope.
@@ -182,7 +182,7 @@ delegation, or native Hermes Python plugins.
 
 Cursor compile emits a local plugin bundle under
 `~/.cursor/plugins/local/prism-generated-<plugin>/` with `.cursor-plugin/plugin.json`,
-`commands/`, `agents/` (subagent markdown), concrete orbit `skills/`, and
+`commands/`, `agents/` (subagent markdown), concrete sop `skills/`, and
 Claude-shaped plugin command hooks (`hooks/hooks.json` + wrappers). Prism does
 not manage Cursor tool config files or whole-file-own `~/.cursor/hooks.json`.
 Cursor documents Agent Skills under `.cursor/skills/` and `~/.cursor/skills/`,

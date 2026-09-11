@@ -9,7 +9,6 @@ Start with the [root README](../README.md) for the product tour. These documents
 - [`sdk-contract.md`](sdk-contract.md) — the `@skastr0/prism-sdk` public contract: compile manifest, refs, snapshot, stable JSON
 - [`artifact-contracts.md`](artifact-contracts.md) — generated artifact shapes per surface kind
 - [`hook-contract.md`](hook-contract.md) — hook events, matchers, and degradation semantics
-- [`skill-permission-traits.md`](skill-permission-traits.md) — how skills and permissions compose through traits
 - [`skillspaces.md`](skillspaces.md) — skill targeting across harnesses
 
 ## Workflows

@@ -16,8 +16,6 @@ Local global skill roots inspected:
 - Grok Build: not included in this snapshot
 - Factory Droid: not included in this snapshot
 
-The shared example skillspace lives at `examples/trait-orbit-contracts/deps/agent-core/skillspaces/global-skills.skillspace.ts`.
-
 Most skill names are identical across the inspected harnesses. The first skillspace records those common names with identical `opencode`, `claude-code`, and `codex-cli` target names, plus a small number of harness-specific entries:
 
 - OpenCode-only: `example-skill`, `policy-toml-guardrails`, `tiktok-creative-intelligence`

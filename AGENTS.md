@@ -38,23 +38,23 @@ Hermes first-party support is skills plus CLI tools. Shared skill files plus mat
 
 Claude Code is part of the `coding-harness` preset with compile-phase skills-directory plugin support. Prism emits one generated plugin under `<claude-root>/skills/prism-generated-<source-plugin>/` with `.claude-plugin/plugin.json` plus root-level `commands/`, `agents/`, `skills/`, and `hooks/` components. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` and are invoked via `prism tools invoke` (skill inject advertises them to agents). This is Prism's canonical generated-local Claude surface: it uses Claude's documented in-place skills-directory plugin autoload path instead of writing marketplace cache internals. Plugin skills and commands are namespaced by the generated plugin name, so Prism does not write direct `~/.claude/commands/` files for command artifacts. Skills-only plugins may still install shared skills directly into `~/.claude/skills/`; when a plugin also targets Claude compile surfaces, targeted skills are bundled into the generated plugin to avoid double-loading Prism-owned skill files.
 
-Antigravity CLI is part of the `coding-harness` preset with compile-phase plugin-bundle support. Prism emits one generated plugin under `<antigravity-root>/plugins/prism-generated-<source-plugin>/` using Antigravity's native root `plugin.json`, `hooks.json`, `rules/`, `agents/`, and `skills/` layout. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject. Managed skills and concrete orbit instances lower as plugin skills; official Antigravity CLI skills surface as slash commands, so Prism does not write direct command files and direct `targets.commands: ["antigravity-cli"]` fails manifest validation.
+Antigravity CLI is part of the `coding-harness` preset with compile-phase plugin-bundle support. Prism emits one generated plugin under `<antigravity-root>/plugins/prism-generated-<source-plugin>/` using Antigravity's native root `plugin.json`, `hooks.json`, `rules/`, `agents/`, and `skills/` layout. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject. Managed skills and concrete sop skills lower as plugin skills; official Antigravity CLI skills surface as slash commands, so Prism does not write direct command files and direct `targets.commands: ["antigravity-cli"]` fails manifest validation.
 
-Grok Build is part of the `coding-harness` preset. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, orbit skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml`; preset expansion is artifact-aware, so `targets.commands: ["coding-harness"]` skips Grok while direct `targets.commands: ["grok"]` remains invalid.
+Grok Build is part of the `coding-harness` preset. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, sop skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml`; preset expansion is artifact-aware, so `targets.commands: ["coding-harness"]` skips Grok while direct `targets.commands: ["grok"]` remains invalid.
 
-Factory Droid is part of the `coding-harness` preset with full compile-phase plugin-bundle support. Install-phase rules append/copy into `.factory` roots and install-phase commands still write `commands/`. Skills-only plugins still install shared skills directly into `.factory/skills/`; when a plugin also targets Factory compile surfaces, targeted skills are bundled into `<factory-root>/plugins/prism-generated-<source-plugin>/skills/` instead to avoid double-loading Prism-owned skill files. Compile-phase agents, orbit skills, and hooks lower into the same generated bundle using Factory's native plugin layout: `.factory-plugin/plugin.json`, root `droids/`, `skills/`, and `hooks/hooks.json`. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`. Prism does not patch `~/.factory/settings.json` for generated plugin bundles.
+Factory Droid is part of the `coding-harness` preset with full compile-phase plugin-bundle support. Install-phase rules append/copy into `.factory` roots and install-phase commands still write `commands/`. Skills-only plugins still install shared skills directly into `.factory/skills/`; when a plugin also targets Factory compile surfaces, targeted skills are bundled into `<factory-root>/plugins/prism-generated-<source-plugin>/skills/` instead to avoid double-loading Prism-owned skill files. Compile-phase agents, sop skills, and hooks lower into the same generated bundle using Factory's native plugin layout: `.factory-plugin/plugin.json`, root `droids/`, `skills/`, and `hooks/hooks.json`. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`. Prism does not patch `~/.factory/settings.json` for generated plugin bundles.
 
 Kimi Code is part of the `coding-harness` preset with compile-phase generated plugin support. The active Kimi Code target uses the current `~/.kimi-code` home exclusively. Prism emits one generated user-scoped plugin under `<kimi-root>/plugins/managed/prism-generated-<source-plugin>/` with `kimi.plugin.json`, plugin skills, session-start context, and hook wrappers, then registers it in `<kimi-root>/plugins/installed.json` so Kimi loads it as an enabled plugin. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject. Prism patches `<kimi-root>/config.toml -> [[hooks]]` for Kimi hooks because official Kimi plugins ignore hook fields. The current Moonshot-hosted Kimi Code CLI docs also support project-local `.kimi-code/skills/`, but Prism keeps generated Kimi plugin output global/user-scoped for now because Kimi plugin installs are user-scoped. Compiled agents lower honestly as role/workflow skills, not native agent files, because Kimi has no headless agent/sub-agent file surface. The Prism workflow worker drives Kimi with `--prompt --output-format stream-json` and loads the generated plugin's `skills/` directory via `--skills-dir`; Kimi's prompt mode does not accept `--yolo` or `--auto`, so headless tool-use automation is limited to single-prompt responses.
 
 Amp Code is part of the `coding-harness` preset with compile-phase native TypeScript plugin support. Prism emits one generated plugin under `.amp/plugins/prism-generated-<source-plugin>.ts` for project scope or `<amp-root>/plugins/prism-generated-<source-plugin>.ts` for global/system scope, lowers markdown commands with Amp's `registerCommand` API by appending the command prompt to the active thread, registers canonical tools with Amp's `registerTool` API, and lowers supported Prism hooks through Amp's `amp.on(...)` plugin events. Prism maps `tool.before -> tool.call`, `tool.after -> tool.result`, and `session.start -> session.start`; `session.end` fails closed because Amp does not expose a native session-end event. Compiled agents still lower as generated role skills rather than experimental custom Amp agent modes.
 
-Cursor is part of the `coding-harness` preset with compile-phase plugin-bundle support plus a workflow worker. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts, compiled agents, concrete orbit skills, and Prism hooks lower into one generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json`, `commands/`, `agents/`, `skills/`, and `hooks/hooks.json`. Compiled agents are Cursor plugin subagents (`name` / `description` / optional `model`); the Agent CLI has no `--agent` selector, so the workflow worker still prompt-injects identity. Cursor plugin hooks are Claude-shaped command scripts, not an SDK. Cursor Agent Skills stay docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Canonical tools lower into Prism's CLI tool runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`. The workflow worker runs `agent --print --output-format stream-json --trust` (default model `composer-2.5-fast`) and resumes via `--resume`. Per-agent skill permission visibility remains unsupported.
+Cursor is part of the `coding-harness` preset with compile-phase plugin-bundle support plus a workflow worker. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts, compiled agents, concrete sop skills, and Prism hooks lower into one generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json`, `commands/`, `agents/`, `skills/`, and `hooks/hooks.json`. Compiled agents are Cursor plugin subagents (`name` / `description` / optional `model`); the Agent CLI has no `--agent` selector, so the workflow worker still prompt-injects identity. Cursor plugin hooks are Claude-shaped command scripts, not an SDK. Cursor Agent Skills stay docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Canonical tools lower into Prism's CLI tool runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`. The workflow worker runs `agent --print --output-format stream-json --trust` (default model `composer-2.5-fast`) and resumes via `--resume`. Per-agent skill permission visibility remains unsupported.
 
-Devin CLI is part of the `coding-harness` preset. Install-phase rules append to `~/.config/devin/AGENTS.md` (project: root/project `AGENTS.md` via Devin's native discovery). Shared skills install into `~/.config/devin/skills/` or project `.devin/skills/`. Compile-phase concrete orbit skills lower as skills; hooks lower to Claude-compatible `hooks.v1.json` plus Prism-owned wrapper scripts under `hooks/`. Prism does **not** whole-file own `~/.config/devin/config.json` (user prefs and herdr hooks live there). PR1 does not manage primary agents or `devin plugins install`. Workflow worker runs `devin -p` with `--model` (default `swe-1-7`), `--permission-mode`, `--prompt-file`, `--export` ATIF session capture, and `-r` resume. Devin CLI has no `--agent-config`; identity stays in the prompt file.
+Devin CLI is part of the `coding-harness` preset. Install-phase rules append to `~/.config/devin/AGENTS.md` (project: root/project `AGENTS.md` via Devin's native discovery). Shared skills install into `~/.config/devin/skills/` or project `.devin/skills/`. Compile-phase concrete sop skills lower as skills; hooks lower to Claude-compatible `hooks.v1.json` plus Prism-owned wrapper scripts under `hooks/`. Prism does **not** whole-file own `~/.config/devin/config.json` (user prefs and herdr hooks live there). PR1 does not manage primary agents or `devin plugins install`. Workflow worker runs `devin -p` with `--model` (default `swe-1-7`), `--permission-mode`, `--prompt-file`, `--export` ATIF session capture, and `-r` resume. Devin CLI has no `--agent-config`; identity stays in the prompt file.
 
-Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
+Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete sop skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
-Oh My Pi (`omp`) is a distinct `coding-harness` target, not an alias for Pi. Global outputs live under `~/.omp/agent/`; project outputs live under `<project>/.omp/`. Prism writes rules, commands, compiled agents, managed skills, and concrete orbit skills to OMP's native discovery paths, and emits canonical tools plus hook wrappers through one generated TypeScript extension under `extensions/prism-generated-<source-plugin>/`. Workflow tasks invoke OMP scripting mode with `--mode json --print`, inject the compiled agent through `--append-system-prompt` (plugin-free tasks use a temp system prompt), pin `worker.model` as an `omp models --json` selector (`provider/id`), preserve harness-bound provider/thinking fields, map Prism permissions to OMP approval/tool flags, and resume only the exact captured OMP session during structured-output repair.
+Oh My Pi (`omp`) is a distinct `coding-harness` target, not an alias for Pi. Global outputs live under `~/.omp/agent/`; project outputs live under `<project>/.omp/`. Prism writes rules, commands, compiled agents, managed skills, and concrete sop skills to OMP's native discovery paths, and emits canonical tools plus hook wrappers through one generated TypeScript extension under `extensions/prism-generated-<source-plugin>/`. Workflow tasks invoke OMP scripting mode with `--mode json --print`, inject the compiled agent through `--append-system-prompt` (plugin-free tasks use a temp system prompt), pin `worker.model` as an `omp models --json` selector (`provider/id`), preserve harness-bound provider/thinking fields, map Prism permissions to OMP approval/tool flags, and resume only the exact captured OMP session during structured-output repair.
 
 ## Architecture invariants (owner doctrine — binding on all agents working in this repo)
 
@@ -211,9 +211,9 @@ prism/
 
 ## Compile pipeline (v0.1)
 
-prism has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, skillspaces, traits, agents, and orbits, and prism lowers them into per-harness artifacts.
+prism has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, sops, modelspaces, skillspaces, agents, and canonical tools, and prism lowers them into per-harness artifacts.
 
-In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description, refining schemas via slots, and adding capability-specific instructions. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool bindings plus ordered trait instructions; target lowerers do not need to understand trait or tool internals.
+In the converged language, **canonical tools own business logic**. A canonical tool declares a strict input/output contract and a portable implementation; traits and tool grants are gone, and lowering stops at ordinary resolved tool bindings. Target lowerers do not need to understand tool internals.
 
 ### Canonical source types
 
@@ -223,13 +223,11 @@ Canonical structured source artifacts are TypeScript-authored:
 |------|-------|------|
 | `identity` | `identities/<name>.identity.md` | Prose identity for a stable agent role |
 | `personality` | `personalities/<name>.personality.md` | Reusable personality policy (temperament, virtues, communication) |
-| `toolspace` | `toolspaces/<name>.toolspace.ts` | Logical tool vocabulary plus per-target concrete tool-name bindings |
 | `modelspace` | `modelspaces/<name>.modelspace.ts` | Logical model profiles plus per-target concrete model config blocks |
 | `skillspace` | `skillspaces/<name>.skillspace.ts` | Logical unmanaged or harness-native skill vocabulary plus per-target concrete skill names |
 | `tool` | `tools/<name>.tool.ts` | Canonical tool definition: strict input/output contract + portable handle implementation |
-| `trait` | `traits/<name>.trait.ts` | Canonical protocol/capability unit: slot declarations, canonical tool attachments, ordered instructions, skill permission intent, and logical access intent |
+| `sop` | `sops/<name>.sop.ts` | Type-safe procedure: phases with purpose, optional typed I/O contracts, acceptance criteria, and prose |
 | `agent` | `agents/<name>.agent.ts` | Canonical compiled agent definition |
-| `orbit` | `orbits/<name>.orbit.ts` | Higher-order recipe composing agents / other orbits with compile-time validation |
 
 Prose-heavy artifacts remain markdown-only by design: identities and personalities.
 
@@ -242,21 +240,14 @@ Helpers exported from `prism` include:
 ```ts
 import {
   agentRef,
-  orbitRef,
-  traitRef,
-  toolRef,
-  toolGroupRef,
   modelProfileRef,
   skillRef,
   skillspaceRef,
-  schemaSlot,
   type AgentSource,
   type ModelspaceSource,
-  type OrbitSource,
   type SkillspaceSource,
+  type SopSource,
   type ToolSource,
-  type ToolspaceSource,
-  type TraitSource,
 } from "prism";
 ```
 
@@ -267,206 +258,50 @@ export default {
   name: "builder",
   identity: "builder",
   model: modelProfileRef("agent-core", "default-models", "builder"),
-  traits: ["submittable", "self-assessing"],
-  access: {
-    toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
-    tools: [toolRef("agent-core", "workspace-tools", "run_shell")],
-  },
+  skills: [skillRef("testing")],
 } satisfies AgentSource;
 ```
 
 Dep-alias rebinding remains the cross-plugin indirection mechanism. Bare refs resolve locally; prefixed refs resolve through `plugin.json -> deps`.
 
-### Traits and agent capability conformance
+### SOPs
 
-Traits are **internal compile-time source artifacts**. They do not lower into target harness artifacts, they are not installable skill-like outputs, and they are not a standalone `plugin.json` target family.
+SOPs are type-safe procedures. A SOP says what must be true; it never names who executes it, with what tool, or in what runtime. Each phase declares a `purpose`, an optional typed `input`/`output` (Effect Schema), optional `acceptance_criteria`, an optional `escalation`, and a prose `body`.
 
-Agents declare capability conformance with `traits: []`. The canonical current shape is a plain trait ref for simple conformance, or an object binding when the agent must provide tool slot/config values.
+```ts
+import { Schema } from "effect";
+import type { SopSource } from "prism";
 
-Each trait may:
+export default {
+  name: "beacon",
+  description: "Marketing method.",
+  phases: [
+    {
+      name: "explore",
+      purpose: "Map the space before committing.",
+      input: Schema.Struct({ brief: Schema.String }),
+      output: Schema.Struct({ summary: Schema.String }),
+      acceptance_criteria: ["Positioning hypothesis is falsifiable"],
+      escalation: "Ask a human when the audience is unclear.",
+      body: "Read the brief.",
+    },
+  ],
+} satisfies SopSource;
+```
 
-- `slots` — declare the binding contract for agent-provided schema/config values
-- `tools` — attach canonical tools by `ref`, optionally overriding description or refining input/output schemas (business-logic override is not allowed)
-- `instructions` — add capability-specific guidance to the generated agent in the same order the agent binds traits
-- `access.skills` / `inject.skills` — grant permission or visibility for skills without making them direct agent dependencies
-- `require.tools` / `require.skills` — assert that the final combined synthetic surface contains those resolved tools or concrete skills
-- `access` — declare logical tool / tool-group / skill intent that resolves through toolspaces and skillspaces for the selected harness target
+Concrete sop instances lower into harness-intelligible skills at `skills/<sop-name>/SKILL.md`; the generated `sops` refs module under `prism/refs/sops` exposes each typed phase for `wf.phase(...)` workflow binding.
 
-Agent-level `skills` are direct dependencies and render as recommended skills in the generated agent body. Use `skillRef(...)` for managed plugin skills in `skills/<name>/SKILL.md`, and `skillspaceRef(...)` when referencing unmanaged or harness-native skills through a target-specific skillspace. Plain skill strings are not accepted in the compile language.
+### Modelspaces and skillspaces
 
-Canonical tools are the semantic interface. The compiler resolves canonical tool refs, merges trait attachments with the canonical base, validates agent-provided slot bindings fail-closed, materializes ordinary resolved synthetic tool modules, and hands those to lowerers just like any other resolved tool binding.
+Modelspaces and skillspaces move target-bound model/skill strings out of semantic agent definitions.
 
-The compiler resolves traits and their attached canonical tools through the same cross-plugin reference model as agents, toolspaces, and modelspaces. It combines explicit agent access intent with trait access intent, and validates the final surface fail-closed.
+Modelspaces define logical model profiles plus per-target concrete model config blocks. Agents reference model profiles through `modelProfileRef(...)`. Resolution is target-aware and fail-closed if the selected target has no binding.
 
-### Toolspaces and modelspaces
-
-Toolspaces, modelspaces, and skillspaces move target-bound tool/model/skill strings out of semantic agent definitions.
-
-#### Toolspace
-
-Toolspaces define:
-
-- logical tools
-- logical groups
-- per-target concrete tool names
-
-Traits and agents reference logical tool refs / tool-group refs. Resolution is target-aware and fail-closed if a required mapping is missing.
-
-#### Modelspace
-
-Modelspaces define:
-
-- logical model profiles
-- per-target concrete model config blocks
-
-Agents reference model profiles through `modelProfileRef(...)`. Resolution is target-aware and fail-closed if the selected target has no binding.
-
-#### Skillspace
-
-Skillspaces define:
-
-- logical unmanaged or harness-native skills
-- per-target concrete skill names
-
-Agents and traits reference skill permissions through `skillRef(...)` or `skillspaceRef(...)`. Resolution is target-aware and fail-closed if a managed skill is not targeted to the compile harness or if a skillspace mapping is missing.
+Skillspaces define logical unmanaged or harness-native skills plus per-target concrete skill names. Agents reference skill permissions through `skillRef(...)` or `skillspaceRef(...)`. Resolution is target-aware and fail-closed if a managed skill is not targeted to the compile harness or if a skillspace mapping is missing.
 
 See `docs/skillspaces.md` for the current global OpenCode / Claude Code / Codex skill inventory and the `skillRef(...)` versus `skillspaceRef(...)` authoring rule.
 
-### Parameterized orbit templates
-
-Orbit files can be either:
-
-- **templates** — declare `parameters:` and stay source-only until another orbit binds them
-- **instances** — omit `parameters:` and compile directly into concrete target skills
-
-Template binding is explicit at the phase site via `orbit_binding`:
-
-```ts
-import type { OrbitSource } from "prism";
-
-export default {
-  name: "experiment",
-  description: "Reusable experiment orbit for ${H}",
-  parameters: [
-    { name: "H", description: "Hypothesis being tested" },
-    { name: "App", description: "Application context" },
-  ],
-  phases: [
-    {
-      name: "Run experiment for ${App}",
-      notes: {
-        Input: "Hypothesis ${H}",
-        Done: "Decision recorded for ${App}",
-      },
-    },
-  ],
-} satisfies OrbitSource;
-```
-
-```ts
-import { orbitRef, type OrbitSource } from "prism";
-
-export default {
-  name: "release-experiment",
-  description: "Concrete release experiment",
-  phases: [
-    {
-      name: "Experiment",
-      orbit_binding: {
-        orbit: orbitRef("experiment"),
-        bindings: {
-          H: "Async commits reduce latency",
-          App: "release pipeline",
-        },
-      },
-    },
-  ],
-} satisfies OrbitSource;
-```
-
-Compile-time rules:
-
-- template placeholders use `${Name}` and must match declared `parameters`
-- direct `phase.orbit` references may only target non-parameterized orbits
-- parameterized orbit references must use `orbit_binding`
-- required parameters must be bound, unknown bindings fail the compile
-- agent assignment refs and trait requirement refs may not contain template placeholders
-- lowering emits only concrete skills with substituted values; templates themselves do not become target-side runtime artifacts
-
-### Orbit phase assignment and capability requirements
-
-Orbit phases act as compile-time orchestration contracts over assigned agents.
-
-Each phase may declare:
-
-- `agents: []` — one or more concrete agent refs assigned to the phase
-- `requires:` — one or more requirement blocks using:
-  - `all: []` — trait refs every matching assigned agent must contain
-  - `min:` — minimum number of assigned agents that must satisfy `all` (defaults to `1`)
-
-Example:
-
-```ts
-import { agentRef, traitRef, type OrbitSource } from "prism";
-
-export default {
-  name: "delivery-contract",
-  description: "Compile-time orchestration contract",
-  phases: [
-    {
-      name: "Implement change",
-      agents: [agentRef("builder")],
-      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
-    },
-    {
-      name: "Hand off work",
-      agents: [agentRef("builder"), agentRef("reviewer")],
-      requires: [{ all: [traitRef("submittable")], min: 2 }],
-    },
-  ],
-} satisfies OrbitSource;
-```
-
-Validation rules:
-
-- every assigned agent ref must resolve
-- every required trait ref must resolve
-- for each requirement, the compiler counts assigned agents whose canonical trait set includes **all** required traits
-- compile fails if that count is less than `min`
-
-### Orbit tool permissions
-
-Orbit files may assign canonical tool permissions to agents assigned in that orbit. Permissions are protocol-agnostic: the compiler does not know whether the tool backs a work-item board, a queue, Matrix transport, an approval ledger, or something else.
-
-Use `bind` when the orbit wants a generated wrapper to pre-fill canonical-tool input fields:
-
-```ts
-import { agentRef, type OrbitSource } from "prism";
-
-export default {
-  name: "delivery-contract",
-  description: "Compile-time orchestration contract",
-  phases: [{ name: "Implement change", agents: [agentRef("builder")] }],
-  tool_permissions: [
-    {
-      agents: [agentRef("builder")],
-      tools: [
-        {
-          ref: "protocol-core:create_glyph",
-          as: "create_glyph",
-          bind: { board: "project-alpha" },
-        },
-      ],
-    },
-  ],
-} satisfies OrbitSource;
-```
-
-The generated wrapper omits bound fields from the agent-facing input schema and injects them when it calls the canonical tool handle. Bound values must be JSON-serializable. Protocol-specific names such as board ids, queue names, rooms, or channels belong in plugin-owned tools and bindings, not in the compiler.
-
-Lowered orbit skills reflect the assigned agents (`agent \`builder\``, `agents \`builder\`, \`reviewer\``) but do **not** expose internal trait requirement machinery to the target harness.
-
-### Canonical tools and trait attachments
+### Canonical tools
 
 Canonical tools are first-class source artifacts in `tools/`. Each canonical tool owns a strict input/output contract and a portable handle implementation:
 
@@ -485,55 +320,7 @@ export default {
 } satisfies ToolSource;
 ```
 
-Traits attach canonical tools by `ref` and can refine description or input/output schemas via slots. The canonical handle is always reused; traits cannot override business logic:
-
-```ts
-import { Schema } from "effect";
-import { schemaSlot, type AgentSource, type ToolSource, type TraitSource } from "prism";
-
-export const submitReviewTool = {
-  name: "submit_review",
-  description: "Submit review findings.",
-  input: Schema.Struct({ summary: Schema.String }),
-  output: Schema.Struct({ acknowledged: Schema.Boolean }),
-  slots: {
-    verdict: schemaSlot({ description: "Agent-specific review verdict fields" }),
-  },
-  async handle(input, context) {
-    return { acknowledged: true };
-  },
-} satisfies ToolSource;
-
-export const reviewable = {
-  name: "reviewable",
-  tools: {
-    submit_review: { ref: "submit_review" },
-  },
-} satisfies TraitSource;
-
-export default {
-  name: "security-reviewer",
-  description: "Security reviewer variant",
-  identity: "reviewer",
-  traits: [
-    {
-      trait: "reviewable",
-      tools: {
-        submit_review: {
-          slots: {
-            verdict: Schema.Struct({
-              summary: Schema.String,
-              severity: Schema.Literal("low", "medium", "high"),
-            }),
-          },
-        },
-      },
-    },
-  ],
-} satisfies AgentSource;
-```
-
-During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
+During compile, prism resolves canonical tool refs, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, and materializes ordinary resolved tool modules for lowering.
 
 Generated canonical tool execution is target-capability-gated. OpenCode, Amp Code, Pi, and Oh My Pi expose executable tools through native `registerTool` (or equivalent) plugin/extension APIs. Claude Code, Antigravity CLI, Kimi Code, Grok, Factory Droid, Hermes, Codex CLI, and Cursor expose tools through the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`), invoked as `prism tools invoke <plugin> <tool-name> --input '<json>'`; harnesses that inject tools advertise that surface to agents.
 
@@ -556,8 +343,6 @@ Runtime-context guarantees for generated OpenCode adapters remain:
 - normalized workspace fields: `workingDirectory`, `repoRoot`
 - optional when the harness/runtime surfaces them: `sessionTitle`, `durationMs`, `cost`
 
-Agents can still layer inline access/permission overrides on top of trait-owned access intent, but those overrides do not silently remove mandatory trait-owned tool or access requirements.
-
 ### Generated OpenCode plugin layout
 
 On compile, prism emits one compiler-owned OpenCode plugin **per compiled source plugin** under the selected OpenCode root:
@@ -577,7 +362,7 @@ Synthetic tool names are scoped by source plugin + agent: `<source-plugin>_<agen
 
 ### Cross-plugin references
 
-Agents, traits, toolspaces, modelspaces, and orbit phases can reference parts from other plugins:
+Agents, sops, modelspaces, and skillspaces can reference parts from other plugins:
 
 ```json
 {
@@ -586,10 +371,10 @@ Agents, traits, toolspaces, modelspaces, and orbit phases can reference parts fr
   },
   "targets": {
     "agents": ["opencode"],
-    "orbits": ["opencode"],
+    "sops": ["opencode"],
     "tools": ["opencode"],
-    "toolspaces": ["opencode", "claude-code"],
-    "modelspaces": ["opencode", "claude-code"]
+    "modelspaces": ["opencode", "claude-code"],
+    "skillspaces": ["opencode", "claude-code"]
   }
 }
 ```
@@ -613,9 +398,8 @@ Canonical example:
   },
   "targets": {
     "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "sops": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
     "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
     "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
     "hooks": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"]
   }
@@ -624,8 +408,8 @@ Canonical example:
 
 Notes:
 
-- compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
-- `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
+- compile-phase targets are `agents`, `sops`, `tools`, `modelspaces`, `skillspaces`, and `hooks`
+- `sops`, `tools`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
 - agents that bind canonical tools should target harnesses with executable generated-tool support (native `registerTool` and/or CLI runtime + skill inject): OpenCode, Amp, Pi, OMP, Claude Code, Antigravity CLI, Kimi Code, Grok, Factory Droid, Hermes, Codex CLI, Cursor
 
 ### CLI
@@ -673,7 +457,7 @@ prism plan ./my-plugin --harness claude-code
 #### OpenCode
 
 - Writes `<opencode-root>/agents/<name>.md` for each compiled agent with composed body
-- Writes `<opencode-root>/skills/<orbit-name>/SKILL.md` for each concrete orbit instance
+- Writes `<opencode-root>/skills/<name>/SKILL.md` for each concrete sop instance
 - Patches `agent.<name>` in `<opencode-root>/opencode.json` with compiler-owned model/behavior keys
 - Syncs `<opencode-root>/plugins/prism-generated-<source-plugin>/` for synthetic tool plumbing when any compiled agent binds typed tool slots
 
@@ -682,14 +466,14 @@ prism plan ./my-plugin --harness claude-code
 - Writes one generated skills-directory plugin bundle per compiled source plugin under `<claude-root>/skills/prism-generated-<source-plugin>/`
 - Writes compiled agents into the generated plugin's `agents/<name>.md` with Claude-style YAML frontmatter
 - Supports `description`, `model`, `temperature`, `top_p`, and `allowed-tools` from compile output
-- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Writes targeted managed skills and concrete sop skills into the generated plugin's `skills/<name>/SKILL.md`
 - Writes command artifacts into the generated plugin's root `commands/` component; Claude exposes plugin commands/skills under a namespaced slash-command form such as `/prism-generated-my-plugin:review`
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); agents invoke via `prism tools invoke` (skill inject advertises the surface)
 
 #### Hermes
 
 - Writes targeted plugin skills into `<hermes-root>/skills/<skill-name>/...`
-- Writes concrete orbit instances into `<hermes-root>/skills/<orbit-name>/SKILL.md`
+- Writes concrete sop skills into `<hermes-root>/skills/<sop-name>/SKILL.md`
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); invoke via `prism tools invoke`
 - A Hermes profile is treated as a harness root for skills: use `--compile-root ~/.hermes/profiles/<name>` for `refresh` or `plan` (tools stay under shared `PRISM_HOME`)
 - Fails closed for compiled agents and hooks; SOUL/personality lowering, runtime delegation, and native Hermes Python plugins are intentionally out of scope
@@ -698,15 +482,15 @@ prism plan ./my-plugin --harness claude-code
 
 - Writes one generated plugin bundle per compiled source plugin under `<antigravity-root>/plugins/prism-generated-<source-plugin>/`
 - Writes root `plugin.json`, plugin `rules/context.md`, and compiled agents into `agents/<name>.md` with Antigravity frontmatter
-- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Writes targeted managed skills and concrete sop skills into the generated plugin's `skills/<name>/SKILL.md`
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject
 - Emits root `hooks.json` and bundled hook wrappers for Prism hook DSL events mapped to Antigravity hook names: `tool.before`/`tool.after`/`session.start`/`session.end` become `PreToolUse`/`PostToolUse`/`PreInvocation`/`Stop`. The wrapper preserves the native Antigravity payload at `event.native`, but Prism does not expose Antigravity-only `PostInvocation`, `injectSteps`, or `terminationBehavior` as compile-language hook outputs.
-- Does not lower direct command files; commands should be modeled as plugin skills/orbits, and direct `targets.commands: ["antigravity-cli"]` fails manifest validation
+- Does not lower direct command files; commands should be modeled as plugin skills/sops, and direct `targets.commands: ["antigravity-cli"]` fails manifest validation
 #### Grok Build
 
 - Writes one generated plugin bundle per compiled source plugin under `<grok-root>/plugins/prism-generated-<source-plugin>/`
 - Writes compiled agents into the generated plugin's `agents/<name>.md` with Grok frontmatter overrides from `targets.grok`
-- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Writes targeted managed skills and concrete sop skills into the generated plugin's `skills/<name>/SKILL.md`
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject
 - Emits `hooks/hooks.json` and bundled hook wrappers using Grok hook event names and Grok deny output for blocking `tool.before` hooks
 - Does not install commands or patch `config.toml` in PR1
@@ -715,7 +499,7 @@ prism plan ./my-plugin --harness claude-code
 
 - Writes one generated plugin bundle per compiled source plugin under `<factory-root>/plugins/prism-generated-<source-plugin>/`
 - Writes `.factory-plugin/plugin.json` plus compiled droids into the generated plugin's `droids/<name>.md` with Factory frontmatter overrides from `targets.factory-droid`; known Factory tool categories are expanded to concrete tool arrays in droid frontmatter
-- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Writes targeted managed skills and concrete sop skills into the generated plugin's `skills/<name>/SKILL.md`
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/`
 - Emits `hooks/hooks.json` and bundled hook wrappers using Factory hook event names and `${DROID_PLUGIN_ROOT}` wrapper commands
 - Bundles targeted skills and direct `skillRef(...)` dependencies, but fails closed for permission-only skill visibility because Factory's documented droid frontmatter does not expose per-droid skill allowlists
@@ -726,7 +510,7 @@ prism plan ./my-plugin --harness claude-code
 - Writes one generated user-scoped plugin bundle per compiled source plugin under `<kimi-root>/plugins/managed/prism-generated-<source-plugin>/`
 - Writes `kimi.plugin.json` with plugin `skills` and optional `sessionStart.skill`
 - Registers the generated plugin in `<kimi-root>/plugins/installed.json`, preserving user plugin enable/disable state
-- Writes targeted managed skills, concrete orbit instances, command workflows, and compiled agent role/workflow fallbacks into plugin `skills/<name>/SKILL.md`
+- Writes targeted managed skills, concrete sop skills, command workflows, and compiled agent role/workflow fallbacks into plugin `skills/<name>/SKILL.md`
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject
 - Emits hook wrappers under plugin `hooks/` and patches `<kimi-root>/config.toml` with managed `[[hooks]]` entries using Kimi hook event names
 - Keeps project scope unsupported because official Kimi plugin installs are user-scoped
@@ -736,7 +520,7 @@ prism plan ./my-plugin --harness claude-code
 
 - Writes one generated local plugin per compiled source plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/`
 - Writes compiled agents into the generated plugin's `agents/<name>.md` as Cursor subagents (`name`, `description`, optional `model`)
-- Writes concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Writes concrete sop skills into the generated plugin's `skills/<name>/SKILL.md`
 - Installs command artifacts through the same generated plugin's `commands/`
 - Emits `hooks/hooks.json` plus bundled hook wrappers using Cursor plugin hook event names (`preToolUse`, `sessionStart`, …). These are command scripts, not an SDK.
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); invoke via `prism tools invoke`
@@ -748,7 +532,7 @@ prism plan ./my-plugin --harness claude-code
 - Writes one generated package per compiled source plugin under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`
 - Patches `<pi-settings-root>/settings.json` with a compiler-owned `packages` entry pointing at `./packages/prism-generated-<source-plugin>`
 - Writes compiled agents as pi-agents markdown at `~/.pi/agents/<name>.md` globally and `.pi/agents/<name>.md` for project scope
-- Writes targeted managed skills and concrete orbit instances into package `skills/<name>/SKILL.md`
+- Writes targeted managed skills and concrete sop skills into package `skills/<name>/SKILL.md`
 - Writes install-phase command markdown as Pi prompt templates under package `prompts/`
 - Injects targeted rules/context through package `extensions/prism-extension.js` using Pi's extension event API
 - Emits canonical `tools/*.tool.ts` through the same generated Pi extension using `registerTool` (and the shared CLI catalog under `PRISM_HOME` for cross-plugin invoke)
@@ -757,7 +541,7 @@ prism plan ./my-plugin --harness claude-code
 #### Oh My Pi
 
 - Writes compiled agents to `<omp-root>/agents/<name>.md`, with global root `~/.omp/agent` and project root `<project>/.omp`
-- Writes install-phase commands to `<omp-root>/commands/` and targeted managed skills plus concrete orbit instances to `<omp-root>/skills/`
+- Writes install-phase commands to `<omp-root>/commands/` and targeted managed skills plus concrete sop skills to `<omp-root>/skills/`
 - Injects targeted rules/context through the generated extension `extensions/prism-generated-<source-plugin>/index.ts`
 - Emits canonical `tools/*.tool.ts` through the same generated OMP extension using the native `registerTool` API (and the shared CLI catalog under `PRISM_HOME` for cross-plugin invoke)
 - Emits hook wrappers under the generated extension's `hooks/` directory and wires supported Prism hook events to OMP extension events
@@ -765,13 +549,13 @@ prism plan ./my-plugin --harness claude-code
 
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
 
-Orbit source artifacts are source-language constructs. For the current supported targets, concrete orbit instances lower into harness-intelligible skills at `skills/<orbit-name>/SKILL.md`; prism does not emit generic target-side `orbits/` folders. A future harness may add a native orbit surface, but that would be a target-specific capability rather than the default output shape.
+SOP source artifacts are source-language constructs. For the current supported targets, concrete sop instances lower into harness-intelligible skills at `skills/<sop-name>/SKILL.md`; prism does not emit generic target-side `sops/` folders. A future harness may add a native sop surface, but that would be a target-specific capability rather than the default output shape.
 
 ### Compile cache and lockfile
 
 - Successful non-dry-run compiles write a plugin-local cache under `<plugin>/dist/.prism-cache/`
 - Each compiled agent cache entry is keyed by `sha256(source-fingerprint + target + scope)`
-- The source fingerprint includes the agent source plus the referenced identity, personality, trait bindings, and toolspace/modelspace sources that affect composition for that agent
+- The source fingerprint includes the agent source plus the referenced identity, personality, and modelspace/skillspace sources that affect composition for that agent
 - Cache hits skip agent resolution/composition and reuse the serialized `ComposedAgent`; cache misses rebuild only that agent
 - Successful non-dry-run compiles also write `<plugin>/prism.lock`
 
@@ -780,7 +564,7 @@ Orbit source artifacts are source-language constructs. For the current supported
 1. Add a lowerer module under `src/compile/lowerers/`
 2. Wire it into `src/compile/pipeline.ts`
 3. Declare the harness surface contract in `src/lowerer-capabilities.ts`, including compile target capabilities and whether the lowerer uses native plugin APIs, native plugin bundles, CLI tool runtime (`direct-file` under `PRISM_HOME/runtime/tools`), direct files, config patches, or unsupported surfaces
-4. Ensure canonical toolspace/modelspace bindings have a corresponding `targets.<id>` block for the new harness
+4. Ensure canonical modelspace/skillspace bindings have a corresponding `targets.<id>` block for the new harness
 
 ### Refresh + compile unified
 
@@ -799,7 +583,6 @@ Reserved for future:
 
 - Git / HTTP URL deps (currently local paths only)
 - richer permission/access ownership after the next glyph
-- orbit runtime orchestration (heartbeat manager stays runtime state in opencode-config)
 
 ## Plugin Structure
 
@@ -1055,9 +838,9 @@ You are a code review specialist...
 Normative guardrail for changes to Prism workflows:
 
 - Workflows consume installed/compiled Prism truth: compile manifests, installed harness artifacts, snapshots, and generated refs.
-- Compiler/install is the only layer that reads plugin source, resolves dependencies, composes traits, and lowers artifacts.
+- Compiler/install is the only layer that reads plugin source, resolves dependencies, composes agents, and lowers artifacts.
 - Workflow runtime and generated refs must not import plugin source trees, scan `prism-plugins`, or expose plugin source file paths when hashes/manifests suffice.
-- Prism core has no default orbit or business ontology. Forge, Tower, Glyphs, Booth, Quasar, Beacon, Scribe, Atelier, and similar concepts are userland plugin vocabulary unless they appear only as explicit fixtures/examples.
+- Prism core has no default business ontology. Forge, Tower, Glyphs, Booth, Quasar, Beacon, Scribe, Atelier, and similar concepts are userland plugin vocabulary unless they appear only as explicit fixtures/examples.
 - Resource claims, file-edit semaphores, proposal-layer editing, Git/worktree policy, and domain-specific side-effect rules are plugin/service concerns, not Prism workflow core by default.
 
 ## Development Workflow

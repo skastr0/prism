@@ -26,7 +26,7 @@ The worker is a real harness process — `claude-code`, `codex-cli`, `grok`, `ki
 
 ## The generated environment
 
-Workflows import from `prism` (the DSL). Compiled plugins add `prism/refs` (typed agents, modelspaces, skills, traits, orbits, and tools). Installed harnesses add `prism/harnesses` (live model slugs):
+Workflows import from `prism` (the DSL). Compiled plugins add `prism/refs` (typed agents, modelspaces, skills, sops, and tools). Installed harnesses add `prism/harnesses` (live model slugs):
 
 ```ts
 import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
@@ -36,7 +36,7 @@ import { ampCodeModelSlugs } from "prism/harnesses";
 These imports resolve through a **generated tsconfig**, not your project's own module resolution:
 
 - `prism workflow refresh-harness-types` discovers models from local harness caches/CLIs and writes a **global** cache at `~/.prism/state/harness-types/` (not project-keyed). That file path-maps `prism/harnesses` and augments `worker.model` so plugin-free workflows typecheck against what is actually installed.
-- `prism refresh <plugin-path>` is optional. When you have a plugin it writes the refs surface (`generated/{agents,models,skills,traits,orbits,tools}.ts`) and path-maps `prism/refs`.
+- `prism refresh <plugin-path>` is optional. When you have a plugin it writes the refs surface (`generated/{agents,models,skills,sops,tools}.ts`) and path-maps `prism/refs`.
 - `prism workflow scaffold <name>` writes a validating starter into `~/.prism/workflows/` (never inside the repo it drives). With no compiled refs it uses `anonymousWorkflowAgent`.
 - `prism workflow typecheck <file>` and `prism workflow validate <file>` use that generated environment automatically.
 
@@ -82,7 +82,7 @@ Every field:
 | `agent` | `WorkflowAgentRef` | Which compiled Prism agent persona executes the prompt |
 | `prompt` | `string` | The task brief; `phase()` may prepend contract framing |
 | `output` | Effect `Schema` | The worker's final answer must decode into this — validated, not hoped |
-| `phase` | `string?` | Grouping label for monitor/trace; `phase()` sets `<orbit>:<name>` |
+| `phase` | `string?` | Grouping label for monitor/trace; `phase()` sets `<sop>:<name>` |
 | `cacheKey` | `string?` | Stable key for the durable task cache; bump it (`-v2`) to force re-execution |
 | `worker` | `WorkflowTaskWorkerOptions?` | Worker, model, permission, timeout, retry (falls back to CLI flags) |
 | `finish` | `WorkflowFinishOptions?` | Acceptance criteria and repair budgets |
@@ -262,41 +262,29 @@ Composition is plain Effect — everything composes the way Effect always does:
 
 ## Phases
 
-`wf.phase(contract, fn)` scopes a stretch of a dynamic workflow under a named phase of an orbit:
+`wf.phase(contract, fn)` scopes a stretch of a dynamic workflow under a named phase of a SOP. The generated `sops.<plugin>.<sop>.phases.<phase>` value from `prism/refs/sops` satisfies the contract directly:
 
 ```ts
+import { sops } from "prism/refs/sops";
+
 const report = yield* wf.phase(
-  {
-    name: "review",
-    orbit: "forge",
-    plugin: "forge",
-    agents: { builder, reviewer },       // the cast available inside this phase
-    output: BuildReport,                 // default output schema for phase tasks
-    criteria: [                          // phase-level finish criteria (judged)
-      "Diff compiles",
-      "No scope creep beyond the glyph",
-    ],
-    framing: {                           // composed into every task prompt
-      telos: "Ship the committed glyph",
-      when: "After build completes",
-      coordination: "Reviewer never edits; builder never approves",
-      escalation: "Stop on contract drift",
-    },
-  },
+  sops.beacon.beacon.phases.review,
   (ctx) =>
     Effect.gen(function* () {
-      const built = yield* ctx.task({ id: "build", agent: ctx.agents.builder, prompt: "..." });
-      return yield* ctx.task({ id: "review", agent: ctx.agents.reviewer, prompt: "..." });
+      const built = yield* ctx.task({ id: "build", prompt: "..." });
+      return yield* ctx.task({ id: "review", prompt: "..." });
     }),
 );
 ```
 
+An inline contract may override the phase's typed `input`/`output`, add `criteria`, and set `framing` (`purpose`, `when`, `escalation`). Tasks may pin an `agent`, or omit it: `defineTask` normalizes a missing agent to `anonymousWorkflowAgent`.
+
 What the phase machinery does:
 
-- **Framing preamble** — each `ctx.task` prompt is prefixed with `## Phase forge:review` plus the `telos` / `when` / `coordination` / `escalation` lines. Opt out per task with `brief: false`.
+- **Framing preamble** — each `ctx.task` prompt is prefixed with `## Phase beacon:review` plus the phase's `purpose` / `when` / `escalation` lines. Opt out per task with `brief: false`.
 - **Criteria inheritance** — the phase's `criteria` become an inherited judge criterion on every task (rejecting empty/trivial output against the phase goals). Task-level `finish.criteria` are appended after it; set `finish: { inherit: false }` to drop the inherited one.
-- **Defaults with overrides** — tasks default to the phase's `output` schema and `<orbit>:<name>` phase label; both can be overridden per task (`output`, `phase`).
-- **Tracing** — the whole phase runs inside a span named `workflow.phase.<orbit>:<name>` with orbit/phase attributes.
+- **Defaults with overrides** — tasks default to the phase's `output` schema and `<sop>:<name>` phase label; both can be overridden per task (`output`, `phase`).
+- **Tracing** — the whole phase runs inside a span named `workflow.phase.<sop>:<name>` with sop/phase attributes.
 
 `phase(runtime, contract, fn)` is also exported standalone; `wf.phase(contract, fn)` is the bound form.
 

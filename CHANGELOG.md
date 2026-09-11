@@ -9,6 +9,52 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## Unreleased
+
+### Added
+
+- **SOPs** — `sops/<name>.sop.ts` source artifacts: type-safe procedures whose
+  phases declare a `purpose`, optional typed `input`/`output` contracts
+  (Effect Schema), `acceptance_criteria`, an optional `escalation`, and prose
+  `body`. Concrete sop instances lower into `skills/<sop-name>/SKILL.md` on
+  every skill harness, and the generated `prism/refs/sops` module exposes each
+  typed phase for `wf.phase(...)` workflow binding.
+- **Agent-optional workflow tasks** — `defineTask`/`ctx.task` accept a missing
+  `agent`; it normalizes to `anonymousWorkflowAgent`, so a workflow can
+  dispatch a bare worker with a prompt and model without compiled plugin refs.
+- **Typed phase input** — `ctx.task({ input })` decodes against the bound SOP
+  phase's input contract before dispatch; a failed decode surfaces as
+  `WorkflowTaskInputError` and the decoded value is rendered into the task
+  prompt. Phase criteria become inherited judge criteria unless
+  `finish: { inherit: false }`.
+
+### Removed
+
+- **The `orbit` primitive** — `orbits/*.orbit.ts` sources, orbit refs,
+  parameterized orbit templates, orbit phase agent assignment/requirements,
+  orbit tool permissions, orbit skill lowering, `prism/refs/orbits`,
+  `--orbit` in the workflow catalog, orbit manifest projections, and
+  `OrbitValidationError`. Typed procedures are sops; compile-time agent
+  orchestration contracts are gone.
+- **Traits, toolspaces, agent access, and tool grants** — the trait primitive,
+  toolspace sources and refs, agent `access`/`traits`, and every allow/deny
+  tool or skill surface Prism used to emit into harness configs. Canonical
+  tools remain the business-logic surface and lower through ordinary resolved
+  bindings.
+- **Orbit-era side surfaces** — signal emitters, pulsar checkpoints, orbit
+  `definitions`, and hook toolspace matchers (`toolspace-tool` /
+  `toolspace-group`, `toolRef` bridging).
+
+### Changed
+
+- **Compile manifest schema** — the manifest no longer carries `orbits`,
+  `traits`, or agent/target grant fields. Manifests written by older versions
+  are quarantined as `compile-manifest.json.corrupt-<timestamp>.json` and
+  rebuilt on the next compile.
+- Stale generated refs (`orbits.ts`, `traits.ts`) and old manifests under
+  `~/.prism/state/projects/*/` are derived state: purged here and regenerated
+  by the next project compile.
+
 ## 0.4.6 - 2026-08-17
 
 ### Added

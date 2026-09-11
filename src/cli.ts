@@ -6,10 +6,13 @@
 import { Command, CommanderError, InvalidArgumentError, Option as CommanderOption } from "commander";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
+import { detectInstalledHarnessIds } from "./harness-install-detection.js";
 import {
   getAllHarnessIds,
   getHarness,
   isValidHarnessId,
+  collidingCompileSandboxGroups,
+  resolveCompileSandboxRoot,
   resolveHarnessRoot,
 } from "./harnesses.js";
 import {
@@ -39,6 +42,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { loadPlugin } from "./compile/load.js";
 import {
   compilePluginForTarget,
   formatOperations,
@@ -184,7 +188,10 @@ program
   .option("--dry-run", "Preview the refresh plan without writing", false)
   .option("--compile-only", "Only run compile-phase lowering")
   .option("--clean", "Clear compile cache before compiling", false)
-  .option("--compile-root <path>", "Override compile output root")
+  .option(
+    "--compile-root <path>",
+    "Compile output root; with multiple harnesses, a sandbox prefix that preserves each harness's relative home layout",
+  )
   .action(async (pluginPath: string | undefined, options) => {
     try {
       await runRefreshCommand("refresh", pluginPath, options);
@@ -213,7 +220,10 @@ program
   .option("--no-validate", "Skip plugin validation before planning")
   .option("--compile-only", "Only plan compile-phase lowering")
   .option("--clean", "Plan compile cache cleanup")
-  .option("--compile-root <path>", "Override compile output root")
+  .option(
+    "--compile-root <path>",
+    "Compile output root; with multiple harnesses, a sandbox prefix that preserves each harness's relative home layout",
+  )
   .option("--json", "Print a machine-readable JSON envelope", false)
   .action(async (pluginPath: string | undefined, options) => {
     try {
@@ -363,7 +373,7 @@ workflow
               `Missing: ${result.surfaceDir}`,
               "List live slugs: `prism workflow models --worker cursor --query opus`",
               "Scaffold: `prism workflow scaffold hello`",
-              "Compile refs only if you want agents.*: `prism refresh <plugin-path>`",
+              "Compile refs only if you want sops.*: `prism refresh <plugin-path>`",
             ].join("\n"),
           );
         }
@@ -1960,8 +1970,12 @@ async function runValidateCommand(
     "(unknown)",
     options
   );
+  const compileStatus = await printValidateCompileSources(pluginPath);
 
-  finishValidateCommand(mergeValidationStatus(skillStatus, agentStatus), options);
+  finishValidateCommand(
+    mergeValidationStatus(mergeValidationStatus(skillStatus, agentStatus), compileStatus),
+    options
+  );
 }
 
 function printValidateManifestSummary(manifest: PluginManifest): void {
@@ -1982,6 +1996,33 @@ function mergeValidationStatus(
     hasErrors: left.hasErrors || right.hasErrors,
     hasWarnings: left.hasWarnings || right.hasWarnings,
   };
+}
+
+async function printValidateCompileSources(
+  pluginPath: string,
+): Promise<ValidationStatus> {
+  const compileExit = await Effect.runPromiseExit(loadPlugin(expandPath(pluginPath)));
+  console.log("\n🧱 Compile sources validation:");
+  if (compileExit._tag === "Failure") {
+    const described = describePrismCause(compileExit.cause);
+    console.log(`   ❌ ${described.headline}`);
+    for (const detail of described.detail ?? []) {
+      console.log(`      ${detail}`);
+    }
+    if (described.hint) {
+      console.log(`      hint: ${described.hint}`);
+    }
+    return { hasErrors: true, hasWarnings: false };
+  }
+
+  const registry = compileExit.value;
+  const summary = [
+    `${registry.sops.size} SOP${registry.sops.size === 1 ? "" : "s"}`,
+    `${registry.agents.size} agent${registry.agents.size === 1 ? "" : "s"}`,
+    `${registry.hooks.size} hook${registry.hooks.size === 1 ? "" : "s"}`,
+  ].join(", ");
+  console.log(`   ✅ ${summary}`);
+  return emptyValidationStatus();
 }
 
 function printValidateGroup<NameKey extends "skillName" | "agentName">(
@@ -2933,20 +2974,6 @@ function printInvalidManifestSummary(
 }
 
 /**
- * A harness counts as installed iff its global config root exists on disk —
- * the same root path each lowerer targets (`resolveHarnessRoot(..., "global")`).
- * Detection is machine-wide and scope-independent: it answers "is this
- * harness present on this machine", not "what scope did this invocation ask
- * to write to" (PQ-158).
- */
-function detectInstalledHarnessIds(): HarnessId[] {
-  return getAllHarnessIds().filter((id) => {
-    const root = resolveHarnessRoot(getHarness(id), "global");
-    return root !== null && existsSync(root);
-  });
-}
-
-/**
  * Shared harness selection for refresh/plan/doctor/package. `--harness` and
  * `--all` are explicit overrides and stay byte-identical across every caller.
  * `allowInstalledDefault` gates the bare-invocation fallback to
@@ -2987,7 +3014,7 @@ function resolveRequestedHarnesses(
     const detected = detectInstalledHarnessIds();
     if (detected.length === 0) {
       console.error(
-        "No installed harnesses detected (checked the global config root for every supported harness).",
+        "No installed harnesses detected (config root for most harnesses; opencode2 by `opencode2` on PATH).",
       );
       console.error("Please specify --harness <ids> or --all.");
       exitWith(EXIT_CODES.usage);
@@ -3140,8 +3167,56 @@ async function runCompilePhaseForPlugin(options: {
     }
   }
 
+  // One compile-root + several harnesses is a sandbox prefix, not a shared
+  // harness home. Snapshot prune is per physical root (`sha256(root)`), so
+  // writing every target into the same directory makes later harnesses treat
+  // earlier output as orphaned. Single-harness `--compile-root` stays an
+  // exact override (Hermes profiles, acceptance roots).
+  const compileHarnessIds = options.harnesses.filter((id) =>
+    manifestHasCompileTargets(options.manifest, id),
+  );
+  const nestCompileRoot = compileHarnessIds.length > 1;
+
+  if (options.compileRoot && nestCompileRoot) {
+    const collisions = collidingCompileSandboxGroups(
+      options.compileRoot,
+      compileHarnessIds,
+      options.scope,
+    );
+    if (collisions.length > 0) {
+      const collision = collisions[0]!;
+      const ids = collision.harnesses.join(" + ");
+      const headline =
+        `${ids} share compile-root path ${collision.root} ` +
+        `(OpenCode 1.x and 2 use the same config home).`;
+      const hint =
+        "Compile one of them, or pass a per-harness --compile-root. " +
+        "coding-harness targets opencode2 only; --harness opencode stays V1.";
+      if (!options.quiet) {
+        console.log(`\n${indent}❌ Compile failed: ${headline}`);
+        console.log(`${indent}   hint: ${hint}`);
+      }
+      return compilePhaseFailure(compileBackups, results, {
+        harness: collision.harnesses[0],
+        path: collision.root,
+        headline,
+        hint,
+      });
+    }
+  }
+
   for (const harnessId of options.harnesses) {
     if (!manifestHasCompileTargets(options.manifest, harnessId)) continue;
+
+    const compileRoot = options.compileRoot
+      ? nestCompileRoot
+        ? resolveCompileSandboxRoot(
+            options.compileRoot,
+            getHarness(harnessId),
+            options.scope,
+          )
+        : options.compileRoot
+      : undefined;
 
     const compileExit = await Effect.runPromiseExit(
       compilePluginForTarget({
@@ -3149,7 +3224,7 @@ async function runCompilePhaseForPlugin(options: {
         target: harnessId,
         scope: options.scope,
         projectPath: options.projectPath,
-        root: options.compileRoot,
+        ...(compileRoot !== undefined ? { root: compileRoot } : {}),
         prismHome: resolvePrismHome(),
         dryRun: options.dryRun,
         ...(options.emitWorkflowRefs !== undefined

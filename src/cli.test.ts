@@ -227,6 +227,9 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   expect(skill.exitCode).toBe(0);
   expect(skill.stdout).toContain("Plugins are optional");
   expect(skill.stdout).toContain("prism workflow models");
+  expect(skill.stdout).toContain("wf.phase");
+  expect(skill.stdout).toContain("prism/refs/sops");
+  expect(skill.stdout).not.toContain("agent:");
 
   const skillWrite = await runCli(["workflow", "skill", "--write"], env, { cwd: root });
   expect(skillWrite.exitCode).toBe(0);
@@ -1288,6 +1291,96 @@ test("refresh --plugins compiles Hermes child plugins into an explicit profile r
   expect(await pathExists(join(hermesRoot, "prism", "mcp"))).toBe(false);
 });
 
+test("compile-only into one compile-root keeps sibling harness trees", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "sibling-compile");
+  const projectRoot = join(root, "project");
+  const compileRoot = join(root, "sandbox");
+  const prismHome = join(root, "prism-home");
+  await mkdir(compileRoot, { recursive: true });
+  await mkdir(prismHome, { recursive: true });
+  await createCanonicalCompileFixture({
+    pluginRoot,
+    projectRoot,
+    withCanonicalToolBindings: false,
+  });
+
+  const result = await runCli(
+    [
+      "refresh",
+      "--plugin",
+      pluginRoot,
+      "--harness",
+      "opencode,claude-code",
+      "--compile-only",
+      "--compile-root",
+      compileRoot,
+      "--no-validate",
+    ],
+    { PRISM_HOME: prismHome },
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain(`Root: ${join(compileRoot, ".config/opencode")}`);
+  expect(result.stdout).toContain(`Root: ${join(compileRoot, ".claude")}`);
+  expect(result.stdout).not.toMatch(/\bprune\b/);
+
+  const opencodeAgent = join(compileRoot, ".config/opencode", "agents", "builder.md");
+  const claudeAgent = join(
+    compileRoot,
+    ".claude",
+    "skills",
+    "prism-generated-canonical-compile-fixture",
+    "agents",
+    "builder.md",
+  );
+  expect(await pathExists(opencodeAgent)).toBe(true);
+  expect(await pathExists(claudeAgent)).toBe(true);
+}, 30_000);
+
+test("compile-root rejects opencode + opencode2 sharing one nested home", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "shared-opencode");
+  const compileRoot = join(root, "sandbox");
+  const prismHome = join(root, "prism-home");
+  await mkdir(pluginRoot, { recursive: true });
+  await mkdir(compileRoot, { recursive: true });
+  await mkdir(prismHome, { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "shared-opencode",
+        version: "0.1.0",
+        targets: { agents: ["opencode", "opencode2"] },
+      },
+      null,
+      2,
+    ),
+  );
+
+  const result = await runCli(
+    [
+      "refresh",
+      "--plugin",
+      pluginRoot,
+      "--harness",
+      "opencode,opencode2",
+      "--compile-only",
+      "--compile-root",
+      compileRoot,
+      "--no-validate",
+    ],
+    { PRISM_HOME: prismHome },
+  );
+
+  expect(result.exitCode).not.toBe(0);
+  const output = `${result.stdout}\n${result.stderr}`;
+  expect(output).toContain(".config/opencode");
+  expect(output).toContain("opencode2");
+  expect(output).toMatch(/share compile-root path/);
+}, 30_000);
+
 test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {
   const root = await createTempRoot();
 
@@ -1303,6 +1396,41 @@ test("init --with-agent scaffolds TypeScript agent sources, not source markdown 
   const agentSource = await readFile(agentPath, "utf8");
   expect(agentSource).toContain("satisfies AgentSource");
   expect(agentSource).not.toContain("defineAgent");
+});
+
+test("validate rejects forbidden fields in sop compile sources", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "bad-sop-validate");
+  await mkdir(join(pluginRoot, "sops"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "bad-sop-validate",
+        version: "0.1.0",
+        targets: { sops: ["claude-code"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(
+    join(pluginRoot, "sops", "beacon.sop.ts"),
+    `export default {
+  name: "beacon",
+  description: "Bad field.",
+  executor: "someone",
+  phases: [{ name: "explore", purpose: "P", body: "b" }],
+};
+`,
+  );
+
+  const result = await runCli(["validate", pluginRoot], {});
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toContain("Compile sources validation");
+  expect(result.stdout).toContain("executor");
+  expect(result.stdout).toContain("Validation failed");
 });
 
 test("validate rejects source markdown agents", async () => {

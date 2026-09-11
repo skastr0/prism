@@ -161,7 +161,7 @@ test("workflow scaffold writes to ~/.prism/workflows by default and never instru
 
   const source = await readFile(expectedPath, "utf8");
   expect(source).not.toContain("git add");
-  expect(source).toContain("agents.");
+  expect(source).toContain("worker: { worker:");
 
   const validate = await runCli(["workflow", "validate", expectedPath], env, { cwd: projectRoot });
   expect(validate.exitCode).toBe(0);
@@ -234,32 +234,21 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
 
   const scaffold = await runCli(["workflow", "scaffold", "plugin-free"], env, { cwd: root });
   expect(scaffold.exitCode).toBe(0);
-  expect(scaffold.stdout).toContain("anonymousWorkflowAgent");
+  expect(scaffold.stdout).toContain("workers:");
   expect(scaffold.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "SKILL.md"));
   const source = await readFile(join(prismHome, "workflows", "plugin-free.workflow.ts"), "utf8");
-  expect(source).toContain("anonymousWorkflowAgent");
+  expect(source).not.toContain("agent:");
   expect(source).not.toContain('from "prism/refs"');
 
   const workflowPath = join(root, "typed-harness.workflow.ts");
   await writeFile(workflowPath, `
 import { Schema } from "effect";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "prism",
-  name: "anonymous",
-  description: "Plugin-free workflow worker",
-  sourceHash: "${"0".repeat(64)}",
-  manifestHash: "${"0".repeat(64)}",
-  installs: [],
-} as const satisfies WorkflowAgentRef;
+import { defineTask, defineWorkflow } from "prism";
 
 export const workflow = defineWorkflow({
   name: "typed-harness",
   tasks: [defineTask({
     id: "amp",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     worker: { worker: "amp-code", model: "low" },
@@ -281,23 +270,12 @@ export const workflow = defineWorkflow({
   const badPath = join(root, "bad-harness.workflow.ts");
   await writeFile(badPath, `
 import { Schema } from "effect";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "prism",
-  name: "anonymous",
-  description: "Plugin-free workflow worker",
-  sourceHash: "${"0".repeat(64)}",
-  manifestHash: "${"0".repeat(64)}",
-  installs: [],
-} as const satisfies WorkflowAgentRef;
+import { defineTask, defineWorkflow } from "prism";
 
 export const workflow = defineWorkflow({
   name: "bad-harness",
   tasks: [defineTask({
     id: "amp",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     worker: { worker: "amp-code", model: "not-a-mode" },
@@ -316,17 +294,7 @@ test("workflow typecheck accepts a workflow against shipped Prism declarations",
 
   await writeFile(workflowPath, `
 import { Schema } from "effect";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["claude-code", "codex-cli", "omp"],
-} as const satisfies WorkflowAgentRef;
+import { defineTask, defineWorkflow } from "prism";
 
 export const workflow = defineWorkflow({
   name: "typed-smoke",
@@ -334,7 +302,6 @@ export const workflow = defineWorkflow({
     defineTask({
       id: "claude",
       phase: "implement",
-      agent,
       prompt: "Return a summary.",
       output: Schema.Struct({ summary: Schema.String }),
       worker: { worker: "claude-code", sessionPersistence: "ephemeral" },
@@ -342,7 +309,6 @@ export const workflow = defineWorkflow({
     defineTask({
       id: "codex",
       phase: "implement",
-      agent,
       prompt: "Return a summary.",
       output: Schema.Struct({ summary: Schema.String }),
       worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
@@ -350,7 +316,6 @@ export const workflow = defineWorkflow({
     defineTask({
       id: "omp",
       phase: "implement",
-      agent,
       prompt: "Return a summary.",
       output: Schema.Struct({ summary: Schema.String }),
       worker: { worker: "omp", sessionPersistence: "ephemeral" },
@@ -374,24 +339,13 @@ test("workflow typecheck rejects deliberate phase field type skew", async () => 
 
   await writeFile(workflowPath, `
 import { Schema } from "effect";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const satisfies WorkflowAgentRef;
+import { defineTask, defineWorkflow } from "prism";
 
 export const workflow = defineWorkflow({
   name: "bad-phase",
   tasks: [defineTask({
     id: "build",
     phase: 42,
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
   })] as const,
@@ -417,24 +371,13 @@ export const helperSummary: string = 42;
 
   await writeFile(workflowPath, `
 import { Schema } from "effect";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+import { defineTask, defineWorkflow } from "prism";
 import { helperSummary } from "./helper.ts";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const satisfies WorkflowAgentRef;
 
 export const workflow = defineWorkflow({
   name: "helper-diagnostic",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: helperSummary,
     output: Schema.Struct({ summary: Schema.String }),
   })] as const,
@@ -456,18 +399,8 @@ test("workflow typecheck rejects missing generated refs imports", async () => {
 
   await writeFile(workflowPath, `
 import { Schema } from "effect";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+import { defineTask, defineWorkflow } from "prism";
 import { agents } from "prism/refs";
-
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const satisfies WorkflowAgentRef;
 
 void agents;
 
@@ -475,7 +408,6 @@ export const workflow = defineWorkflow({
   name: "missing-refs",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
   })] as const,
@@ -724,21 +656,10 @@ test("workflow runs show resolves a run across the store registry without --stor
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 export const workflow = defineWorkflow({
   name: "cross-store-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     cacheKey: "cross-store-build",
@@ -839,21 +760,10 @@ test("workflow default store lives under PRISM_HOME, not the current project", a
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 export const workflow = defineWorkflow({
   name: "default-store-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     cacheKey: "default-store-build",
@@ -893,21 +803,10 @@ test("workflow runs show returns the run record and rejects missing runs", async
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 export const workflow = defineWorkflow({
   name: "inspect-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     cacheKey: "inspect-build",
@@ -954,21 +853,10 @@ test("workflow run exits 0 for a fully successful run (PQ-174)", async () => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 export const workflow = defineWorkflow({
   name: "exit-code-success-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     cacheKey: "exit-code-success-build",
@@ -1007,19 +895,8 @@ test("workflow run and runs wait exit non-zero when a run completes with a fault
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 const build = defineTask({
   id: "build",
-  agent,
   prompt: "Build the slice.",
   output: Schema.Struct({ summary: Schema.String }),
   finish: { maxRepairs: 0 },
@@ -1073,21 +950,10 @@ test("workflow runs summary exposes compact execution evidence in text and JSON"
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 export const workflow = defineWorkflow({
   name: "summary-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     cacheKey: "summary-build",
@@ -1160,21 +1026,10 @@ test("workflow runs show/summary surface the detached runner's captured log path
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
-const agent = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 export const workflow = defineWorkflow({
   name: "runner-log-smoke",
   tasks: [defineTask({
     id: "build",
-    agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     cacheKey: "runner-log-build",
@@ -2089,13 +1944,13 @@ test("refresh --plugins emits workflow refs once after directory compile", async
 
   expect(first.exitCode).toBe(0);
   expect(first.stdout.match(/Workflow refs/g)?.length).toBe(1);
-  expect(first.stdout.match(/generated\/agents\.ts/g)?.length).toBe(1);
+  expect(first.stdout.match(/generated\/sops\.ts/g)?.length).toBe(1);
 
   const second = await runCli(args, { HOME: homeRoot });
 
   expect(second.exitCode).toBe(0);
   expect(second.stdout.match(/Workflow refs/g)?.length).toBe(1);
-  expect(second.stdout.match(/generated\/agents\.ts/g)?.length).toBe(1);
+  expect(second.stdout.match(/generated\/sops\.ts/g)?.length).toBe(1);
   expect(second.stdout).toContain("skip");
   expect(second.stdout).not.toContain("repair");
 }, 30_000);

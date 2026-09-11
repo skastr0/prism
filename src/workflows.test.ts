@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Either, Schema } from "effect";
 import {
-  anonymousWorkflowAgent,
   decodeTaskOutput,
   defineTask,
   defineWorkflow,
@@ -12,7 +11,6 @@ import {
   workflowSummary,
   WorkflowModelResolutionError,
   type PhaseContract,
-  type WorkflowAgentRef,
   type WorkflowModelProfileRef,
   type WorkflowPermissionMode,
   type WorkflowTaskWorkerOptions,
@@ -32,16 +30,6 @@ import { buildHermesArgs } from "./workflow-hermes-worker.js";
 import { buildKimiArgs } from "./workflow-kimi-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES, WorkflowPermissionError } from "./workflow-permissions.js";
-
-const builder = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["grok", "codex-cli"],
-} as const satisfies WorkflowAgentRef;
 
 const modelProfile = {
   kind: "model-profile-ref",
@@ -67,15 +55,6 @@ const opencodeOnlyModelProfile = {
   },
 } as const satisfies WorkflowModelProfileRef;
 
-const modelspaceBackedBuilder = {
-  ...builder,
-  model: {
-    modelspace: "agent-foundations:empirical-modelspaces",
-    profile: "trusted-production",
-    targets: modelProfile.targets,
-  },
-} as const satisfies WorkflowAgentRef;
-
 const PatchReport = Schema.Struct({
   summary: Schema.String,
   filesChanged: Schema.Array(Schema.String),
@@ -85,12 +64,6 @@ const Exploration = Schema.Struct({
   assumption: Schema.String,
   options: Schema.Array(Schema.String),
 });
-
-const explorer = {
-  ...builder,
-  name: "explorer",
-  description: "Exploration specialist",
-} as const satisfies WorkflowAgentRef;
 
 describe("workflow authoring primitives", () => {
   test("workflow worker id includes antigravity", () => {
@@ -141,7 +114,6 @@ describe("workflow authoring primitives", () => {
   test("workflow task runtime guard accepts native no-save workers and rejects the rest", () => {
     const base = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build.",
       output: PatchReport,
     });
@@ -161,10 +133,9 @@ describe("workflow authoring primitives", () => {
     })).toBe(false);
   });
 
-  test("preserve literal task and agent refs", () => {
+  test("preserve literal task refs", () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Implement the smallest useful slice.",
       output: PatchReport,
       cacheKey: "workflow-refs-build",
@@ -174,14 +145,12 @@ describe("workflow authoring primitives", () => {
 
     expect(workflow.kind).toBe("workflow");
     expect(workflow.tasks[0]?.kind).toBe("workflow-task");
-    expect(workflow.tasks[0]?.agent?.name).toBe("builder");
     expect(workflow.tasks[0]?.cacheKey).toBe("workflow-refs-build");
   });
 
   test("preserves task-level worker model selection", () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Use the build model.",
       output: PatchReport,
       worker: { model: "grok-build" },
@@ -193,7 +162,6 @@ describe("workflow authoring primitives", () => {
   test("resolves task model refs through the selected workflow worker", () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Use the selected model profile.",
       output: PatchReport,
       worker: { worker: "opencode", model: modelProfile },
@@ -205,14 +173,13 @@ describe("workflow authoring primitives", () => {
   test("resolved opencode modelspace target flows into worker args", () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Use the selected model profile.",
       output: PatchReport,
       worker: { worker: "opencode", model: modelProfile },
     });
 
     const model = resolveWorkflowTaskModel(build);
-    const args = buildOpenCodeArgs({ cwd: "/tmp", agent: build.agent!.name, model, prompt: build.prompt, permission: "legacy" });
+    const args = buildOpenCodeArgs({ cwd: "/tmp", model, prompt: build.prompt, permission: "legacy" });
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "crof/kimi-k2.6"]);
   });
 
@@ -220,7 +187,6 @@ describe("workflow authoring primitives", () => {
     const taskFor = (worker: WorkflowWorkerId) =>
       defineTask({
         id: `build-${worker}`,
-        agent: builder,
         prompt: "Use the selected model profile.",
         output: PatchReport,
         worker: { worker, model: modelProfile },
@@ -228,7 +194,6 @@ describe("workflow authoring primitives", () => {
 
     const claude = taskFor("claude-code");
     const claudeArgs = buildClaudeArgs({
-      agent: claude.agent!.name,
       model: resolveWorkflowTaskModel(claude),
       prompt: claude.prompt,
       permission: "legacy",
@@ -248,7 +213,6 @@ describe("workflow authoring primitives", () => {
     const grok = taskFor("grok");
     expect(buildGrokArgs({
       cwd: "/tmp",
-      agent: grok.agent!.name,
       model: resolveWorkflowTaskModel(grok),
       prompt: grok.prompt,
       permission: "legacy",
@@ -292,13 +256,12 @@ describe("workflow authoring primitives", () => {
     expect(agyModelArgs).toEqual(["--model", "Gemini 3.5 Flash (Low)"]);
   });
 
-  test("uses the agent modelspace before CLI fallback model", () => {
+  test("uses the worker model profile before CLI fallback model", () => {
     const build = defineTask({
       id: "build",
-      agent: modelspaceBackedBuilder,
-      prompt: "Use the agent model profile.",
+      prompt: "Use the worker model profile.",
       output: PatchReport,
-      worker: { worker: "claude-code" },
+      worker: { worker: "claude-code", model: modelProfile },
     });
 
     expect(resolveWorkflowTaskModel(build, { fallbackModel: "sonnet" })).toBe("claude-opus-4-8");
@@ -307,7 +270,6 @@ describe("workflow authoring primitives", () => {
   test("preserves raw task model strings as an escape hatch", () => {
     const build = defineTask({
       id: "build",
-      agent: modelspaceBackedBuilder,
       prompt: "Use the raw model.",
       output: PatchReport,
       worker: { worker: "opencode", model: "provider/manual-model" },
@@ -316,29 +278,9 @@ describe("workflow authoring primitives", () => {
     expect(resolveWorkflowTaskModel(build)).toBe("provider/manual-model");
   });
 
-  test("resolves modelResolver from the selected agent model target", () => {
-    const build = defineTask({
-      id: "build",
-      agent: modelspaceBackedBuilder,
-      prompt: "Pick a model from the target object.",
-      output: PatchReport,
-      worker: {
-        worker: "opencode",
-        modelResolver: (models) => {
-          const first = models.kimiK26;
-          if (Array.isArray(first)) return first[0]?.model ?? "";
-          return first?.model ?? "";
-        },
-      },
-    });
-
-    expect(resolveWorkflowTaskModel(build)).toBe("crof/kimi-k2.6");
-  });
-
   test("fails closed when a model ref does not support the selected worker", () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Use the selected model profile.",
       output: PatchReport,
       worker: { worker: "codex-cli", model: opencodeOnlyModelProfile },
@@ -350,7 +292,6 @@ describe("workflow authoring primitives", () => {
   test("preserves harness model variants from model profiles", () => {
     const profiled = defineTask({
       id: "profiled",
-      agent: builder,
       prompt: "Use the profile variant.",
       output: PatchReport,
       worker: { worker: "codex-cli", model: modelProfile },
@@ -362,60 +303,9 @@ describe("workflow authoring primitives", () => {
     });
   });
 
-  test("rescues an agent modelspace profile with partial harness coverage via the registry default (WDX-009)", () => {
-    // Mirrors the real scaffold bug: an agent's modelspace profile only
-    // targets a handful of harnesses (like forge.explorer's deep-explorer
-    // profile), and a task is run under a worker the profile never enumerated
-    // (e.g. grok). Previously this threw "no concrete model for workflow
-    // worker 'grok'" at run time even after a green `validate`.
-    const partiallyCoveredBuilder = {
-      ...builder,
-      model: {
-        modelspace: "agent-foundations:empirical-modelspaces",
-        profile: "deep-explorer",
-        targets: {
-          "claude-code": { model: "claude-opus-4-8" },
-          "codex-cli": { model: "gpt-5.5", variant: "high" },
-          // deliberately missing: amp-code, antigravity-cli, grok, hermes, kimi-code, opencode
-        },
-      },
-    } as const satisfies WorkflowAgentRef;
-
-    for (const worker of WORKFLOW_HARNESS_IDS) {
-      const task = defineTask({
-        id: `probe-${worker}`,
-        agent: partiallyCoveredBuilder,
-        prompt: "Probe.",
-        output: PatchReport,
-        worker: { worker },
-      });
-
-      expect(() => resolveWorkflowTaskModel(task)).not.toThrow();
-      const resolution = resolveWorkflowTaskModelResolution(task);
-      expect(resolution).toBeDefined();
-      expect(typeof resolution?.model).toBe("string");
-
-      if (worker === "claude-code" || worker === "codex-cli") {
-        expect(resolution?.source).toBe("profile");
-      } else {
-        expect(resolution?.source).toBe("default");
-        expect(resolution?.model).toBe(workflowHarnessDefaultModel(worker));
-      }
-    }
-  });
-
-  test("an explicit CLI --model fallback still wins over the harness registry default", () => {
-    const partiallyCoveredBuilder = {
-      ...builder,
-      model: {
-        modelspace: "agent-foundations:empirical-modelspaces",
-        profile: "deep-explorer",
-        targets: { "claude-code": { model: "claude-opus-4-8" } },
-      },
-    } as const satisfies WorkflowAgentRef;
+  test("an explicit CLI --model fallback resolves a task with no worker model", () => {
     const task = defineTask({
       id: "build",
-      agent: partiallyCoveredBuilder,
       prompt: "Use the CLI fallback.",
       output: PatchReport,
       worker: { worker: "grok" },
@@ -428,7 +318,6 @@ describe("workflow authoring primitives", () => {
   test("decodes task output at the workflow boundary", () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Return a patch report.",
       output: PatchReport,
     });
@@ -448,7 +337,6 @@ describe("workflow authoring primitives", () => {
   test("infers decoded output type from the task schema", () => {
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Return a patch report.",
       output: PatchReport,
     });
@@ -468,7 +356,6 @@ describe("workflow authoring primitives", () => {
   test("claude-code rejects sandbox-read-only at the type", () => {
     defineTask({
       id: "claude-sandbox-type",
-      agent: builder,
       prompt: "test",
       output: PatchReport,
       worker: {
@@ -502,7 +389,6 @@ describe("workflow authoring primitives", () => {
   test("workflow task permission resolves task permission over runtime fallback", () => {
     const task = defineTask({
       id: "perm-test",
-      agent: builder,
       prompt: "test",
       output: PatchReport,
       worker: { worker: "opencode", permission: "legacy" },
@@ -513,7 +399,6 @@ describe("workflow authoring primitives", () => {
   test("workflow task permission defaults to permissive when both are undefined", () => {
     const task = defineTask({
       id: "perm-default",
-      agent: builder,
       prompt: "test",
       output: PatchReport,
       worker: { worker: "opencode" },
@@ -524,7 +409,6 @@ describe("workflow authoring primitives", () => {
   test("workflow task permission uses runtime fallback when task has no permission", () => {
     const task = defineTask({
       id: "perm-pass",
-      agent: builder,
       prompt: "test",
       output: PatchReport,
       worker: { worker: "opencode" },
@@ -535,7 +419,6 @@ describe("workflow authoring primitives", () => {
   test("workflow task worker options preserve restricted tool lists", () => {
     const task = defineTask({
       id: "perm-restricted-tools",
-      agent: builder,
       prompt: "test",
       output: PatchReport,
       worker: { worker: "claude-code", permission: "restricted", restrictedTools: ["Read", "Edit"] },
@@ -546,20 +429,18 @@ describe("workflow authoring primitives", () => {
   test("unsupported resolved permission fails closed in the opencode interpreter", () => {
     const task = defineTask({
       id: "perm-fail",
-      agent: builder,
       prompt: "test",
       output: PatchReport,
       worker: { worker: "opencode" },
     });
     const permission = resolveWorkflowTaskPermission(task, "sandbox-read-only");
-    expect(() => buildOpenCodeArgs({ cwd: "/tmp", agent: task.agent!.name, prompt: task.prompt, permission }))
+    expect(() => buildOpenCodeArgs({ cwd: "/tmp", prompt: task.prompt, permission }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("dynamic workflows expose decoded task outputs to later code", async () => {
     const discover = defineTask({
       id: "discover",
-      agent: builder,
       prompt: "Return a patch report.",
       output: PatchReport,
     });
@@ -723,37 +604,36 @@ describe("workflow phase DSL", () => {
   });
 });
 
-describe("agent-less tasks normalize to the anonymous sentinel", () => {
-  test("defineTask accepts a missing agent and normalizes it to anonymousWorkflowAgent", () => {
+describe("agent-free workflow tasks", () => {
+  test("defineTask accepts a task with only worker/prompt/output", () => {
     const bare = defineTask({
       id: "bare",
       prompt: "Do the work.",
       output: PatchReport,
+      worker: { worker: "claude-code", model: "claude-opus-4-8" },
     });
-    expect(bare.agent).toEqual(anonymousWorkflowAgent);
     expect(isWorkflowTask(bare)).toBe(true);
-    expect(isWorkflowTask({ ...bare, agent: undefined })).toBe(false);
-    expect(isWorkflowTask({ ...bare, agent: { plugin: "forge" } })).toBe(false);
+    expect(bare.id).toBe("bare");
+    expect(bare.worker?.worker).toBe("claude-code");
   });
 
-  test("workflowSummary reports the normalized sentinel agent", () => {
+  test("workflowSummary reports ids and cache keys without agent identity", () => {
     const bare = defineTask({ id: "bare", prompt: "Do the work.", output: PatchReport });
-    const bound = defineTask({ id: "bound", agent: builder, prompt: "Do the work.", output: PatchReport });
+    const cached = defineTask({ id: "cached", prompt: "Do the work.", output: PatchReport, cacheKey: "bound-cache" });
     const summary = workflowSummary("/tmp/wf.ts", defineWorkflow({
       name: "mixed",
-      tasks: [bare, bound] as const,
+      tasks: [bare, cached] as const,
     }));
-    expect(summary.tasks[0]?.agent).toEqual({ plugin: "prism", name: "anonymous" });
-    expect(summary.tasks[1]?.agent).toEqual({ plugin: "forge", name: "builder" });
+    expect(summary.tasks).toEqual([
+      { id: "bare" },
+      { id: "cached", cacheKey: "bound-cache" },
+    ]);
   });
 
-  test("workflowWorkerJsonInstruction carries the sentinel identity for agent-less tasks", () => {
-    const bare = defineTask({ id: "bare", prompt: "Do the work.", output: PatchReport });
-    const instruction = workflowWorkerJsonInstruction(bare);
-    expect(instruction).toContain("Agent identity: prism.anonymous");
-    const boundInstruction = workflowWorkerJsonInstruction(
-      defineTask({ id: "bound", agent: builder, prompt: "Do the work.", output: PatchReport }),
-    );
-    expect(boundInstruction).toContain("Agent identity: forge.builder");
+  test("workflowWorkerJsonInstruction carries no agent identity", () => {
+    const task = defineTask({ id: "bare", prompt: "Do the work.", output: PatchReport });
+    const instruction = workflowWorkerJsonInstruction(task);
+    expect(instruction).toContain("Task id: bare");
+    expect(instruction).not.toContain("Agent identity");
   });
 });

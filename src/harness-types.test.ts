@@ -44,13 +44,12 @@ const typecheckPluginFreeWorkflow = async (
     workflowPath,
     `
 import { Schema } from "effect";
-import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+import { defineTask, defineWorkflow } from "prism";
 
 export const workflow = defineWorkflow({
   name: "typed-harness",
   tasks: [defineTask({
     id: "amp",
-    agent: anonymousWorkflowAgent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     worker: { worker: "amp-code", model: ${JSON.stringify(model)} },
@@ -235,13 +234,12 @@ describe("renderHarnessModelsModule", () => {
     }), "utf8");
     await writeFile(workflowPath, `
 import { Schema } from "effect";
-import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+import { defineTask, defineWorkflow } from "prism";
 
 export const workflow = defineWorkflow({
   name: "typed-catalog",
   tasks: [defineTask({
     id: "amp",
-    agent: anonymousWorkflowAgent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
     worker: { worker: "amp-code", model: "low", catalogModel: "anthropic/claude-opus-5", effort: "max" },
@@ -374,6 +372,6 @@ describe("workflow tsconfig harness path", () => {
       harnessTypesPath: "/tmp/harness-types/harness-models.ts",
     });
     expect(paths["prism/harnesses"]).toEqual(["/tmp/harness-types/harness-models.ts"]);
-    expect(paths["prism/refs"]).toEqual(["/tmp/generated/agents.ts"]);
+    expect(paths["prism/refs"]).toEqual(["/tmp/generated/sops.ts"]);
   });
 });

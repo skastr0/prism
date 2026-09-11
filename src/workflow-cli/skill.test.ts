@@ -11,7 +11,7 @@ test("embedded workflow skill teaches the plugin-free path", () => {
   expect(markdown).toContain("name: prism-workflow");
   expect(markdown).toContain("Plugins are optional");
   expect(markdown).toContain("prism workflow models");
-  expect(markdown).toContain("anonymousWorkflowAgent");
+  expect(markdown).not.toContain("agent:");
   expect(markdown).toContain("catalogModel");
   expect(markdown).toContain("gemini-3.8-flash-low");
   expect(markdown).toContain("sandbox-read-only");

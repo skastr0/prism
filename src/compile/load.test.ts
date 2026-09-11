@@ -66,7 +66,7 @@ test("workflow imports never reuse a transformed tree with stale prism refs", as
     const secondSource = await readFile(second.transformedPath, "utf8");
     expect(second.transformedPath).not.toBe(first.transformedPath);
     expect(secondSource).not.toBe(firstSource);
-    expect(secondSource).toContain("/generated/agents.ts?t=");
+    expect(secondSource).toContain("/generated/sops.ts?t=");
   } finally {
     await second.cleanup();
   }

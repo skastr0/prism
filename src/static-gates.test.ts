@@ -129,6 +129,13 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
     reason:
       "deleted in workstream D — the orbit primitive is gone; typed procedures are sops/*.sop.ts and concrete skills",
   },
+  {
+    pattern: /\banonymousWorkflowAgent\b|\bWorkflowAgentRef\b|\bisAnonymousWorkflowAgent\b/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in workstream W — workflows carry no agent field; agents remain a compile primitive, " +
+      "and no workflow surface may resurrect an agent ref, sentinel, or guard",
+  },
 ];
 
 const SRC_ROOT = import.meta.dir;

@@ -11,7 +11,7 @@ describe("workflow tsconfig paths", () => {
     const refsDir = "/tmp/prism-generated";
     const paths = buildWorkflowRefsPaths(refsDir);
 
-    expect(paths["prism/refs"]).toEqual([join(refsDir, "agents.ts")]);
+    expect(paths["prism/refs"]).toEqual([join(refsDir, "sops.ts")]);
     for (const module of WORKFLOW_REFS_MODULES) {
       expect(paths[`prism/refs/${module}`]).toEqual([join(refsDir, `${module}.ts`)]);
     }
@@ -28,7 +28,6 @@ describe("workflow tsconfig paths", () => {
 
     expect(paths["prism"]).toEqual(["/tmp/prism-types/index.d.ts"]);
     expect(paths["effect"]).toEqual(["/tmp/effect-dts/index.d.ts"]);
-    expect(paths["prism/refs/tools"]).toEqual(["/tmp/generated/tools.ts"]);
     expect(paths["prism/harnesses"]).toBeUndefined();
   });
 

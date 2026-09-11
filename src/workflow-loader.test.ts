@@ -124,20 +124,9 @@ const workflowSource = (
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: ${JSON.stringify(options?.plugin ?? "forge")},
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-};
-
 const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
-  agent: builder,
   prompt: "Build the next slice.",
   output,
   cacheKey: "workflow-loader-build",
@@ -156,16 +145,6 @@ const dynamicWorkflowSource = () => {
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-};
-
 const buildOutput = Schema.Struct({ summary: Schema.String });
 const reviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 
@@ -174,14 +153,12 @@ export default defineWorkflow({
   run: (wf) => Effect.gen(function* () {
     const build = yield* wf.runTask(defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the next slice.",
       output: buildOutput,
       cacheKey: "dynamic-build",
     }));
     const review = yield* wf.runTask(defineTask({
       id: "review",
-      agent: builder,
       prompt: \`Review: \${build.summary}\`,
       output: reviewOutput,
       cacheKey: "dynamic-review",
@@ -197,16 +174,6 @@ const failureCapturingWorkflowSource = () => {
 import { Effect, Either, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const reviewer = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "verification-reviewer",
-  description: "Verification reviewer",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["opencode"],
-};
-
 const reviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 const fusionOutput = Schema.Struct({
   reviewerStatus: Schema.Literal("completed", "failed"),
@@ -218,7 +185,6 @@ export default defineWorkflow({
   run: (wf) => Effect.gen(function* () {
     const review = defineTask({
       id: "reviewer",
-      agent: reviewer,
       prompt: "Review the packet.",
       output: reviewOutput,
       worker: { worker: "opencode" },
@@ -227,7 +193,6 @@ export default defineWorkflow({
     const reviewerStatus = Either.isRight(reviewed) ? "completed" as const : "failed" as const;
     const fusion = yield* wf.runTask(defineTask({
       id: "fusion",
-      agent: reviewer,
       prompt: \`Fuse reviewer status: \${reviewerStatus}\`,
       output: fusionOutput,
       worker: { worker: "opencode" },
@@ -243,20 +208,9 @@ const workerModelWorkflowSource = (worker?: string) => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-};
-
 const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
-  agent: builder,
   prompt: "Build with explicit model.",
   output,
   cacheKey: "model-build",
@@ -264,7 +218,6 @@ const build = defineTask({
 });
 const review = defineTask({
   id: "review",
-  agent: builder,
   prompt: "Review with CLI fallback model.",
   output,
   cacheKey: "model-review",
@@ -280,20 +233,9 @@ const ampWorkerModelWorkflowSource = () => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["amp"],
-};
-
 const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
-  agent: builder,
   prompt: "Build with Amp high mode.",
   output,
   cacheKey: "amp-model-build",
@@ -301,7 +243,6 @@ const build = defineTask({
 });
 const review = defineTask({
   id: "review",
-  agent: builder,
   prompt: "Review with Amp fallback mode.",
   output,
   cacheKey: "amp-model-review",
@@ -317,20 +258,9 @@ const workerRoutingWorkflowSource = () => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-};
-
 const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
-  agent: builder,
   prompt: "Build with OpenCode.",
   output,
   cacheKey: "worker-routing-build",
@@ -338,7 +268,6 @@ const build = defineTask({
 });
 const review = defineTask({
   id: "review",
-  agent: builder,
   prompt: "Review with fallback worker.",
   output,
   cacheKey: "worker-routing-review",
@@ -353,20 +282,9 @@ const allTaskWorkersWorkflowSource = () => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-};
-
 const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
-  agent: builder,
   prompt: "Build with OpenCode.",
   output,
   cacheKey: "all-task-workers-build",
@@ -374,7 +292,6 @@ const build = defineTask({
 });
 const review = defineTask({
   id: "review",
-  agent: builder,
   prompt: "Review with Grok.",
   output,
   cacheKey: "all-task-workers-review",
@@ -390,38 +307,20 @@ const modelResolutionWorkflowSource = () => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const explicitModelAgent = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "explicit-agent",
-  description: "Explicit model agent",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["claude-code"],
-};
-
-const partialAgent = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "partial-agent",
-  description: "Partial modelspace agent",
-  sourceHash: "${"c".repeat(64)}",
-  manifestHash: "${"d".repeat(64)}",
-  model: {
-    modelspace: "agent-foundations:empirical-modelspaces",
-    profile: "deep-explorer",
-    targets: {
-      "claude-code": { model: "claude-opus-4-8" },
-    },
+const profileRef = {
+  kind: "model-profile-ref" as const,
+  plugin: "agent-foundations",
+  modelspace: "empirical-modelspaces",
+  profile: "deep-explorer",
+  targets: {
+    "claude-code": { model: "claude-opus-4-8" },
   },
-  installs: ["grok"],
 };
 
 const output = Schema.Struct({ summary: Schema.String });
 
 const explicitTask = defineTask({
   id: "explicit",
-  agent: explicitModelAgent,
   prompt: "Use explicit model.",
   output,
   worker: { worker: "claude-code", model: "claude-opus-4-8" },
@@ -429,15 +328,13 @@ const explicitTask = defineTask({
 
 const profileTask = defineTask({
   id: "profile",
-  agent: partialAgent,
   prompt: "Use profile model.",
   output,
-  worker: { worker: "claude-code" },
+  worker: { worker: "claude-code", model: profileRef },
 });
 
 const defaultTask = defineTask({
   id: "default",
-  agent: partialAgent,
   prompt: "Use the grok registry default.",
   output,
   worker: { worker: "grok" },
@@ -445,7 +342,6 @@ const defaultTask = defineTask({
 
 const deferredTask = defineTask({
   id: "deferred",
-  agent: explicitModelAgent,
   prompt: "Worker chosen at run time.",
   output,
 });
@@ -459,20 +355,9 @@ const unknownWorkerWorkflowSource = () => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
-};
-
 const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
-  agent: builder,
   prompt: "Build.",
   output,
   worker: { worker: "not-a-real-worker" as any },
@@ -487,16 +372,6 @@ const explicitProfileMissingTargetWorkflowSource = () => {
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["codex-cli"],
-};
-
 const opencodeOnlyProfile = {
   kind: "model-profile-ref" as const,
   plugin: "agent-foundations",
@@ -508,7 +383,6 @@ const opencodeOnlyProfile = {
 const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
-  agent: builder,
   prompt: "Build.",
   output,
   worker: { worker: "codex-cli", model: opencodeOnlyProfile },
@@ -523,22 +397,11 @@ const scaffoldLikeDynamicWorkflowSource = () => {
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const explorer = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "explorer",
-  description: "Exploration specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["claude-code", "grok"],
-};
-
 const Result = Schema.Struct({ worker: Schema.String, summary: Schema.String });
 
 const probe = (id: string, worker: "claude-code" | "grok") =>
   defineTask({
     id,
-    agent: explorer,
     prompt: \`Run under \${worker}.\`,
     output: Result,
     cacheKey: \`scaffold-\${worker}-v1\`,
@@ -598,7 +461,6 @@ describe("workflow loader", () => {
     expect(summary.tasks).toEqual([
       {
         id: "build",
-        agent: { plugin: "forge", name: "builder" },
         cacheKey: "workflow-loader-build",
       },
     ]);
@@ -612,7 +474,7 @@ describe("workflow loader", () => {
     const summary = await validateWorkflowFile(file);
 
     expect(summary.name).toBe("loader-smoke");
-    expect(summary.tasks[0]?.agent).toEqual({ plugin: "forge", name: "builder" });
+    expect(summary.tasks[0]?.id).toBe("build");
   });
 
   test("loads a dynamic workflow module", async () => {
@@ -664,16 +526,6 @@ describe("workflow loader", () => {
     await writeFile(file, `
 import { Effect, Schema } from "effect";
 import { defineWorkflow } from "prism";
-
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Builds.",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["claude-code"],
-};
 
 const exploreContract = {
   name: "explore",
@@ -744,7 +596,7 @@ export default defineWorkflow({
     expect(summary.modelResolution).toHaveLength(4);
     expect(summary.modelResolution).toEqual([
       { id: "explicit", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
-      { id: "profile", worker: "claude-code", model: "claude-opus-4-8", source: "profile" },
+      { id: "profile", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
       { id: "default", worker: "grok", model: "grok-4.5", source: "default" },
       { id: "deferred" },
     ]);
@@ -757,21 +609,10 @@ export default defineWorkflow({
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const builder = {
-  kind: "agent-ref" as const,
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "${"a".repeat(64)}",
-  manifestHash: "${"b".repeat(64)}",
-  installs: ["claude-code"],
-};
-
 export default defineWorkflow({
   name: "claude-sandbox-pin",
   tasks: [defineTask({
     id: "claude",
-    agent: builder,
     prompt: "go",
     output: Schema.Struct({ ok: Schema.Boolean }),
     worker: { worker: "claude-code", permission: "sandbox-read-only" },
@@ -1200,9 +1041,8 @@ export default defineWorkflow({
       "import { appendFileSync } from 'node:fs';",
       "const agentIndex = process.argv.indexOf('--agent');",
       "const modelIndex = process.argv.indexOf('--model');",
-      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ agent, model }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ hasAgent: agentIndex >= 0, model }) + '\\n');`,
       "console.log(JSON.stringify({ summary: 'from grok' }));",
       "",
     ].join("\n"));
@@ -1232,7 +1072,7 @@ export default defineWorkflow({
       ]);
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
-      return JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; nativeAgent?: string } }> };
+      return JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string } }> };
     };
 
     const first = await run();
@@ -1242,11 +1082,10 @@ export default defineWorkflow({
     expect(first.tasks[0]?.cached).toBe(false);
     expect(first.tasks[0]?.output.summary).toBe("from grok");
     expect(first.tasks[0]?.metadata?.adapter).toBe("grok-cli");
-    expect(first.tasks[0]?.metadata?.nativeAgent).toBe("builder");
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("from grok");
-    expect(calls.trim().split("\n").map((line) => JSON.parse(line) as { agent: string; model: string })).toEqual([
-      { agent: "builder", model: "grok-4.5" },
+    expect(calls.trim().split("\n").map((line) => JSON.parse(line) as { hasAgent: boolean; model: string })).toEqual([
+      { hasAgent: false, model: "grok-4.5" },
     ]);
   });
 
@@ -1345,55 +1184,25 @@ export default defineWorkflow({
     expect(stderr).not.toContain("You are not authenticated");
   });
 
-  test("CLI runs generated Grok agents against the persistent home so repairs can resume", async () => {
+  test("CLI runs Grok against the persistent home without ambient MCP imports", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");
     const home = join(root, "home");
     const grokHome = join(home, ".grok");
-    const sourcePluginName = "forge.demo";
-    const ownerPluginName = "tool.owner";
     const callsFile = join(root, "grok-calls.txt");
     const fakeGrok = join(root, "fake-grok.mjs");
-    const consumerAgent: ComposedAgent = {
-      name: "builder",
-      description: "Build specialist",
-      body: "# Builder\n\nUse the generated Grok plugin bundle.",
-      color: undefined,
-      model: {},
-      targetOverride: {},
-      skills: [],
-    };
 
-    await writeFile(file, workflowSource("default", { worker: "grok", plugin: sourcePluginName }));
-    const { files: generatedFiles } = await planLowering({
-      agents: [consumerAgent],
-      sops: [],
-      skills: [],
-      hooks: [],
-      registry: undefined,
-      target: {
-        scope: "global",
-        root: grokHome,
-        sourcePluginName,
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: join(root, sourcePluginName),
-      },
-    });
-    await writeDesiredFiles(generatedFiles);
-    const sourceAgentPath = generatedFiles.find((operation) => operation.targetPath.endsWith(join("agents", "builder.md")))?.targetPath;
-    if (!sourceAgentPath) throw new Error("expected generated Grok builder agent");
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
 
     await writeFile(fakeGrok, [
       "#!/usr/bin/env node",
-      "import { appendFileSync, existsSync } from 'node:fs';",
-      "const arg = (name) => { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : undefined; };",
-      "const agent = arg('--agent');",
+      "import { appendFileSync } from 'node:fs';",
+      "const agentIndex = process.argv.indexOf('--agent');",
       "appendFileSync(",
       `  ${JSON.stringify(callsFile)},`,
       "  JSON.stringify({",
-      "    agent,",
-      "    agentExists: existsSync(agent),",
+      "    hasAgent: agentIndex >= 0,",
       "    home: process.env.HOME,",
       "    grokHome: process.env.GROK_HOME,",
       "    grokAuthPath: process.env.GROK_AUTH_PATH ?? null,",
@@ -1436,8 +1245,7 @@ export default defineWorkflow({
 
     const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: Record<string, unknown> }> };
     const call = JSON.parse(await Bun.file(callsFile).text()) as {
-      agent: string;
-      agentExists: boolean;
+      hasAgent: boolean;
       home: string;
       grokHome: string;
       grokAuthPath: string | null;
@@ -1450,8 +1258,7 @@ export default defineWorkflow({
     // session written here survives for a `grok -r <sessionId>` repair on the next attempt.
     expect(call.grokHome).toBe(grokHome);
     expect(call.home).toBe(home);
-    expect(call.agent).toBe(sourceAgentPath);
-    expect(call.agentExists).toBe(true);
+    expect(call.hasAgent).toBe(false);
     // No GROK_AUTH_PATH indirection: auth is read/refreshed in place from the real home.
     expect(call.grokAuthPath).toBeNull();
     // Cursor/Claude MCP auto-import stays suppressed without fabricating a home.
@@ -1708,9 +1515,9 @@ export default defineWorkflow({
       "const mcpConfigArg = process.argv.find((arg) => arg.startsWith('--mcp-config='));",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const outputFormat = outputFormatIndex >= 0 ? process.argv[outputFormatIndex + 1] : 'missing';",
-      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
-      "const pluginDir = pluginDirIndex >= 0 ? process.argv[pluginDirIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, pluginDir, hasMcpConfig: Boolean(mcpConfigArg), cwd: process.cwd() }) + '\\n');`,
+      "const hasAgent = agentIndex >= 0;",
+      "const hasPluginDir = pluginDirIndex >= 0;",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, hasAgent, hasPluginDir, hasMcpConfig: Boolean(mcpConfigArg), cwd: process.cwd() }) + '\\n');`,
       "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: model }), is_error: false, session_id: 'claude-session', total_cost_usd: 0.01, duration_ms: 12, num_turns: 1 }));",
       "",
     ].join("\n"));
@@ -1746,7 +1553,7 @@ export default defineWorkflow({
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       return JSON.parse(stdout) as {
-        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; nativeAgent?: string; sessionId?: string; totalCostUsd?: number } }>;
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; sessionId?: string; totalCostUsd?: number } }>;
       };
     };
 
@@ -1754,7 +1561,6 @@ export default defineWorkflow({
     const cachedResult = await run();
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "sonnet"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["claude-code", "claude-code"]);
-    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual(["builder", "builder"]);
     expect(result.tasks[0]?.metadata?.sessionId).toBe("claude-session");
     expect(result.tasks[0]?.metadata?.totalCostUsd).toBe(0.01);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
@@ -1766,14 +1572,14 @@ export default defineWorkflow({
       outputFormat: string;
       noSession: boolean;
       model: string;
-      agent: string;
-      pluginDir: string;
+      hasAgent: boolean;
+      hasPluginDir: boolean;
       hasMcpConfig: boolean;
       cwd: string;
     });
     expect(calls).toEqual([
-      { print: true, outputFormat: "stream-json", noSession: false, model: "grok-build", agent: "builder", pluginDir: generatedPluginRoot, hasMcpConfig: false, cwd: expectedCwd },
-      { print: true, outputFormat: "stream-json", noSession: false, model: "sonnet", agent: "builder", pluginDir: generatedPluginRoot, hasMcpConfig: false, cwd: expectedCwd },
+      { print: true, outputFormat: "stream-json", noSession: false, model: "grok-build", hasAgent: false, hasPluginDir: false, hasMcpConfig: false, cwd: expectedCwd },
+      { print: true, outputFormat: "stream-json", noSession: false, model: "sonnet", hasAgent: false, hasPluginDir: false, hasMcpConfig: false, cwd: expectedCwd },
     ]);
   });
 
@@ -2050,26 +1856,16 @@ export default defineWorkflow({
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "nous/qwen3-coder"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["hermes", "hermes"]);
     expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([false, true]);
-    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["profile", "prompted-contract"]);
     expect(result.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
     expect(result.tasks.map((task) => task.metadata?.profile)).toEqual(["ansel12", undefined]);
-    expect(result.tasks.map((task) => task.metadata?.agent)).toEqual([
-      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
-      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
-    ]);
-    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "nous/qwen3-coder"]);
     expect(result.tasks.map((task) => task.metadata?.sessionId)).toEqual(["hermes-session-123", "hermes-session-123"]);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
     expect(cachedResult.tasks.map((task) => task.metadata?.prompted)).toEqual([false, true]);
-    expect(cachedResult.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["profile", "prompted-contract"]);
+
     expect(cachedResult.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
     expect(cachedResult.tasks.map((task) => task.metadata?.profile)).toEqual(["ansel12", undefined]);
-    expect(cachedResult.tasks.map((task) => task.metadata?.agent)).toEqual([
-      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
-      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
-    ]);
-    expect(cachedResult.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
+
     expect(changedProfileResult.tasks.map((task) => task.cached)).toEqual([false, true]);
     expect(changedProfileResult.tasks.map((task) => task.metadata?.profile)).toEqual(["ada07", undefined]);
 
@@ -2192,12 +1988,7 @@ export default defineWorkflow({
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "kimi-k2"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["kimi-code", "kimi-code"]);
     expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
-    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
     expect(result.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
-    expect(result.tasks.map((task) => task.metadata?.agent)).toEqual([
-      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
-      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
-    ]);
     expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "kimi-k2"]);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
@@ -2321,8 +2112,7 @@ export default defineWorkflow({
       "const agentIndex = process.argv.indexOf('--agent');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
-      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd, agent }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd, hasAgent: agentIndex >= 0 }) + '\\n');`,
       "console.log(JSON.stringify({ summary: model }));",
       "",
     ].join("\n"));
@@ -2356,17 +2146,16 @@ export default defineWorkflow({
 
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string; nativeAgent?: string } }> };
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string } }> };
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "github-copilot/gpt-5.1"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["opencode-cli", "opencode-cli"]);
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "github-copilot/gpt-5.1"]);
-    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual(["builder", "builder"]);
 
     const expectedCwd = await realpath(root);
-    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string; agent: string });
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string; hasAgent: boolean });
     expect(calls).toEqual([
-      { command: "run", model: "grok-build", cwd: expectedCwd, agent: "builder" },
-      { command: "run", model: "github-copilot/gpt-5.1", cwd: expectedCwd, agent: "builder" },
+      { command: "run", model: "grok-build", cwd: expectedCwd, hasAgent: false },
+      { command: "run", model: "github-copilot/gpt-5.1", cwd: expectedCwd, hasAgent: false },
     ]);
   });
 
@@ -2385,8 +2174,7 @@ export default defineWorkflow({
       "const agentIndex = process.argv.indexOf('--agent');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
-      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ hasModelFlag: modelIndex >= 0, model, cwd, agent }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ hasModelFlag: modelIndex >= 0, model, cwd, hasAgent: agentIndex >= 0 }) + '\\n');`,
       "console.log(JSON.stringify({ summary: model }));",
       "",
     ].join("\n"));
@@ -2422,8 +2210,8 @@ export default defineWorkflow({
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["missing"]);
 
     const expectedCwd = await realpath(root);
-    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { hasModelFlag: boolean; model: string; cwd: string; agent: string });
-    expect(calls).toEqual([{ hasModelFlag: false, model: "missing", cwd: expectedCwd, agent: "builder" }]);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { hasModelFlag: boolean; model: string; cwd: string; hasAgent: boolean });
+    expect(calls).toEqual([{ hasModelFlag: false, model: "missing", cwd: expectedCwd, hasAgent: false }]);
   });
 
   test("CLI routes mixed task-level workers in one workflow run", async () => {
@@ -2971,7 +2759,6 @@ export default defineWorkflow({
         cacheKey: string;
         status: string;
         cached: boolean;
-        agent: { plugin: string; name: string };
         output: { summary: string };
         metadata: typeof contractMetadata;
       }>;
@@ -3021,8 +2808,7 @@ export default defineWorkflow({
       "workflow-loader-build",
     ]) as {
       entries: Array<{
-        identity: { workflow: string; taskId: string; cacheKey: string; promptHash: string; agentManifestHash: string };
-        agent: { plugin: string; name: string };
+        identity: { workflow: string; taskId: string; cacheKey: string; promptHash: string };
         status: string;
         output: { summary: string };
         metadata: Record<string, unknown>;
@@ -3046,7 +2832,6 @@ export default defineWorkflow({
         cacheKey: "workflow-loader-build",
         status: "completed",
         cached: false,
-        agent: { plugin: "forge", name: "builder" },
         output: { summary: "history" },
         metadata: contractMetadata,
       },
@@ -3084,9 +2869,7 @@ export default defineWorkflow({
           taskId: "build",
           cacheKey: "workflow-loader-build",
           promptHash: expect.stringMatching(/^[a-f0-9]{64}$/),
-          agentManifestHash: "b".repeat(64),
         },
-        agent: { plugin: "forge", name: "builder" },
         status: "completed",
         output: { summary: "history" },
         metadata: contractMetadata,

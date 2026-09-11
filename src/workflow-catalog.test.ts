@@ -2,9 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { LOWERER_CAPABILITIES } from "./lowerer-capabilities.js";
 import {
   lookupCatalogRef,
-  pickDefaultAgent,
-  pickDefaultAgentRef,
-  pickDefaultWorkers,
   projectCatalog,
   projectCompactIndex,
   renderCompactIndexHuman,
@@ -12,7 +9,6 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
-  scaffoldPluginFreeWorkflowSource,
   scaffoldWorkflowSource,
   searchCatalog,
   WORKFLOW_WORKERS,
@@ -21,26 +17,6 @@ import {
 } from "./workflow-catalog.js";
 
 const fixture: GeneratedSurface = {
-  agents: {
-    forge: {
-      builder: {
-        plugin: "forge",
-        name: "builder",
-        description: "Builds.",
-        installs: ["claude-code", "grok"],
-        model: {
-          targets: {
-            "claude-code": { model: "claude-opus-4-8" },
-            opencode: { models: [{ model: "glm-5.2" }, { model: "deepseek" }] },
-            "amp-code": {},
-          },
-        },
-      },
-    },
-    gleaner: {
-      gleaner: { plugin: "gleaner", name: "gleaner", description: "Gleans." },
-    },
-  },
   sops: {
     forge: {
       beacon: {
@@ -79,15 +55,12 @@ describe("projectCatalog", () => {
   const catalog = projectCatalog(fixture);
 
   test("sorts namespaces and builds ref paths from the object keys", () => {
-    expect(catalog.namespaces.map((n) => n.namespace)).toEqual(["forge", "gleaner"]);
-    expect(catalog.namespaces[0]!.agents[0]!.ref).toBe("agents.forge.builder");
-  });
-
-  test("projects per-harness model: single, any-of (first +count), skips empty targets", () => {
-    const m = catalog.namespaces[0]!.agents[0]!.modelByHarness;
-    expect(m["claude-code"]).toBe("claude-opus-4-8");
-    expect(m["opencode"]).toBe("glm-5.2 (+1)");
-    expect(m["amp-code"]).toBeUndefined();
+    expect(catalog.namespaces.map((n) => n.namespace)).toEqual(["forge"]);
+    expect(catalog.namespaces[0]!.sops[0]!.ref).toBe("sops.forge.beacon");
+    expect(catalog.namespaces[0]!.sops[0]!.phases.map((phase) => phase.ref)).toEqual([
+      "sops.forge.beacon.phases.build",
+      "sops.forge.beacon.phases.explore",
+    ]);
   });
 
   test("flattens model profiles to ref paths", () => {
@@ -176,103 +149,20 @@ describe("workflowWorker capability-bit coverage assertion (fixture)", () => {
   });
 });
 
-const catalogWith = (refs: ReadonlyArray<string>): WorkflowCatalog => ({
-  namespaces: [
-    {
-      namespace: "x",
-      sops: [],
-      agents: refs.map((ref) => ({
-        ref,
-        plugin: "x",
-        name: ref.split(".").pop() ?? ref,
-        description: "",
-        installs: [],
-        modelByHarness: {},
-      })),
-    },
-  ],
-  workers: [],
-  modelProfiles: [],
-});
-
-describe("pickDefaultAgentRef", () => {
-  test("prefers agents.forge.explorer", () => {
-    expect(pickDefaultAgentRef(catalogWith(["agents.x.builder", "agents.forge.explorer"]))).toBe("agents.forge.explorer");
-  });
-  test("falls back to the first agent when no explorer/orchestrator", () => {
-    expect(pickDefaultAgentRef(catalogWith(["agents.x.builder"]))).toBe("agents.x.builder");
-  });
-});
-
-const catalogWithInstalls = (installs: ReadonlyArray<string>, workers: ReadonlyArray<string>): WorkflowCatalog => ({
-  namespaces: [
-    {
-      namespace: "x",
-      sops: [],
-      agents: [
-        { ref: "agents.x.builder", plugin: "x", name: "builder", description: "", installs, modelByHarness: {} },
-      ],
-    },
-  ],
-  workers,
-  modelProfiles: [],
-});
-
-describe("pickDefaultWorkers", () => {
-  test("picks two workers when the agent is installed on 2+ workflow-worker harnesses", () => {
-    const catalog = catalogWithInstalls(["claude-code", "grok", "factory-droid"], ["claude-code", "grok", "codex-cli"]);
-    const agent = pickDefaultAgent(catalog);
-    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "grok"]);
-  });
-
-  test("picks cursor when it is an installed workflow worker", () => {
-    const catalog = catalogWithInstalls(["cursor", "factory-droid"], ["claude-code", "cursor"]);
-    const agent = pickDefaultAgent(catalog);
-    expect(pickDefaultWorkers(catalog, agent)).toEqual(["cursor"]);
-  });
-
-  test("degrades to one worker when only one install is a workflow-worker harness (PQ-176 footgun #2)", () => {
-    // factory-droid is a real harness but has no workflow-worker module — it must
-    // never be picked, and the agent isn't installed on any other worker.
-    const catalog = catalogWithInstalls(["claude-code", "factory-droid"], ["claude-code", "grok", "codex-cli"]);
-    const agent = pickDefaultAgent(catalog);
-    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code"]);
-  });
-
-  test("never picks a worker the agent has no install for", () => {
-    const catalog = catalogWithInstalls(["claude-code"], ["claude-code", "grok", "codex-cli"]);
-    const agent = pickDefaultAgent(catalog);
-    const workers = pickDefaultWorkers(catalog, agent);
-    expect(workers).toEqual(["claude-code"]);
-    expect(workers).not.toContain("grok");
-  });
-
-  test("falls back to claude-code when the agent has no recorded installs", () => {
-    expect(pickDefaultWorkers(catalogWithInstalls([], ["grok"]), undefined)).toEqual(["claude-code"]);
-  });
-
-  test("prefers claude-code first even when it sorts later in installs", () => {
-    const catalog = catalogWithInstalls(
-      ["amp-code", "claude-code", "codex-cli"],
-      ["amp-code", "claude-code", "codex-cli"],
-    );
-    const agent = pickDefaultAgent(catalog);
-    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "amp-code"]);
-  });
-});
-
-describe("scaffoldPluginFreeWorkflowSource", () => {
-  test("uses anonymousWorkflowAgent and does not import prism/refs", () => {
-    const src = scaffoldPluginFreeWorkflowSource("bare");
-    expect(src).toContain("anonymousWorkflowAgent");
+describe("scaffoldWorkflowSource", () => {
+  test("defaults to claude-code and does not import prism/refs or name an agent", () => {
+    const src = scaffoldWorkflowSource("bare");
+    expect(src).toContain('name: "bare"');
+    expect(src).toContain('worker: { worker: "claude-code" }');
     expect(src).toContain("refresh-harness-types");
     expect(src).toContain("workflow models");
     expect(src).toContain("workflow skill");
     expect(src).not.toContain('from "prism/refs"');
+    expect(src).not.toContain("agent:");
   });
 
   test("pins a typed worker.model per task", () => {
-    const src = scaffoldPluginFreeWorkflowSource("typed", [
+    const src = scaffoldWorkflowSource("typed", [
       { worker: "cursor", model: "composer-2.5-fast" },
       { worker: "amp-code", model: "low" },
     ]);
@@ -280,23 +170,14 @@ describe("scaffoldPluginFreeWorkflowSource", () => {
     expect(src).toContain('worker: { worker: "amp-code", model: "low" }');
     expect(src).not.toContain("const probe");
   });
-});
-
-describe("scaffoldWorkflowSource", () => {
-  const src = scaffoldWorkflowSource("my-flow", "agents.forge.explorer", ["claude-code", "grok"]);
-  test("embeds the workflow name, the chosen agent ref, and the refs import", () => {
-    expect(src).toContain(`name: "my-flow"`);
-    expect(src).toContain("agent: agents.forge.explorer,");
-    expect(src).toContain('from "prism/refs"');
-  });
 
   test("never instructs git add — workflows live outside the project repo", () => {
-    expect(src).not.toContain("git add");
+    expect(scaffoldWorkflowSource("my-flow")).not.toContain("git add");
   });
 
   test("degrades to a single task when only one worker is available", () => {
-    const singleWorkerSrc = scaffoldWorkflowSource("solo-flow", "agents.forge.explorer", ["claude-code"]);
-    expect(singleWorkerSrc).toContain('probe("a", "claude-code")');
+    const singleWorkerSrc = scaffoldWorkflowSource("solo-flow", [{ worker: "claude-code" }]);
+    expect(singleWorkerSrc).toContain('worker: { worker: "claude-code" }');
     expect(singleWorkerSrc).not.toContain("Effect.all");
     expect(singleWorkerSrc).not.toContain("grok");
   });
@@ -322,10 +203,9 @@ describe("projectCompactIndex", () => {
   const catalog = projectCatalog(fixture);
   const index = projectCompactIndex(catalog, "/surface/dir");
 
-  test("summarizes each namespace with agent count and sop refs, dropping per-agent detail", () => {
+  test("summarizes each namespace by sop refs, dropping per-phase detail", () => {
     expect(index.namespaces).toEqual([
-      { namespace: "forge", sopRefs: ["sops.forge.beacon"], agentCount: 1 },
-      { namespace: "gleaner", sopRefs: [], agentCount: 1 },
+      { namespace: "forge", sopRefs: ["sops.forge.beacon"] },
     ]);
   });
 
@@ -341,14 +221,13 @@ describe("renderCompactIndexHuman", () => {
   const index = projectCompactIndex(projectCatalog(fixture), "/surface/dir");
   const out = renderCompactIndexHuman(index);
 
-  test("lists one line per namespace with agent count and sop refs", () => {
-    expect(out).toContain("forge  (1 agent, sop refs: sops.forge.beacon)");
-    expect(out).toContain("gleaner  (1 agent)");
+  test("lists one line per namespace with its sop refs", () => {
+    expect(out).toContain("forge  (sops.forge.beacon)");
   });
 
-  test("omits per-agent detail (the point of the compact mode)", () => {
-    expect(out).not.toContain("Builds.");
-    expect(out).not.toContain("agents.forge.builder");
+  test("omits per-sop detail (the point of the compact mode)", () => {
+    expect(out).not.toContain("Map the space before committing.");
+    expect(out).not.toContain("- beacon");
   });
 
   test("names every drill-down flag in the footer", () => {
@@ -367,15 +246,14 @@ describe("renderCompactIndexHuman", () => {
 describe("lookupCatalogRef", () => {
   const catalog = projectCatalog(fixture);
 
-  test("resolves an agent ref", () => {
-    const result = lookupCatalogRef(catalog, "agents.forge.builder");
+  test("resolves a sop ref", () => {
+    const result = lookupCatalogRef(catalog, "sops.forge.beacon");
     expect(result.found).toBe(true);
     expect(result.entity).toMatchObject({
-      kind: "agent",
-      ref: "agents.forge.builder",
+      kind: "sop",
+      ref: "sops.forge.beacon",
       plugin: "forge",
-      name: "builder",
-      description: "Builds.",
+      name: "beacon",
     });
   });
 
@@ -392,10 +270,10 @@ describe("lookupCatalogRef", () => {
   });
 
   test("suggests up to 5 closest refs for an unknown ref by substring match", () => {
-    const result = lookupCatalogRef(catalog, "agents.forge.build");
+    const result = lookupCatalogRef(catalog, "models.agent-foundations.empirical-modelspaces.coding-front");
     expect(result.found).toBe(false);
     expect(result.entity).toBeNull();
-    expect(result.suggestions).toContain("agents.forge.builder");
+    expect(result.suggestions).toContain("models.agent-foundations.empirical-modelspaces.coding-frontier");
     expect(result.suggestions.length).toBeLessThanOrEqual(5);
   });
 
@@ -408,15 +286,6 @@ describe("lookupCatalogRef", () => {
 
 describe("renderRefDetailHuman", () => {
   const catalog = projectCatalog(fixture);
-
-  test("renders full agent detail including per-harness models", () => {
-    const { entity } = lookupCatalogRef(catalog, "agents.forge.builder");
-    const out = renderRefDetailHuman(entity!);
-    expect(out).toContain("agents.forge.builder");
-    expect(out).toContain("claude-code: claude-opus-4-8");
-    expect(out).toContain("Builds.");
-    expect(out).toContain("claude-code, grok");
-  });
 
   test("renders model-profile detail", () => {
     const { entity } = lookupCatalogRef(catalog, "models.agent-foundations.empirical-modelspaces.coding-frontier");
@@ -441,8 +310,8 @@ describe("renderRefDetailHuman", () => {
 
 describe("renderRefNotFoundMessage", () => {
   test("lists suggestions when present", () => {
-    expect(renderRefNotFoundMessage("agents.forge.build", ["agents.forge.builder"])).toContain(
-      "Closest matches: agents.forge.builder",
+    expect(renderRefNotFoundMessage("sops.forge.beaco", ["sops.forge.beacon"])).toContain(
+      "Closest matches: sops.forge.beacon",
     );
   });
 
@@ -454,9 +323,9 @@ describe("renderRefNotFoundMessage", () => {
 describe("searchCatalog", () => {
   const catalog = projectCatalog(fixture);
 
-  test("matches agents by description substring, case-insensitively", () => {
-    const hits = searchCatalog(catalog, "BUILDS");
-    expect(hits).toEqual([{ ref: "agents.forge.builder", name: "builder", descriptionExcerpt: "Builds." }]);
+  test("matches sop-phase purposes case-insensitively", () => {
+    const hits = searchCatalog(catalog, "BEFORE COMMITTING");
+    expect(hits).toEqual([{ ref: "sops.forge.beacon.phases.explore", name: "explore", descriptionExcerpt: "Map the space before committing." }]);
   });
 
   test("matches model-profile refs", () => {
@@ -475,11 +344,18 @@ describe("searchCatalog", () => {
     expect(searchCatalog(catalog, "nonexistent-xyz")).toEqual([]);
   });
 
-  test("truncates long descriptions to ~100 chars with an ellipsis", () => {
-    const longDescription = "x".repeat(150);
+  test("truncates long phase purposes to ~100 chars with an ellipsis", () => {
+    const longPurpose = "x".repeat(150);
     const surface: GeneratedSurface = {
-      agents: { ns: { a: { plugin: "p", name: "a", description: longDescription } } },
-      sops: {},
+      sops: {
+        ns: {
+          long: {
+            plugin: "p",
+            name: "long",
+            phases: { phase: { name: "phase", sop: "long", plugin: "p", framing: { purpose: longPurpose } } },
+          },
+        },
+      },
       models: {},
     };
     const hits = searchCatalog(projectCatalog(surface), "xxx");
@@ -497,10 +373,10 @@ describe("renderQueryResultsHuman", () => {
 
   test("formats each hit as ref — name — description and hints --ref", () => {
     const out = renderQueryResultsHuman(
-      [{ ref: "agents.forge.builder", name: "builder", descriptionExcerpt: "Builds." }],
-      "build",
+      [{ ref: "sops.forge.beacon", name: "beacon", descriptionExcerpt: "Maps the space." }],
+      "beacon",
     );
-    expect(out).toContain("agents.forge.builder — builder — Builds.");
+    expect(out).toContain("sops.forge.beacon — beacon — Maps the space.");
     expect(out).toContain("--ref <ref>");
   });
 });

@@ -1368,7 +1368,6 @@ export default defineWorkflow({
     await writeFile(file, workflowSource("default", { worker: "grok", plugin: sourcePluginName }));
     const { files: generatedFiles } = await planLowering({
       agents: [consumerAgent],
-      orbits: [],
       sops: [],
       skills: [],
       hooks: [],

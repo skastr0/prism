@@ -123,6 +123,12 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
     reason:
       "deleted in workstream C — agent tool grants and access intent are gone; Prism stops managing which tools an agent may use",
   },
+  {
+    pattern: /\bdefineOrbit\b|\bOrbitSource\b|\borbitRef\b|\bOrbitSchema\b|\bOrbitRefInput\b|\bnormalizeOrbitRefInput\b|\bOrbitValidationError\b|\brenderGeneratedOrbitSkill\b|\bprojectOrbitsForCompileManifest\b|\binstantiateOrbit\b|\bvalidateOrbit\b/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in workstream D — the orbit primitive is gone; typed procedures are sops/*.sop.ts and concrete skills",
+  },
 ];
 
 const SRC_ROOT = import.meta.dir;

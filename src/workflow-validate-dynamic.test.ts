@@ -16,7 +16,6 @@ const surface: GeneratedSurface = {
       builder: { plugin: "forge", name: "builder", description: "Builds." },
     },
   },
-  orbits: {},
   sops: {
     forge: {
       beacon: {
@@ -74,8 +73,7 @@ describe("validatePhaseBindings", () => {
   test("returns no findings when the compiled surface has no typed SOP phases", () => {
     const legacySurface: GeneratedSurface = {
       agents: surface.agents,
-      orbits: {},
-      sops: {},
+          sops: {},
       models: {},
     };
     expect(validatePhaseBindings(

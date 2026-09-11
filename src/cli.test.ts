@@ -2038,7 +2038,7 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain(
-    "Manifest targets: agents=[opencode, claude-code]; orbits=[opencode, claude-code]; tools=[opencode, claude-code]; modelspaces=[opencode, claude-code]; skillspaces=[opencode, claude-code]"
+    "Manifest targets: agents=[opencode, claude-code]; tools=[opencode, claude-code]; modelspaces=[opencode, claude-code]; skillspaces=[opencode, claude-code]"
   );
   expect(result.stdout).toContain("Matching requested harnesses: opencode, claude-code");
   expect(result.stdout).toContain("Compile output scope: project");
@@ -2050,9 +2050,6 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
     await pathExists(join(projectRoot, ".opencode", "agents", "builder.md"))
   ).toBe(true);
   expect(
-    await pathExists(join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"))
-  ).toBe(true);
-  expect(
     await pathExists(
       join(
         projectRoot,
@@ -2061,19 +2058,6 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
         "prism-generated-canonical-compile-fixture",
         "agents",
         "builder.md",
-      ),
-    )
-  ).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        projectRoot,
-        ".claude",
-        "skills",
-        "prism-generated-canonical-compile-fixture",
-        "skills",
-        "delivery-contract",
-        "SKILL.md",
       ),
     )
   ).toBe(true);

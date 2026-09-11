@@ -7,7 +7,6 @@ import {
   DuplicateNameError,
   InvalidTargetScopeError,
   MissingTargetResolutionError,
-  OrbitValidationError,
   SourceParseError,
   UnknownDependencyError,
   UnknownReferenceError,
@@ -40,12 +39,6 @@ const SAMPLE_ERRORS: ReadonlyArray<PrismError> = [
     sourcePath: "/plugins/demo/agents/builder.agent.ts",
     field: "skill",
     referenceName: "submit-work",
-  }),
-  new OrbitValidationError({
-    sourcePath: "/plugins/demo/orbits/forge.orbit.ts",
-    orbitName: "forge",
-    field: "phases",
-    message: "phase list must not be empty",
   }),
   new AgentValidationError({
     sourcePath: "/plugins/demo/agents/builder.agent.ts",

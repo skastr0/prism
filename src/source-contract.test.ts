@@ -5,7 +5,6 @@ import {
   type AgentSource,
   type HookSource,
   type ModelspaceSource,
-  type OrbitSource,
   type SkillspaceSource,
   type SopSource,
   type ToolSource,
@@ -14,7 +13,6 @@ import {
   AgentSourceSchema,
   HookSourceSchema,
   ModelspaceSourceSchema,
-  OrbitSourceSchema,
   SkillspaceSourceSchema,
   SopSourceSchema,
   ToolSourceSchema,
@@ -80,48 +78,6 @@ describe("public source contracts", () => {
       },
     } satisfies SkillspaceSource;
 
-    const orbit = {
-      name: "delivery",
-      description: "Delivery orbit.",
-      produces: "Reviewed implementation.",
-      definitions: {
-        glyphs: { purpose: "Track implementation work." },
-      },
-      parameters: [{ name: "domain", description: "Domain under change" }],
-      phases: [{
-        name: "Build",
-        agents: [{ kind: "agent-ref", name: "builder" }],
-        notes: { Done: "Patch verified." },
-        telos: "Implement the change.",
-        real_world_change: "Code changes exist.",
-        cold_pickup_test: "A reviewer can verify from the diff.",
-        workflow: {
-          when: "Use this phase when ${domain} implementation is ready.",
-          inputs: ["Scoped request", "Current source"],
-          outputs: ["Verified patch", "Reviewable summary"],
-          sequence: ["Read source", "Apply change", "Validate result"],
-          coordination: "Coordinate with the assigned reviewer.",
-          finish_criteria: ["Tests pass", "Change is committed"],
-          escalation: "Escalate if the requested side effect is unauthorized.",
-        },
-        body: "Full phase instructions.",
-      }],
-      orchestrator: {
-        agent: { kind: "agent-ref", name: "builder" },
-      },
-      pulsar_checkpoints: [{ after: "Build", note: "Run Pulsar." }],
-      signal_emitter: {
-        destinations: [{
-          project_key: "prism",
-          orbit: "forge",
-          default_priority: "normal",
-          note: "Route implementation pressure.",
-        }],
-      },
-      evolution: "Promote recurring pressure.",
-      body: "Orbit body.",
-    } satisfies OrbitSource;
-
     const hook = {
       name: "session-start",
       description: "Observe session start.",
@@ -155,12 +111,6 @@ describe("public source contracts", () => {
     expectDecodes(ToolSourceSchema, tool);
     expectDecodes(ModelspaceSourceSchema, modelspace);
     expectDecodes(SkillspaceSourceSchema, skillspace);
-    const decodedOrbit = expectDecodes(OrbitSourceSchema, orbit);
-    expect(decodedOrbit.phases[0]?.workflow?.sequence).toEqual([
-      "Read source",
-      "Apply change",
-      "Validate result",
-    ]);
     expectDecodes(HookSourceSchema, hook);
     const decodedSop = expectDecodes(SopSourceSchema, sop);
     expect(decodedSop.phases[0]?.acceptance_criteria).toEqual([
@@ -213,26 +163,6 @@ describe("public source contracts", () => {
     expectRejects(AgentSourceSchema, {
       ...base,
       access: { skills: [{ kind: "skill-ref", name: "testing" }] },
-    });
-  });
-
-  test("orbit tool permissions and trait requirements are rejected", () => {
-    const base = {
-      name: "delivery",
-      description: "Delivery orbit.",
-      phases: [{ name: "Build", agents: ["builder"] }],
-    };
-    expectRejects(OrbitSourceSchema, {
-      ...base,
-      tool_permissions: [{ ref: "protocol:submit_work", as: "submit_work" }],
-    });
-    expectRejects(OrbitSourceSchema, {
-      ...base,
-      phases: [{ name: "Build", agents: ["builder"], requires: [{ all: ["committable"] }] }],
-    });
-    expectRejects(OrbitSourceSchema, {
-      ...base,
-      orchestrator: { agent: "builder", tools: [{ ref: "protocol:create_glyph" }] },
     });
   });
 

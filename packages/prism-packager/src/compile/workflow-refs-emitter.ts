@@ -1,11 +1,8 @@
 import { join } from "node:path";
-import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-sdk/refs";
 import type {
   CompileManifest,
-  CompileManifestAgent,
   CompileManifestSop,
   CompileManifestSopPhase,
-  CompileManifestCanonicalTool,
 } from "./compile-manifest.js";
 import { projectGeneratedRefsDir } from "../project-key.js";
 import type { DesiredRoot } from "../sync/desired.js";
@@ -20,27 +17,18 @@ export const WORKFLOW_REFS_HARNESS = "prism-workflows";
 export const workflowRefsRoot = (prismHome: string, projectKey: string): string =>
   projectGeneratedRefsDir(prismHome, projectKey);
 
-export const workflowAgentsPath = (prismHome: string, projectKey: string): string =>
-  join(workflowRefsRoot(prismHome, projectKey), "agents.ts");
-
 export const workflowModelsPath = (prismHome: string, projectKey: string): string =>
   join(workflowRefsRoot(prismHome, projectKey), "models.ts");
 
-export const workflowSkillsPath = (prismHome: string, projectKey: string): string =>
-  join(workflowRefsRoot(prismHome, projectKey), "skills.ts");
-
 export const workflowSopsPath = (prismHome: string, projectKey: string): string =>
   join(workflowRefsRoot(prismHome, projectKey), "sops.ts");
-
-export const workflowToolsPath = (prismHome: string, projectKey: string): string =>
-  join(workflowRefsRoot(prismHome, projectKey), "tools.ts");
 
 const camelKey = (value: string): string => {
   const parts = value
     .split(/[^A-Za-z0-9]+/u)
     .filter((part) => part.length > 0);
   const [first, ...rest] = parts;
-  if (!first) return "agent";
+  if (!first) return "item";
   const normalizedFirst = first[0]!.toLowerCase() + first.slice(1);
   return [
     normalizedFirst,
@@ -125,8 +113,6 @@ export const jsonSchemaToEffectSchemaSource = (
   );
 };
 
-const manifestAgentId = (plugin: string, name: string): string => `${plugin}:${name}`;
-
 const sortStrings = (values: Iterable<string>): string[] => [...values].sort();
 
 type EmittedModelProfileRef = {
@@ -136,40 +122,6 @@ type EmittedModelProfileRef = {
   readonly profile: string;
   readonly targets: Readonly<Record<string, Record<string, unknown>>>;
 };
-
-type EmittedManagedSkillRef = {
-  readonly kind: "managed-skill-ref";
-  readonly plugin: string;
-  readonly name: string;
-};
-
-type EmittedSkillspaceRef = {
-  readonly kind: "skillspace-ref";
-  readonly plugin: string;
-  readonly skillspace: string;
-  readonly skills: readonly string[];
-};
-
-type EmittedCanonicalToolRef = {
-  readonly kind: "canonical-tool-ref";
-  readonly plugin: string;
-  readonly name: string;
-};
-
-type UsedToolEntry = CompileManifestCanonicalTool;
-
-const toolSortKey = (entry: UsedToolEntry): string => entry.name;
-
-const pluginNames = (manifest: CompileManifest): string[] =>
-  [...new Set(Object.values(manifest.agents).map((agent) => agent.plugin))].sort();
-
-const pluginAgents = (
-  manifest: CompileManifest,
-  pluginName: string,
-): CompileManifestAgent[] =>
-  Object.values(manifest.agents)
-    .filter((agent) => agent.plugin === pluginName)
-    .sort((left, right) => left.name.localeCompare(right.name));
 
 const collectUsedModelProfiles = (
   manifest: CompileManifest,
@@ -245,159 +197,6 @@ const collectUsedModelProfiles = (
   );
 };
 
-const collectUsedSkills = (
-  manifest: CompileManifest,
-): Array<{ plugin: string; name?: string; skillspace?: string; skills?: readonly string[] }> => {
-  const entries: Array<{ plugin: string; name?: string; skillspace?: string; skills?: readonly string[] }> = [];
-  const seen = new Set<string>();
-
-  const skRec = manifest.skills;
-  if (skRec && Object.keys(skRec).length > 0) {
-    for (const entry of Object.values(skRec)) {
-      const k = "skillspace" in entry && entry.skillspace !== undefined
-        ? `${entry.plugin}:${entry.skillspace}`
-        : `${entry.plugin}:${(entry as { readonly name?: string }).name ?? ""}`;
-      if (!seen.has(k)) {
-        seen.add(k);
-        entries.push({ ...entry });
-      }
-    }
-  } else {
-    // Fallback: derive from agent skill strings (manifest is source of truth either way)
-    const skillAccum: Record<
-      string,
-      { plugin: string; name?: string; skillspace?: string; skills?: Set<string> }
-    > = {};
-    for (const agent of Object.values(manifest.agents)) {
-      const allRefs = new Set<string>(agent.skills);
-      for (const ref of allRefs) {
-        const named = parseNamedRef(ref);
-        const space = parseSpaceItemRef(ref, "/");
-        let owner = named.pluginPrefix ?? agent.plugin;
-        let key: string;
-        if (space) {
-          owner = space.pluginPrefix ?? agent.plugin;
-          key = `${owner}:${space.space}`;
-          if (!skillAccum[key]) {
-            skillAccum[key] = { plugin: owner, skillspace: space.space, skills: new Set() };
-          }
-          skillAccum[key]!.skills!.add(space.name);
-        } else {
-          key = `${owner}:${named.name}`;
-          if (!skillAccum[key]) {
-            skillAccum[key] = { plugin: owner, name: named.name };
-          }
-        }
-      }
-    }
-    for (const [_key, acc] of Object.entries(skillAccum)) {
-      let item: { plugin: string; name?: string; skillspace?: string; skills?: readonly string[] };
-      if (acc.skillspace) {
-        item = {
-          plugin: acc.plugin,
-          skillspace: acc.skillspace,
-          skills: sortStrings(acc.skills!),
-        };
-      } else if (acc.name) {
-        item = { plugin: acc.plugin, name: acc.name };
-      } else {
-        continue;
-      }
-      entries.push(item);
-    }
-  }
-
-  return entries.sort((a, b) =>
-    a.plugin === b.plugin
-      ? (a.skillspace ?? a.name ?? "") === (b.skillspace ?? b.name ?? "")
-        ? 0
-        : (a.skillspace ?? a.name ?? "").localeCompare(b.skillspace ?? b.name ?? "")
-      : a.plugin.localeCompare(b.plugin),
-  );
-};
-
-const agentInstalls = (agent: CompileManifestAgent): string[] =>
-  Object.keys(agent.composed.perTarget).sort();
-
-const renderAgentRef = (options: {
-  readonly agent: CompileManifestAgent;
-}): string => {
-  const modelBindings = options.agent.composed.modelBindings;
-  let modelTargets: Record<string, Record<string, unknown>> = {};
-  if (modelBindings.modelspace && modelBindings.profile) {
-    for (const [harness, slice] of Object.entries(options.agent.composed.perTarget)) {
-      if (slice.model !== null) modelTargets[harness] = slice.model;
-    }
-  }
-  const model =
-    modelBindings.modelspace || modelBindings.profile
-      ? `,
-      model: ${JSON.stringify({ ...modelBindings, targets: modelTargets })}`
-      : "";
-
-  return `{
-      kind: "agent-ref",
-      plugin: ${JSON.stringify(options.agent.plugin)},
-      name: ${JSON.stringify(options.agent.name)},
-      description: ${JSON.stringify(options.agent.description)},
-      sourceHash: ${JSON.stringify(options.agent.sourceHash)},
-      manifestHash: ${JSON.stringify(options.agent.manifestHash)}${model},
-      installs: ${JSON.stringify(agentInstalls(options.agent))}
-    }`;
-};
-
-const renderAgentsNamespace = (options: {
-  readonly manifest: CompileManifest;
-  readonly pluginName: string;
-}): string => {
-  const entries = pluginAgents(options.manifest, options.pluginName).map((agent) =>
-    `    ${JSON.stringify(camelKey(agent.name))}: ${renderAgentRef({ agent })}`,
-  );
-  return entries.length > 0 ? entries.join(",\n") : "";
-};
-
-export const renderWorkflowAgentsModule = (options: {
-  readonly manifest: CompileManifest;
-}): string => {
-  const namespaces = pluginNames(options.manifest).map((pluginName) => {
-    const pluginKey = camelKey(pluginName);
-    const body = renderAgentsNamespace({
-      manifest: options.manifest,
-      pluginName,
-    });
-    return `  ${JSON.stringify(pluginKey)}: {
-${body}
-  }`;
-  });
-
-  return `/**
- * Generated by Prism. Do not edit.
- * Source: compile manifest ${options.manifest.manifestHash}
- */
-
-export interface WorkflowModelRef {
-  readonly modelspace?: string;
-  readonly profile?: string;
-  readonly targets?: Readonly<Record<string, Record<string, unknown>>>;
-}
-
-export interface WorkflowAgentRef {
-  readonly kind: "agent-ref";
-  readonly plugin: string;
-  readonly name: string;
-  readonly description: string;
-  readonly sourceHash: string;
-  readonly manifestHash: string;
-  readonly model?: WorkflowModelRef;
-  readonly installs: ReadonlyArray<string>;
-}
-
-export const agents = {
-${namespaces.join(",\n")}
-} as const satisfies Record<string, Record<string, WorkflowAgentRef>>;
-`;
-};
-
 export const renderWorkflowModelsModule = (options: {
   readonly manifest: CompileManifest;
 }): string => {
@@ -466,82 +265,6 @@ ${body}
 } as const satisfies Record<string, Record<string, Record<string, WorkflowModelProfileRef>>>;
 `;
 };
-
-export const renderWorkflowSkillsModule = (options: {
-  readonly manifest: CompileManifest;
-}): string => {
-  const used = collectUsedSkills(options.manifest);
-
-  const byPlugin: Record<string, Record<string, EmittedManagedSkillRef | EmittedSkillspaceRef>> = {};
-  for (const entry of used) {
-    const pk = camelKey(entry.plugin);
-    if (!byPlugin[pk]) byPlugin[pk] = {};
-    if (entry.skillspace) {
-      const sk = camelKey(entry.skillspace);
-      byPlugin[pk][sk] = {
-        kind: "skillspace-ref",
-        plugin: entry.plugin,
-        skillspace: entry.skillspace,
-        skills: entry.skills ?? [],
-      };
-    } else if (entry.name) {
-      const nk = camelKey(entry.name);
-      byPlugin[pk][nk] = {
-        kind: "managed-skill-ref",
-        plugin: entry.plugin,
-        name: entry.name,
-      };
-    }
-  }
-
-  const pluginBlocks = Object.keys(byPlugin)
-    .sort()
-    .map((pk) => {
-      const group = byPlugin[pk]!;
-      const lines = Object.keys(group)
-        .sort()
-        .map((k) => {
-          const ref = group[k];
-          return `    ${JSON.stringify(k)}: ${JSON.stringify(ref)}`;
-        })
-        .join(",\n");
-      return `  ${JSON.stringify(pk)}: {\n${lines}\n  }`;
-    });
-
-  const body = pluginBlocks.length > 0 ? pluginBlocks.join(",\n") : "";
-
-  return `/**
- * Generated by Prism. Do not edit.
- * Source: compile manifest ${options.manifest.manifestHash}
- */
-
-export interface WorkflowManagedSkillRef {
-  readonly kind: "managed-skill-ref";
-  readonly plugin: string;
-  readonly name: string;
-}
-
-export interface WorkflowSkillspaceRef {
-  readonly kind: "skillspace-ref";
-  readonly plugin: string;
-  readonly skillspace: string;
-  readonly skills: ReadonlyArray<string>;
-}
-
-export const skills = {
-${body}
-} as const satisfies Record<string, Record<string, WorkflowManagedSkillRef | WorkflowSkillspaceRef>>;
-`;
-};
-
-const collectUsedTools = (
-  manifest: CompileManifest,
-): UsedToolEntry[] =>
-  Object.values(manifest.tools).sort((a, b) =>
-    a.plugin === b.plugin
-      ? toolSortKey(a).localeCompare(toolSortKey(b))
-      : a.plugin.localeCompare(b.plugin),
-  );
 
 const collectManifestSops = (manifest: CompileManifest): CompileManifestSop[] =>
   Object.values(manifest.sops ?? {}).sort((left, right) =>
@@ -672,53 +395,6 @@ ${body}
 `;
 };
 
-export const renderWorkflowToolsModule = (options: {
-  readonly manifest: CompileManifest;
-}): string => {
-  const used = collectUsedTools(options.manifest);
-
-  const byPlugin: Record<string, Record<string, EmittedCanonicalToolRef>> = {};
-  for (const entry of used) {
-    const pk = camelKey(entry.plugin);
-    if (!byPlugin[pk]) byPlugin[pk] = {};
-    const nk = camelKey(entry.name);
-    byPlugin[pk][nk] = {
-      kind: "canonical-tool-ref",
-      plugin: entry.plugin,
-      name: entry.name,
-    };
-  }
-
-  const pluginBlocks = Object.keys(byPlugin)
-    .sort()
-    .map((pk) => {
-      const group = byPlugin[pk]!;
-      const lines = Object.keys(group)
-        .sort()
-        .map((k) => `    ${JSON.stringify(k)}: ${JSON.stringify(group[k])}`)
-        .join(",\n");
-      return `  ${JSON.stringify(pk)}: {\n${lines}\n  }`;
-    });
-
-  const body = pluginBlocks.length > 0 ? pluginBlocks.join(",\n") : "";
-
-  return `/**
- * Generated by Prism. Do not edit.
- * Source: compile manifest ${options.manifest.manifestHash}
- */
-
-export interface WorkflowCanonicalToolRef {
-  readonly kind: "canonical-tool-ref";
-  readonly plugin: string;
-  readonly name: string;
-}
-
-export const tools = {
-${body}
-} as const satisfies Record<string, Record<string, WorkflowCanonicalToolRef>>;
-`;
-};
-
 export const planWorkflowRefsEmit = (options: {
   readonly prismHome: string;
   readonly projectKey: string;
@@ -730,13 +406,6 @@ export const planWorkflowRefsEmit = (options: {
     root,
     files: [
       {
-        targetPath: workflowAgentsPath(options.prismHome, options.projectKey),
-        content: renderWorkflowAgentsModule({
-          manifest: options.manifest,
-        }),
-        plugin: WORKFLOW_REFS_HARNESS,
-      },
-      {
         targetPath: workflowModelsPath(options.prismHome, options.projectKey),
         content: renderWorkflowModelsModule({
           manifest: options.manifest,
@@ -744,22 +413,8 @@ export const planWorkflowRefsEmit = (options: {
         plugin: WORKFLOW_REFS_HARNESS,
       },
       {
-        targetPath: workflowSkillsPath(options.prismHome, options.projectKey),
-        content: renderWorkflowSkillsModule({
-          manifest: options.manifest,
-        }),
-        plugin: WORKFLOW_REFS_HARNESS,
-      },
-      {
         targetPath: workflowSopsPath(options.prismHome, options.projectKey),
         content: renderWorkflowSopsModule({
-          manifest: options.manifest,
-        }),
-        plugin: WORKFLOW_REFS_HARNESS,
-      },
-      {
-        targetPath: workflowToolsPath(options.prismHome, options.projectKey),
-        content: renderWorkflowToolsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,

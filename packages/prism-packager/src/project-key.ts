@@ -87,6 +87,6 @@ export const projectCompileManifestPath = (prismHome: string, key: string): stri
 export const projectGeneratedRefsDir = (prismHome: string, key: string): string =>
   join(projectStateDir(prismHome, key), "generated");
 
-/** ~/.prism/state/projects/<key>/generated/agents.ts — the agents refs file. */
-export const projectGeneratedAgentsPath = (prismHome: string, key: string): string =>
-  join(projectGeneratedRefsDir(prismHome, key), "agents.ts");
+/** ~/.prism/state/projects/<key>/generated/sops.ts — the sop refs file (surface sentinel). */
+export const projectGeneratedSopsPath = (prismHome: string, key: string): string =>
+  join(projectGeneratedRefsDir(prismHome, key), "sops.ts");

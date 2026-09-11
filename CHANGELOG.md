@@ -9,6 +9,35 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## 0.5.1 - 2026-09-11
+
+### Added
+
+- **OpenCode 2** — first-class harness and workflow worker `opencode2`, detected
+  by the `opencode2` binary (or `PRISM_WORKFLOW_OPENCODE2_BIN`), not by the
+  shared `~/.config/opencode/` home. `coding-harness` targets `opencode2`.
+  `--harness opencode` and `worker: "opencode"` remain OpenCode 1.x only and
+  never fall through to the V2 binary. The V2 worker uses `opencode2 run
+  --format json [--auto]` (no `--dir`).
+- `prism workflow skill` now documents `wf.phase` / `prism/refs/sops` SOP
+  binding and lists `opencode2` on the permission table.
+
+### Fixed
+
+- Generated `sops.ts` / `models.ts` can be imported by `prism workflow
+  catalog`, `validate`, and `run` after a SOP compile. Those commands no
+  longer die on `Cannot find package 'effect'` from `~/.prism/state/.../generated/`.
+- `prism validate` loads compile sources (`sops/*.sop.ts`, agents, hooks), so
+  a forbidden SOP field fails at validate instead of only at refresh.
+- Multi-harness `--compile-root` is a sandbox prefix that preserves each
+  harness home. Compiling `opencode` and `opencode2` into one prefix fail-closes
+  (they share `~/.config/opencode`).
+- Kimi Code and Factory Droid emit SOP-only plugins (the emit gates now
+  include `sops`).
+- Scaffold no longer advertises the removed `--max-concurrent-tasks` flag.
+- Devin workflow extract reads ATIF `messages` / `turns` / `events` in
+  addition to `steps[]`.
+
 ## 0.5.0 - 2026-09-11
 
 ### Added

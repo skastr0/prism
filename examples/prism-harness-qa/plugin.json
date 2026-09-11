@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "description": "Reference QA plugin for verifying Prism compile and workflow output across harnesses.",
   "targets": {
-    "rules": ["coding-harness"],
-    "commands": ["coding-harness"],
-    "skills": ["coding-harness", "claw-harness"],
+    "rules": ["coding-harness", "opencode"],
+    "commands": ["coding-harness", "opencode"],
+    "skills": ["coding-harness", "opencode", "claw-harness"],
     "agents": ["opencode", "claude-code", "codex-cli", "grok", "kimi-code", "amp-code"],
     "sops": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code", "devin"],
     "modelspaces": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code", "devin"],

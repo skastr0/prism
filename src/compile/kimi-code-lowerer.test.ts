@@ -34,7 +34,6 @@ const permissionBinding = (
   ownerPlugin: string,
   toolName: string,
 ): ResolvedContractBinding => ({
-  kind: "permission",
   logicalName: toolName,
   toolPluginName: ownerPlugin,
   toolName,

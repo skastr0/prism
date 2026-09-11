@@ -7,6 +7,7 @@
 
 import * as EffectModule from "effect";
 import { Effect, Schema } from "effect";
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, join, relative, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
@@ -33,34 +34,19 @@ import {
   SkillspaceSchema,
   Sop,
   SopDefinitionSchema,
-  Toolspace,
-  ToolspaceSchema,
-  Trait,
-  TraitSchema,
   normalizeAgentRefInput,
   normalizeOrbitRefInput,
   normalizeModelProfileRefInput,
   normalizeSkillRefInput,
-  normalizeToolGroupRefInput,
-  normalizeToolRefInput,
-  normalizeTraitRefInput,
-  type Access,
   type HookToolMatcherInput,
   type OrbitDefinition,
-  type OrbitToolPermissionTool,
-  type NormalizedAccess,
   type NormalizedHookMatch,
   type NormalizedHookToolMatcher,
   type NormalizedOrbitOrchestrator,
   type NormalizedOrbitPhase,
-  type NormalizedOrbitToolPermissionTool,
   type NormalizedSopPhase,
-  type NormalizedTraitBinding,
-  type NormalizedTraitBindingToolSlot,
   type SkillRefInput,
   type SopDefinition,
-  type TraitBindingInput,
-  type TraitRefInput,
 } from "./sources.js";
 import {
   AgentNameMismatchError,
@@ -615,7 +601,7 @@ const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> =>
   const prismHome = resolvePrismHome();
   const { key } = deriveProjectKey();
   const refsDir = projectGeneratedRefsDir(prismHome, key);
-  const modules = ["agents", "models", "skills", "traits", "orbits", "sops", "tools"] as const;
+  const modules = ["agents", "models", "skills", "orbits", "sops", "tools"] as const;
   return Object.fromEntries(
     modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
   );
@@ -723,7 +709,19 @@ export const prepareImportWrapper = async (
   };
 };
 
-const normalizeImportPath = (path: string): string => path.replace(/\\/g, "/");
+const normalizeImportPath = (path: string): string => {
+  let normalized = path;
+  try {
+    // Canonicalize through symlinks (macOS /var -> /private/var): Bun's
+    // bundler caches the canonical form after the first build, and mixing
+    // raw and canonical specifiers makes the second build fail to resolve
+    // the Prism-owned runtime module.
+    normalized = realpathSync(path);
+  } catch {
+    // Fall through to the raw path when it does not exist yet.
+  }
+  return normalized.replace(/\\/g, "/");
+};
 
 const pluginBundleSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
   const runtimePaths = await getImportRuntimePaths();
@@ -848,9 +846,7 @@ const formatImportError = (cause: unknown): string => {
 
 const IDENTITY_SUFFIX = ".identity.md";
 const PERSONALITY_SUFFIX = ".personality.md";
-const TRAIT_SUFFIX_TS = ".trait.ts";
 const AGENT_SUFFIX_TS = ".agent.ts";
-const TOOLSPACE_SUFFIX_TS = ".toolspace.ts";
 const MODELSPACE_SUFFIX_TS = ".modelspace.ts";
 const SKILLSPACE_SUFFIX_TS = ".skillspace.ts";
 const ORBIT_SUFFIX_TS = ".orbit.ts";
@@ -888,57 +884,6 @@ const forbiddenFieldError = (
     message: `${field}: ${message}`,
   });
 
-const normalizeAccess = (
-  sourcePath: string,
-  kind: SourceParseKind,
-  field: string,
-  access: Access | undefined,
-): NormalizedAccess | SourceParseError => {
-  const tools: string[] = [];
-  for (const [index, tool] of (access?.tools ?? []).entries()) {
-    const normalized = normalizeToolRefInput(`${field}.tools[${index}]`, tool);
-    if (typeof normalized !== "string") {
-      return new SourceParseError({
-        sourcePath,
-        kind,
-        message: `${normalized.field}: ${normalized.message}`,
-      });
-    }
-    tools.push(normalized);
-  }
-
-  const toolGroups: string[] = [];
-  for (const [index, toolGroup] of (access?.toolGroups ?? []).entries()) {
-    const normalized = normalizeToolGroupRefInput(
-      `${field}.toolGroups[${index}]`,
-      toolGroup,
-    );
-    if (typeof normalized !== "string") {
-      return new SourceParseError({
-        sourcePath,
-        kind,
-        message: `${normalized.field}: ${normalized.message}`,
-      });
-    }
-    toolGroups.push(normalized);
-  }
-
-  const skills: string[] = [];
-  for (const [index, skill] of (access?.skills ?? []).entries()) {
-    const normalized = normalizeSkillRefInput(`${field}.skills[${index}]`, skill);
-    if (typeof normalized !== "string") {
-      return new SourceParseError({
-        sourcePath,
-        kind,
-        message: `${normalized.field}: ${normalized.message}`,
-      });
-    }
-    skills.push(normalized);
-  }
-
-  return { tools, toolGroups, skills };
-};
-
 const normalizeSkillRefs = (
   sourcePath: string,
   kind: SourceParseKind,
@@ -968,27 +913,16 @@ const normalizeHookToolMatcher = (
   switch (matcher.kind) {
     case "hook-any-tool":
       return { kind: "any" };
-    case "hook-toolspace-tool": {
-      const normalized = normalizeToolRefInput(`${field}.tool`, matcher.tool);
-      if (typeof normalized !== "string") {
+    case "hook-native-tool": {
+      const name = matcher.name.trim();
+      if (!name) {
         return new SourceParseError({
           sourcePath,
           kind: "hook",
-          message: `${normalized.field}: ${normalized.message}`,
+          message: `${field}.name: must be a non-empty native tool name`,
         });
       }
-      return { kind: "toolspace-tool", ref: normalized };
-    }
-    case "hook-toolspace-group": {
-      const normalized = normalizeToolGroupRefInput(`${field}.group`, matcher.group);
-      if (typeof normalized !== "string") {
-        return new SourceParseError({
-          sourcePath,
-          kind: "hook",
-          message: `${normalized.field}: ${normalized.message}`,
-        });
-      }
-      return { kind: "toolspace-group", ref: normalized };
+      return { kind: "native-tool", name };
     }
     case "hook-canonical-tool": {
       const ref = matcher.ref.trim();
@@ -1057,264 +991,6 @@ const unsupportedHookFieldError = (
 const isEffectSchema = (value: unknown): value is Schema.Schema.AnyNoContext =>
   Schema.isSchema(value);
 
-interface SchemaSymbolSource {
-  readonly sourcePath: string;
-  readonly exportName: string;
-}
-
-type BindingToolSlotSources = Map<number, Map<string, Map<string, SchemaSymbolSource>>>;
-
-const propertyNameText = (name: TypeScript.PropertyName): string | undefined => {
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return undefined;
-};
-
-const unwrapExpression = (
-  value: TypeScript.Expression,
-): TypeScript.Expression => {
-  let expression = value;
-  while (
-    ts.isParenthesizedExpression(expression) ||
-    ts.isAsExpression(expression) ||
-    ts.isSatisfiesExpression(expression) ||
-    ts.isTypeAssertionExpression(expression) ||
-    ts.isNonNullExpression(expression)
-  ) {
-    expression = expression.expression;
-  }
-  return expression;
-};
-
-const objectProperty = (
-  object: TypeScript.ObjectLiteralExpression | undefined,
-  name: string,
-): TypeScript.Expression | undefined => {
-  if (!object) return undefined;
-  for (const property of object.properties) {
-    if (!ts.isPropertyAssignment(property)) continue;
-    const propertyName = propertyNameText(property.name);
-    if (propertyName === name) return property.initializer;
-  }
-  return undefined;
-};
-
-const asObjectLiteral = (
-  value: TypeScript.Expression | undefined,
-): TypeScript.ObjectLiteralExpression | undefined => {
-  if (!value) return undefined;
-  const expression = unwrapExpression(value);
-  return ts.isObjectLiteralExpression(expression) ? expression : undefined;
-};
-
-const asArrayLiteral = (
-  value: TypeScript.Expression | undefined,
-): TypeScript.ArrayLiteralExpression | undefined => {
-  if (!value) return undefined;
-  const expression = unwrapExpression(value);
-  return ts.isArrayLiteralExpression(expression) ? expression : undefined;
-};
-
-const resolveImportedModuleSource = (
-  sourcePath: string,
-  moduleSpecifier: string,
-): string => {
-  if (moduleSpecifier.startsWith(".")) {
-    const resolved = resolvePath(sourcePath, "..", moduleSpecifier);
-    return resolved.endsWith(".ts") ? resolved : `${resolved}.ts`;
-  }
-  if (moduleSpecifier.startsWith("/")) {
-    return moduleSpecifier.endsWith(".ts") ? moduleSpecifier : `${moduleSpecifier}.ts`;
-  }
-  return moduleSpecifier;
-};
-
-const collectImportedSchemaSymbols = (
-  sourcePath: string,
-  source: TypeScript.SourceFile,
-): Map<string, SchemaSymbolSource> => {
-  const imports = new Map<string, SchemaSymbolSource>();
-
-  for (const statement of source.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
-    if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    const moduleSource = resolveImportedModuleSource(sourcePath, statement.moduleSpecifier.text);
-    const clause = statement.importClause;
-    if (!clause) continue;
-
-    if (clause.name) {
-      imports.set(clause.name.text, {
-        sourcePath: moduleSource,
-        exportName: "default",
-      });
-    }
-
-    const namedBindings = clause.namedBindings;
-    if (!namedBindings || !ts.isNamedImports(namedBindings)) continue;
-    for (const element of namedBindings.elements) {
-      imports.set(element.name.text, {
-        sourcePath: moduleSource,
-        exportName: element.propertyName?.text ?? element.name.text,
-      });
-    }
-  }
-
-  return imports;
-};
-
-const collectBindingToolSlotSources = (
-  sourcePath: string,
-  sourceText: string,
-): BindingToolSlotSources => {
-  const source = ts.createSourceFile(sourcePath, sourceText, ts.ScriptTarget.Latest, true);
-  const importedSymbols = collectImportedSchemaSymbols(sourcePath, source);
-  const result: BindingToolSlotSources = new Map();
-  const declaredExpressions = new Map<string, TypeScript.Expression>();
-
-  for (const statement of source.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name)) continue;
-      if (declaration.initializer) {
-        declaredExpressions.set(declaration.name.text, declaration.initializer);
-      }
-    }
-  }
-
-  const collectFromTraitOptions = (
-    traitIndex: number,
-    options: TypeScript.ObjectLiteralExpression | undefined,
-  ): void => {
-    const tools = asObjectLiteral(objectProperty(options, "tools"));
-    if (!tools) return;
-
-    const byTool = new Map<string, Map<string, SchemaSymbolSource>>();
-    for (const toolProperty of tools.properties) {
-      if (!ts.isPropertyAssignment(toolProperty)) continue;
-      const logicalName = propertyNameText(toolProperty.name);
-      const toolOptions = asObjectLiteral(toolProperty.initializer);
-      const slots = asObjectLiteral(objectProperty(toolOptions, "slots"));
-      if (!logicalName || !slots) continue;
-
-      const bySlot = new Map<string, SchemaSymbolSource>();
-      for (const slotProperty of slots.properties) {
-        if (!ts.isPropertyAssignment(slotProperty)) continue;
-        const slotName = propertyNameText(slotProperty.name);
-        if (!slotName || !ts.isIdentifier(slotProperty.initializer)) continue;
-        const imported = importedSymbols.get(slotProperty.initializer.text);
-        if (imported) bySlot.set(slotName, imported);
-      }
-      byTool.set(logicalName, bySlot);
-    }
-    result.set(traitIndex, byTool);
-  };
-
-  const collectFromBindTrait = (
-    traitIndex: number,
-    call: TypeScript.CallExpression,
-  ): void => {
-    collectFromTraitOptions(traitIndex, asObjectLiteral(call.arguments[1]));
-  };
-
-  const collectFromTraitExpression = (
-    traitIndex: number,
-    value: TypeScript.Expression,
-    seenIdentifiers: Set<string> = new Set(),
-  ): void => {
-    const expression = unwrapExpression(value);
-    if (ts.isIdentifier(expression)) {
-      if (seenIdentifiers.has(expression.text)) return;
-      const declared = declaredExpressions.get(expression.text);
-      if (!declared) return;
-      collectFromTraitExpression(
-        traitIndex,
-        declared,
-        new Set([...seenIdentifiers, expression.text]),
-      );
-      return;
-    }
-
-    if (
-      ts.isCallExpression(expression) &&
-      ts.isIdentifier(expression.expression) &&
-      expression.expression.text === "bindTrait"
-    ) {
-      collectFromBindTrait(traitIndex, expression);
-      return;
-    }
-
-    const object = asObjectLiteral(expression);
-    if (object && objectProperty(object, "trait")) {
-      collectFromTraitOptions(traitIndex, object);
-    }
-  };
-
-  const collectFromTraitElement = (
-    traitIndex: number,
-    element: TypeScript.Expression | TypeScript.SpreadElement,
-  ): void => {
-    if (ts.isSpreadElement(element)) return;
-    collectFromTraitExpression(traitIndex, element);
-  };
-
-  const collectFromAgentObject = (
-    agent: TypeScript.ObjectLiteralExpression | undefined,
-  ): void => {
-    const traits = asArrayLiteral(objectProperty(agent, "traits"));
-    if (!traits) return;
-
-    for (const [traitIndex, element] of traits.elements.entries()) {
-      collectFromTraitElement(traitIndex, element);
-    }
-  };
-
-  const collectFromAgentExpression = (
-    expression: TypeScript.Expression,
-    seenIdentifiers: Set<string> = new Set(),
-  ): boolean => {
-    const unwrapped = unwrapExpression(expression);
-
-    if (ts.isObjectLiteralExpression(unwrapped)) {
-      collectFromAgentObject(unwrapped);
-      return true;
-    }
-
-    if (ts.isIdentifier(unwrapped)) {
-      if (seenIdentifiers.has(unwrapped.text)) return false;
-      const declared = declaredExpressions.get(unwrapped.text);
-      if (declared) {
-        return collectFromAgentExpression(
-          declared,
-          new Set([...seenIdentifiers, unwrapped.text]),
-        );
-      }
-    }
-
-    return false;
-  };
-
-  const visit = (node: TypeScript.Node): void => {
-    if (ts.isExportAssignment(node)) {
-      if (collectFromAgentExpression(node.expression)) return;
-    }
-
-    ts.forEachChild(node, visit);
-  };
-
-  visit(source);
-  return result;
-};
-
-const normalizeTraitInstructions = (
-  instructions: string | ReadonlyArray<string> | undefined,
-): ReadonlyArray<string> => {
-  if (instructions === undefined) return [];
-  const values = typeof instructions === "string" ? [instructions] : instructions;
-  return values
-    .map((instruction) => instruction.trim())
-    .filter((instruction) => instruction.length > 0);
-};
 
 const parseIdentity = (sourcePath: string): Effect.Effect<Identity, CompileError> =>
   Effect.gen(function* () {
@@ -1451,149 +1127,7 @@ const loadPersonalities = (
     return map;
   });
 
-type TraitDefinitionInput = typeof TraitSchema.Type;
-
-const normalizeTraitTools = (
-  sourcePath: string,
-  toolsInput: TraitDefinitionInput["tools"],
-): Record<string, Trait["tools"][string]> | SourceParseError => {
-  const tools: Record<string, Trait["tools"][string]> = {};
-  for (const [toolName, tool] of Object.entries(toolsInput ?? {})) {
-    if (!tool.ref || typeof tool.ref !== "string" || tool.ref.trim().length === 0) {
-      return new SourceParseError({
-        sourcePath,
-        kind: "trait",
-        message: `tools.${toolName}.ref: must be a non-empty canonical tool reference`,
-      });
-    }
-
-    const attachment: Record<string, unknown> = { ref: tool.ref };
-
-    tools[toolName] = attachment as Trait["tools"][string];
-  }
-  return tools;
-};
-
-const buildTrait = (
-  sourcePath: string,
-  parsed: TraitDefinitionInput,
-  access: NormalizedAccess,
-  tools: Record<string, Trait["tools"][string]>,
-  injectedSkills: string[],
-  requiredSkills: string[],
-): Trait =>
-  new Trait({
-    name: parsed.name,
-    sourcePath,
-    description: parsed.description,
-    instructions: normalizeTraitInstructions(parsed.instructions),
-    access,
-    tools,
-    inject: {
-      skills: injectedSkills,
-    },
-    require: {
-      tools: parsed.require?.tools ?? [],
-      skills: requiredSkills,
-    },
-  });
-
-const parseTraitDefinition = (
-  sourcePath: string,
-  raw: unknown,
-): Effect.Effect<Trait, CompileError> =>
-  Effect.gen(function* () {
-    const result = Schema.decodeUnknownEither(TraitSchema, STRICT_PARSE_OPTIONS)(raw);
-    if (result._tag === "Left") {
-      return yield* Effect.fail(
-        new SourceParseError({
-          sourcePath,
-          kind: "trait",
-          message: result.left.message,
-        }),
-      );
-    }
-
-    const parsed = result.right;
-
-    const access = normalizeAccess(sourcePath, "trait", "access", parsed.access);
-    if (access instanceof SourceParseError) {
-      return yield* Effect.fail(access);
-    }
-
-    const tools = normalizeTraitTools(sourcePath, parsed.tools);
-    if (tools instanceof SourceParseError) {
-      return yield* Effect.fail(tools);
-    }
-
-    const injectedSkills = normalizeSkillRefs(
-      sourcePath,
-      "trait",
-      "inject.skills",
-      parsed.inject?.skills,
-    );
-    if (injectedSkills instanceof SourceParseError) {
-      return yield* Effect.fail(injectedSkills);
-    }
-
-    const requiredSkills = normalizeSkillRefs(
-      sourcePath,
-      "trait",
-      "require.skills",
-      parsed.require?.skills,
-    );
-    if (requiredSkills instanceof SourceParseError) {
-      return yield* Effect.fail(requiredSkills);
-    }
-
-    return buildTrait(sourcePath, parsed, access, tools, injectedSkills, requiredSkills);
-  });
-
-const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
-  Effect.gen(function* () {
-    const raw = yield* importTsModule<unknown>(sourcePath, "trait");
-
-    return yield* parseTraitDefinition(sourcePath, raw);
-  });
-
-const loadTraits = (
-  pluginPath: string,
-): Effect.Effect<Map<string, Trait>, CompileError> =>
-  Effect.gen(function* () {
-    const dir = join(pluginPath, "traits");
-    const entries = yield* listDir(dir);
-    const map = new Map<string, Trait>();
-
-    for (const entry of entries.sort()) {
-      if (!entry.endsWith(TRAIT_SUFFIX_TS)) continue;
-      const trait = yield* parseTrait(join(dir, entry));
-      const existing = map.get(trait.name);
-      if (existing) {
-        return yield* Effect.fail(
-          new DuplicateNameError({
-            kind: "trait",
-            name: trait.name,
-            firstPath: existing.sourcePath,
-            secondPath: trait.sourcePath,
-          }),
-        );
-      }
-      map.set(trait.name, trait);
-    }
-
-    return map;
-  });
-
 type AgentDefinitionInput = typeof AgentSchema.Type;
-type AgentTraitInput = TraitRefInput | TraitBindingInput;
-type AgentTraitBindingInput = TraitBindingInput;
-type AgentTraitBindingToolInput = {
-  readonly slots?: Readonly<Record<string, unknown>>;
-};
-type NormalizedAgentTraitTools = Record<
-  string,
-  { slots: Record<string, NormalizedTraitBindingToolSlot> }
->;
 
 const agentSourceParseError = (
   sourcePath: string,
@@ -1630,118 +1164,6 @@ const validateAgentFileName = (
   });
 };
 
-const isAgentTraitBinding = (
-  trait: AgentTraitInput,
-): trait is AgentTraitBindingInput =>
-  typeof trait !== "string" && "trait" in trait;
-
-const agentTraitRefInput = (
-  trait: AgentTraitInput,
-): Parameters<typeof normalizeTraitRefInput>[1] =>
-  isAgentTraitBinding(trait) ? trait.trait : trait;
-
-const normalizeAgentTraitRef = (
-  sourcePath: string,
-  index: number,
-  trait: AgentTraitInput,
-): string | SourceParseError => {
-  const normalized = normalizeTraitRefInput(
-    `traits[${index}]`,
-    agentTraitRefInput(trait),
-  );
-  if (typeof normalized === "string") return normalized;
-
-  return agentSourceParseError(
-    sourcePath,
-    `${normalized.field}: ${normalized.message}`,
-  );
-};
-
-const normalizeAgentTraitToolSlots = (
-  sourcePath: string,
-  traitIndex: number,
-  logicalName: string,
-  toolBinding: AgentTraitBindingToolInput,
-  sourceSlots: Map<string, SchemaSymbolSource>,
-): Record<string, NormalizedTraitBindingToolSlot> | SourceParseError => {
-  const normalizedSlots: Record<string, NormalizedTraitBindingToolSlot> = {};
-
-  for (const [slotName, schema] of Object.entries(toolBinding.slots ?? {})) {
-    const field = `traits[${traitIndex}].tools.${logicalName}.slots.${slotName}`;
-    if (!isEffectSchema(schema)) {
-      return agentSourceParseError(
-        sourcePath,
-        `${field}: must be an Effect Schema`,
-      );
-    }
-
-    const source = sourceSlots.get(slotName);
-    if (!source) {
-      return agentSourceParseError(
-        sourcePath,
-        (
-          `${field}: ` +
-          "must be an imported schema identifier; inline Effect Schema expressions are not supported"
-        ),
-      );
-    }
-    normalizedSlots[slotName] = { schema, source };
-  }
-
-  return normalizedSlots;
-};
-
-const normalizeAgentTraitTools = (
-  sourcePath: string,
-  traitIndex: number,
-  trait: AgentTraitBindingInput,
-  sourceTools: Map<string, Map<string, SchemaSymbolSource>>,
-): NormalizedAgentTraitTools | SourceParseError => {
-  const tools: NormalizedAgentTraitTools = {};
-
-  for (const [logicalName, toolBinding] of Object.entries(trait.tools ?? {})) {
-    const normalizedSlots = normalizeAgentTraitToolSlots(
-      sourcePath,
-      traitIndex,
-      logicalName,
-      toolBinding,
-      sourceTools.get(logicalName) ?? new Map(),
-    );
-    if (normalizedSlots instanceof SourceParseError) return normalizedSlots;
-
-    tools[logicalName] = { slots: normalizedSlots };
-  }
-
-  return tools;
-};
-
-const normalizeAgentTraits = (
-  sourcePath: string,
-  traitsInput: AgentDefinitionInput["traits"],
-  bindingToolSlotSources: BindingToolSlotSources,
-): NormalizedTraitBinding[] | SourceParseError => {
-  const traits: NormalizedTraitBinding[] = [];
-
-  for (const [index, trait] of (traitsInput ?? []).entries()) {
-    const normalized = normalizeAgentTraitRef(sourcePath, index, trait);
-    if (normalized instanceof SourceParseError) return normalized;
-
-    const tools = isAgentTraitBinding(trait)
-      ? normalizeAgentTraitTools(
-          sourcePath,
-          index,
-          trait,
-          bindingToolSlotSources.get(index) ?? new Map(),
-        )
-      : {};
-    if (tools instanceof SourceParseError) return tools;
-
-    traits.push({ ref: normalized, tools });
-  }
-
-  return traits;
-};
-
 const normalizeAgentModel = (
   sourcePath: string,
   modelInput: AgentDefinitionInput["model"],
@@ -1774,9 +1196,7 @@ const buildAgent = (
   sourcePath: string,
   parsed: AgentDefinitionInput,
   parts: {
-    readonly traits: NormalizedTraitBinding[];
     readonly model?: string;
-    readonly access: NormalizedAccess;
     readonly skills: string[];
   },
 ): Agent =>
@@ -1787,8 +1207,6 @@ const buildAgent = (
     identity: parsed.identity,
     personality: parsed.personality,
     ...(parts.model ? { model: parts.model } : {}),
-    traits: parts.traits,
-    access: parts.access,
     skills: parts.skills,
     color: parsed.color,
     targets: parsed.targets ?? {},
@@ -1799,32 +1217,19 @@ const parseAgentModule = (
   raw: unknown,
 ): Effect.Effect<Agent, CompileError> =>
   Effect.gen(function* () {
-    const sourceText = yield* readText(sourcePath, "agent");
-    const bindingToolSlotSources = collectBindingToolSlotSources(sourcePath, sourceText);
-
     const parsed = decodeAgentDefinition(sourcePath, raw);
     if (parsed instanceof SourceParseError) return yield* Effect.fail(parsed);
 
     const nameMismatch = validateAgentFileName(sourcePath, parsed);
     if (nameMismatch) return yield* Effect.fail(nameMismatch);
 
-    const traits = normalizeAgentTraits(
-      sourcePath,
-      parsed.traits,
-      bindingToolSlotSources,
-    );
-    if (traits instanceof SourceParseError) return yield* Effect.fail(traits);
-
     const model = normalizeAgentModel(sourcePath, parsed.model);
     if (model instanceof SourceParseError) return yield* Effect.fail(model);
-
-    const access = normalizeAccess(sourcePath, "agent", "access", parsed.access);
-    if (access instanceof SourceParseError) return yield* Effect.fail(access);
 
     const skills = normalizeSkillRefs(sourcePath, "agent", "skills", parsed.skills);
     if (skills instanceof SourceParseError) return yield* Effect.fail(skills);
 
-    return buildAgent(sourcePath, parsed, { traits, model, access, skills });
+    return buildAgent(sourcePath, parsed, { model, skills });
   });
 
 const parseAgent = (sourcePath: string): Effect.Effect<Agent, CompileError> =>
@@ -1872,90 +1277,6 @@ const loadAgents = (
       [AGENT_SUFFIX_TS],
       map,
     );
-
-    return map;
-  });
-
-const parseToolspace = (
-  sourcePath: string,
-): Effect.Effect<Toolspace, CompileError> =>
-  Effect.gen(function* () {
-    const raw = yield* importTsModule<unknown>(sourcePath, "toolspace");
-    const result = Schema.decodeUnknownEither(ToolspaceSchema)(raw);
-    if (result._tag === "Left") {
-      return yield* Effect.fail(
-        new SourceParseError({
-          sourcePath,
-          kind: "toolspace",
-          message: result.left.message,
-        }),
-      );
-    }
-
-    const tools = Object.fromEntries(
-      Object.entries(result.right.tools).map(([name, definition]) => [
-        name,
-        {
-          description: definition.description,
-          targets: Object.fromEntries(
-            Object.entries(definition.targets).map(([target, binding]) => [target, binding.name]),
-          ),
-        },
-      ]),
-    );
-
-    const groups: Record<string, { description?: string; tools: string[] }> = {};
-    for (const [groupName, group] of Object.entries(result.right.groups ?? {})) {
-      const normalizedTools: string[] = [];
-      for (const [index, tool] of group.tools.entries()) {
-        const normalized = normalizeToolRefInput(`groups.${groupName}.tools[${index}]`, tool);
-        if (typeof normalized !== "string") {
-          return yield* Effect.fail(
-            new SourceParseError({
-              sourcePath,
-              kind: "toolspace",
-              message: `${normalized.field}: ${normalized.message}`,
-            }),
-          );
-        }
-        normalizedTools.push(normalized);
-      }
-      groups[groupName] = { description: group.description, tools: normalizedTools };
-    }
-
-    return new Toolspace({
-      name: result.right.name,
-      sourcePath,
-      description: result.right.description,
-      tools,
-      groups,
-    });
-  });
-
-const loadToolspaces = (
-  pluginPath: string,
-): Effect.Effect<Map<string, Toolspace>, CompileError> =>
-  Effect.gen(function* () {
-    const dir = join(pluginPath, "toolspaces");
-    const entries = yield* listDir(dir);
-    const map = new Map<string, Toolspace>();
-
-    for (const entry of entries.sort()) {
-      if (!entry.endsWith(TOOLSPACE_SUFFIX_TS)) continue;
-      const toolspace = yield* parseToolspace(join(dir, entry));
-      const existing = map.get(toolspace.name);
-      if (existing) {
-        return yield* Effect.fail(
-          new DuplicateNameError({
-            kind: "toolspace",
-            name: toolspace.name,
-            firstPath: existing.sourcePath,
-            secondPath: toolspace.sourcePath,
-          }),
-        );
-      }
-      map.set(toolspace.name, toolspace);
-    }
 
     return map;
   });
@@ -2084,11 +1405,6 @@ const loadSkills = (
 type NormalizedPhaseOrbitBinding = {
   readonly orbit: string;
   readonly bindings?: Record<string, string>;
-};
-
-type NormalizedPhaseRequirement = {
-  readonly all: string[];
-  readonly min?: number;
 };
 
 type NormalizedPhaseAgents = {
@@ -2240,32 +1556,6 @@ const normalizeOrbitPhaseContract = (
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 };
 
-const normalizePhaseRequirements = (
-  sourcePath: string,
-  phase: OrbitDefinition["phases"][number],
-  index: number,
-): NormalizedPhaseRequirement[] | SourceParseError => {
-  const requires: NormalizedPhaseRequirement[] = [];
-
-  for (const [requirementIndex, requirement] of (phase.requires ?? []).entries()) {
-    const all: string[] = [];
-    for (const [traitIndex, trait] of requirement.all.entries()) {
-      const normalized = normalizeTraitRefInput(
-        `phases[${index}].requires[${requirementIndex}].all[${traitIndex}]`,
-        trait,
-      );
-      if (typeof normalized !== "string") {
-        return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
-      }
-      all.push(normalized);
-    }
-
-    requires.push({ all, ...(requirement.min !== undefined ? { min: requirement.min } : {}) });
-  }
-
-  return requires;
-};
-
 const normalizeOrbitPhase = (
   sourcePath: string,
   phase: OrbitDefinition["phases"][number],
@@ -2279,9 +1569,6 @@ const normalizeOrbitPhase = (
 
   const phaseAgents = normalizePhaseAgents(sourcePath, phase, index);
   if (phaseAgents instanceof SourceParseError) return phaseAgents;
-
-  const requires = normalizePhaseRequirements(sourcePath, phase, index);
-  if (requires instanceof SourceParseError) return requires;
 
   const contract = normalizeOrbitPhaseContract(sourcePath, phase.contract, index);
   if (contract instanceof SourceParseError) return contract;
@@ -2302,7 +1589,6 @@ const normalizeOrbitPhase = (
     ...(orbitBinding ? { orbit_binding: orbitBinding } : {}),
     ...(singularAgent ? { agent: singularAgent } : {}),
     agents: phaseAgents.agents,
-    requires,
     notes: phase.notes,
     ...(phase.telos !== undefined ? { telos: phase.telos } : {}),
     ...(phase.real_world_change !== undefined
@@ -2315,74 +1601,6 @@ const normalizeOrbitPhase = (
     ...(contract !== undefined ? { contract } : {}),
     ...(phase.body !== undefined ? { body: phase.body } : {}),
   };
-};
-
-const parseCanonicalToolName = (ref: string): string => {
-  const colon = ref.indexOf(":");
-  return colon === -1 ? ref : ref.slice(colon + 1);
-};
-
-const normalizeOrbitPermissionTool = (
-  sourcePath: string,
-  tool: OrbitToolPermissionTool,
-  fieldPrefix: string,
-  toolIndex: number,
-): NormalizedOrbitToolPermissionTool | SourceParseError => {
-  const rawRef = typeof tool === "string" ? tool : tool.ref;
-  const ref = rawRef.trim();
-  if (!ref) {
-    return new SourceParseError({
-      sourcePath,
-      kind: "orbit",
-      message: `${fieldPrefix}[${toolIndex}].ref: must be a non-empty canonical tool reference`,
-    });
-  }
-
-  const rawLogicalName =
-    typeof tool === "string" ? parseCanonicalToolName(ref) : tool.as ?? parseCanonicalToolName(ref);
-  const logicalName = rawLogicalName.trim();
-  if (!logicalName) {
-    return new SourceParseError({
-      sourcePath,
-      kind: "orbit",
-      message: `${fieldPrefix}[${toolIndex}].as: must be non-empty when provided`,
-    });
-  }
-
-  return {
-    ref,
-    logicalName,
-  };
-};
-
-const normalizeOrbitToolList = (
-  sourcePath: string,
-  tools: ReadonlyArray<OrbitToolPermissionTool>,
-  fieldPrefix: string,
-): NormalizedOrbitToolPermissionTool[] | SourceParseError => {
-  const normalized: NormalizedOrbitToolPermissionTool[] = [];
-  const logicalNames = new Set<string>();
-  for (const [toolIndex, tool] of tools.entries()) {
-    const normalizedTool = normalizeOrbitPermissionTool(
-      sourcePath,
-      tool,
-      fieldPrefix,
-      toolIndex,
-    );
-    if (normalizedTool instanceof SourceParseError) {
-      return normalizedTool;
-    }
-    if (logicalNames.has(normalizedTool.logicalName)) {
-      return new SourceParseError({
-        sourcePath,
-        kind: "orbit",
-        message: `${fieldPrefix}[${toolIndex}].as: duplicate logical tool name '${normalizedTool.logicalName}'`,
-      });
-    }
-    logicalNames.add(normalizedTool.logicalName);
-    normalized.push(normalizedTool);
-  }
-  return normalized;
 };
 
 const normalizeOrbitOrchestrator = (
@@ -2403,26 +1621,8 @@ const normalizeOrbitOrchestrator = (
     });
   }
 
-  const tools = normalizeOrbitToolList(
-    sourcePath,
-    orchestrator.tools,
-    "orchestrator.tools",
-  );
-  if (tools instanceof SourceParseError) {
-    return tools;
-  }
-
-  return {
-    agent: normalizedAgent,
-    tools,
-  };
+  return { agent: normalizedAgent };
 };
-
-const normalizeOrbitToolPermissions = (
-  sourcePath: string,
-  permissions: OrbitDefinition["tool_permissions"],
-): NormalizedOrbitToolPermissionTool[] | SourceParseError =>
-  normalizeOrbitToolList(sourcePath, permissions ?? [], "tool_permissions");
 
 const parseOrbitDefinition = (
   sourcePath: string,
@@ -2463,11 +1663,6 @@ const parseOrbitDefinition = (
       phases.push(normalized);
     }
 
-    const toolPermissions = normalizeOrbitToolPermissions(sourcePath, parsed.tool_permissions);
-    if (toolPermissions instanceof SourceParseError) {
-      return yield* Effect.fail(toolPermissions);
-    }
-
     const orchestrator = normalizeOrbitOrchestrator(sourcePath, parsed.orchestrator);
     if (orchestrator instanceof SourceParseError) {
       return yield* Effect.fail(orchestrator);
@@ -2487,7 +1682,6 @@ const parseOrbitDefinition = (
       })),
       phases,
       ...(orchestrator ? { orchestrator } : {}),
-      tool_permissions: toolPermissions,
       pulsar_checkpoints: parsed.pulsar_checkpoints ?? [],
       evolution: parsed.evolution,
       body: resolvedBody,
@@ -3062,11 +2256,9 @@ const loadPluginArtifacts = (
     );
     registry.identities = yield* loadIdentities(pluginPath);
     registry.personalities = yield* loadPersonalities(pluginPath);
-    registry.toolspaces = yield* loadToolspaces(pluginPath);
     registry.modelspaces = yield* loadModelspaces(pluginPath);
     registry.skillspaces = yield* loadSkillspaces(pluginPath);
     registry.skills = yield* loadSkills(pluginPath);
-    registry.traits = yield* loadTraits(pluginPath);
     registry.tools = yield* loadCanonicalTools(pluginPath);
     registry.hooks = yield* loadHooks(pluginPath);
     registry.orbits = yield* loadOrbits(pluginPath);

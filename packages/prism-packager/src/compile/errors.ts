@@ -17,9 +17,7 @@ export class SourceParseError extends Schema.TaggedError<SourceParseError>()(
     kind: Schema.Literal(
       "identity",
       "personality",
-      "trait",
       "agent",
-      "toolspace",
       "modelspace",
       "skillspace",
       "orbit",
@@ -40,9 +38,6 @@ export class UnknownReferenceError extends Schema.TaggedError<UnknownReferenceEr
       "identity",
       "personality",
       "model",
-      "trait",
-      "tool",
-      "tool-group",
       "skill",
       "orbit",
       "phase.orbit",
@@ -92,9 +87,7 @@ export class UnsupportedTargetCapabilityError extends Schema.TaggedError<Unsuppo
     target: Schema.String,
     capability: Schema.Literal(
       "compiled-agents",
-      "generated-canonical-tools",
       "hooks",
-      "skill-permissions",
     ),
     message: Schema.String,
   },
@@ -126,9 +119,7 @@ export class DuplicateNameError extends Schema.TaggedError<DuplicateNameError>()
     kind: Schema.Literal(
       "identity",
       "personality",
-      "trait",
       "agent",
-      "toolspace",
       "modelspace",
       "skillspace",
       "orbit",
@@ -157,8 +148,6 @@ export class MissingTargetResolutionError extends Schema.TaggedError<MissingTarg
     agentName: Schema.String,
     referenceKind: Schema.Literal(
       "model-profile",
-      "tool",
-      "tool-group",
       "skill",
     ),
     referenceName: Schema.String,

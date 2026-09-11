@@ -8,7 +8,7 @@
 import { Schema } from "effect";
 import { emptyRegistry } from "./registry.js";
 import type { PluginRegistry } from "./registry.js";
-import type { ResolvedAgent, ResolvedContractBinding } from "./resolve.js";
+import type { ResolvedAgent } from "./resolve.js";
 import {
   Agent,
   CanonicalTool,
@@ -18,10 +18,7 @@ import {
   Personality,
   Skill,
   Skillspace,
-  Toolspace,
-  Trait,
   type NormalizedOrbitPhase,
-  type NormalizedTraitBinding,
   type ToolAuthority,
 } from "./sources.js";
 
@@ -78,47 +75,6 @@ export const makePersonality = (options: PersonalityOptions = {}): Personality =
     communication: options.communication,
   });
 
-export interface TraitOptions {
-  readonly name?: string;
-  readonly sourcePath?: string;
-  readonly description?: string;
-  readonly instructions?: ReadonlyArray<string>;
-  readonly access?: {
-    readonly tools?: ReadonlyArray<string>;
-    readonly toolGroups?: ReadonlyArray<string>;
-    readonly skills?: ReadonlyArray<string>;
-  };
-  readonly inject?: {
-    readonly skills?: ReadonlyArray<string>;
-  };
-  readonly tools?: Record<string, { ref: string }>;
-  readonly require?: {
-    readonly tools?: ReadonlyArray<string>;
-    readonly skills?: ReadonlyArray<string>;
-  };
-}
-
-export const makeTrait = (options: TraitOptions = {}): Trait =>
-  new Trait({
-    name: options.name ?? "reviewable",
-    sourcePath: options.sourcePath ?? "/test/plugin/traits/reviewable.trait.ts",
-    description: options.description,
-    instructions: options.instructions ?? [],
-    access: {
-      tools: options.access?.tools ?? [],
-      toolGroups: options.access?.toolGroups ?? [],
-      skills: options.access?.skills ?? [],
-    },
-    inject: {
-      skills: options.inject?.skills ?? [],
-    },
-    tools: options.tools ?? {},
-    require: {
-      tools: options.require?.tools ?? [],
-      skills: options.require?.skills ?? [],
-    },
-  });
-
 export interface ToolOptions {
   readonly name?: string;
   readonly sourcePath?: string;
@@ -140,28 +96,6 @@ export const makeTool = (options: ToolOptions = {}): CanonicalTool =>
     slots: options.slots ?? {},
     handle: options.handle ?? (async () => ({ acknowledged: true })),
     authority: options.authority,
-  });
-
-export interface ToolspaceOptions {
-  readonly name?: string;
-  readonly sourcePath?: string;
-  readonly description?: string;
-  readonly tools?: Record<string, { description?: string; targets: Record<string, string> }>;
-  readonly groups?: Record<string, { description?: string; tools: ReadonlyArray<string> }>;
-}
-
-export const makeToolspace = (options: ToolspaceOptions = {}): Toolspace =>
-  new Toolspace({
-    name: options.name ?? "workspace",
-    sourcePath: options.sourcePath ?? "/test/plugin/toolspaces/workspace.toolspace.ts",
-    description: options.description,
-    tools: Object.fromEntries(
-      Object.entries(options.tools ?? {}).map(([name, tool]) => [
-        name,
-        { description: tool.description, targets: tool.targets },
-      ]),
-    ),
-    groups: options.groups ?? {},
   });
 
 export interface ModelspaceOptions {
@@ -212,23 +146,6 @@ export interface AgentOptions {
   readonly identity?: string;
   readonly personality?: string;
   readonly model?: string;
-  readonly traits?: ReadonlyArray<{
-    ref: string;
-    tools?: Record<
-      string,
-      {
-        slots?: Record<
-          string,
-          { schema: unknown; source: { sourcePath: string; exportName: string } }
-        >;
-      }
-    >;
-  }>;
-  readonly access?: {
-    readonly tools?: ReadonlyArray<string>;
-    readonly toolGroups?: ReadonlyArray<string>;
-    readonly skills?: ReadonlyArray<string>;
-  };
   readonly skills?: ReadonlyArray<string>;
   readonly color?: string;
   readonly targets?: Record<string, Record<string, unknown>>;
@@ -242,21 +159,6 @@ export const makeAgent = (options: AgentOptions = {}): Agent =>
     identity: options.identity ?? "builder",
     personality: options.personality,
     model: options.model,
-    traits:
-      options.traits?.map((trait) => ({
-        ref: trait.ref,
-        tools: Object.fromEntries(
-          Object.entries(trait.tools ?? {}).map(([toolName, tool]) => [
-            toolName,
-            { slots: tool.slots ?? {} },
-          ]),
-        ),
-      } as NormalizedTraitBinding)) ?? [],
-    access: {
-      tools: options.access?.tools ?? [],
-      toolGroups: options.access?.toolGroups ?? [],
-      skills: options.access?.skills ?? [],
-    },
     skills: options.skills ?? [],
     color: options.color,
     targets: options.targets ?? {},
@@ -286,7 +188,6 @@ export const makeOrbit = (options: OrbitOptions = {}): Orbit =>
       orbit_binding: phase.orbit_binding,
       agent: phase.agent,
       agents: phase.agents ?? [],
-      requires: phase.requires ?? [],
       notes: phase.notes,
       telos: phase.telos,
       real_world_change: phase.real_world_change,
@@ -296,7 +197,6 @@ export const makeOrbit = (options: OrbitOptions = {}): Orbit =>
       body: phase.body,
     })) ?? [],
     orchestrator: undefined,
-    tool_permissions: [],
     pulsar_checkpoints: [],
     evolution: options.evolution,
     body: options.body ?? "",
@@ -307,12 +207,7 @@ export interface ResolvedAgentOptions {
   readonly identity?: Identity;
   readonly personality?: Personality;
   readonly resolvedModel?: Record<string, unknown>;
-  readonly traits?: ResolvedAgent["traits"];
-  readonly canonicalTraitIds?: ReadonlyArray<string>;
   readonly skills?: ReadonlyArray<string>;
-  readonly allowedSkills?: ReadonlyArray<string>;
-  readonly toolBindings?: ReadonlyArray<ResolvedContractBinding>;
-  readonly allowedTools?: ReadonlyArray<string>;
 }
 
 export const makeResolvedAgent = (options: ResolvedAgentOptions = {}): ResolvedAgent => ({
@@ -320,20 +215,13 @@ export const makeResolvedAgent = (options: ResolvedAgentOptions = {}): ResolvedA
   identity: options.identity ?? makeIdentity(),
   personality: options.personality,
   resolvedModel: options.resolvedModel,
-  traits: options.traits ?? [],
-  canonicalTraitIds: options.canonicalTraitIds ?? [],
   skills: options.skills ?? [],
-  allowedSkills: options.allowedSkills ?? [],
-  toolBindings: options.toolBindings ?? [],
-  allowedTools: options.allowedTools ?? [],
 });
 
 export const addToRegistry = (registry: PluginRegistry, entities: {
   readonly identities?: ReadonlyArray<Identity>;
   readonly personalities?: ReadonlyArray<Personality>;
-  readonly traits?: ReadonlyArray<Trait>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
-  readonly toolspaces?: ReadonlyArray<Toolspace>;
   readonly modelspaces?: ReadonlyArray<Modelspace>;
   readonly skillspaces?: ReadonlyArray<Skillspace>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -347,14 +235,8 @@ export const addToRegistry = (registry: PluginRegistry, entities: {
   for (const personality of entities.personalities ?? []) {
     registry.personalities.set(personality.name, personality);
   }
-  for (const trait of entities.traits ?? []) {
-    registry.traits.set(trait.name, trait);
-  }
   for (const tool of entities.tools ?? []) {
     registry.tools.set(tool.name, tool);
-  }
-  for (const toolspace of entities.toolspaces ?? []) {
-    registry.toolspaces.set(toolspace.name, toolspace);
   }
   for (const modelspace of entities.modelspaces ?? []) {
     registry.modelspaces.set(modelspace.name, modelspace);

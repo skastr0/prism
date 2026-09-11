@@ -43,10 +43,7 @@ test("two plugins compiling a same-named Grok project agent fail closed, naming 
     model: {},
     targetOverride: {},
     skills: [],
-    allowedSkills: [],
-    allowedTools: [],
-    toolBindings: [],
-  });
+    });
 
   const lowerFor = (sourcePluginName: string) =>
     planLowering({

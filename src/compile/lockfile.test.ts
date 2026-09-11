@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readLockfile, writeLockfile } from "./lockfile.js";
 import { emptyRegistry } from "./registry.js";
-import { CanonicalTool, Hook, Trait } from "./sources.js";
+import { CanonicalTool, Hook } from "./sources.js";
 
 const tempRoots: string[] = [];
 
@@ -98,14 +98,12 @@ test("lockfile hashes a hook-only plugin, and changing the hook source changes t
   expect(secondEntry?.contentHash).not.toBe(firstEntryHash);
 });
 
-test("lockfile hashes tools and hooks alongside a trait-generated tool contract, and is stable across a no-op round trip", async () => {
+test("lockfile hashes tools and hooks, and is stable across a no-op round trip", async () => {
   const pluginRoot = await createTempRoot();
   const toolPath = join(pluginRoot, "tools", "submit_review.tool.ts");
   const hookPath = join(pluginRoot, "hooks", "session-start.hook.ts");
-  const traitPath = join(pluginRoot, "traits", "reviewable.trait.ts");
   await writeText(toolPath, "export default { name: 'submit_review' };\n");
   await writeText(hookPath, "export default { name: 'session-start' };\n");
-  await writeText(traitPath, "export default { name: 'reviewable' };\n");
 
   const registry = emptyRegistry(pluginRoot, "mixed-plugin", "0.1.0");
   registry.tools.set(
@@ -133,33 +131,12 @@ test("lockfile hashes tools and hooks alongside a trait-generated tool contract,
       handle: () => {},
     }),
   );
-  // The trait attaches (materializes) a synthetic tool contract from
-  // `submit_review` -- there is no separate generated-contract file on disk
-  // to hash; the trait source and the wrapped canonical tool source (both
-  // already collected) are what the lockfile represents this derived
-  // artifact through.
-  registry.traits.set(
-    "reviewable",
-    new Trait({
-      name: "reviewable",
-      sourcePath: traitPath,
-      instructions: [],
-      access: { tools: [], toolGroups: [], skills: [] },
-      tools: {
-        submit: { ref: "submit_review" },
-      },
-      inject: { skills: [] },
-      require: { tools: [], skills: [] },
-    }),
-  );
-
   await writeLockfile(pluginRoot, registry);
   const first = await readLockfile(pluginRoot);
   const firstEntry = first?.entries[0];
   expect(firstEntry?.sources.map((source) => source.path).sort()).toEqual([
     "hooks/session-start.hook.ts",
     "tools/submit_review.tool.ts",
-    "traits/reviewable.trait.ts",
   ]);
 
   // Round trip: re-writing over unchanged sources must not touch the lock
@@ -169,9 +146,8 @@ test("lockfile hashes tools and hooks alongside a trait-generated tool contract,
   const second = await readLockfile(pluginRoot);
   expect(second).toEqual(first);
 
-  // Changing only the trait's own source (not the tool it wraps) still
-  // moves the lock hash, since traits are independently collected.
-  await writeText(traitPath, "export default { name: 'reviewable', changed: true };\n");
+  // Changing the tool source moves the lock hash.
+  await writeText(toolPath, "export default { name: 'submit_review', changed: true };\n");
   await writeLockfile(pluginRoot, registry);
   const third = await readLockfile(pluginRoot);
   const thirdEntry = third?.entries[0];
@@ -179,6 +155,5 @@ test("lockfile hashes tools and hooks alongside a trait-generated tool contract,
   expect(thirdEntry?.sources.map((source) => source.path).sort()).toEqual([
     "hooks/session-start.hook.ts",
     "tools/submit_review.tool.ts",
-    "traits/reviewable.trait.ts",
   ]);
 });

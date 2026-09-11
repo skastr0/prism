@@ -68,7 +68,6 @@ export const COMPILE_ARTIFACT_TYPES = [
   "orbits",
   "sops",
   "tools",
-  "toolspaces",
   "modelspaces",
   "skillspaces",
   "hooks",

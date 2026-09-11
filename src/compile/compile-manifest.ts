@@ -18,9 +18,7 @@ import {
   type CompileManifestOrbit,
   type CompileManifestOrbitPhase,
   type CompileManifestSop,
-  type CompileManifestTrait,
   type CompileManifestCanonicalTool,
-  type CompileManifestToolspaceTool,
   type HarnessId,
   type HarnessScope,
 } from "@skastr0/prism-sdk/compile-manifest";
@@ -88,9 +86,6 @@ export const commitCompileManifest = async (options: {
 const agentManifestId = (pluginName: string, agentName: string): string =>
   `${pluginName}:${agentName}`;
 
-const canonicalToolRef = (binding: ComposedAgent["toolBindings"][number]): string =>
-  `${binding.toolPluginName}:${binding.toolName}`;
-
 const sortStrings = (values: Iterable<string>): string[] => [...values].sort();
 
 const stableInputKey = (input: CacheInputFile): string => `${input.plugin}:${input.path}`;
@@ -123,36 +118,21 @@ const manifestAgentFromComposed = (options: {
   readonly target: HarnessId;
   readonly scope: HarnessScope;
 }): CompileManifestAgent => {
-  const manifest = options.agent.manifest ?? { traits: [], modelBindings: {} };
-  const currentToolGrants = [...new Set(options.agent.toolBindings.map(canonicalToolRef))];
+  const manifest = options.agent.manifest ?? { modelBindings: {} };
   const perTarget = {
     ...(options.existing?.composed.perTarget ?? {}),
     [options.target]: {
       scope: options.scope,
       model: options.agent.model ?? null,
-      toolGrants: currentToolGrants,
-      allowedTools: [...options.agent.allowedTools],
-      allowedSkills: [...options.agent.allowedSkills],
     },
   };
-  const grantTools = sortStrings(
-    new Set(Object.values(perTarget).flatMap((slice) => slice.toolGrants)),
-  );
-  const grantSkills = sortStrings(
-    new Set(Object.values(perTarget).flatMap((slice) => slice.allowedSkills)),
-  );
   const next: CompileManifestAgent = {
     name: options.agent.name,
     plugin: options.registry.pluginName,
     description: options.agent.description,
     sourceHash: options.descriptor.sourceHash,
-    traits: [...manifest.traits],
     skills: [...options.agent.skills],
     composed: {
-      grants: {
-        tools: grantTools,
-        skills: grantSkills,
-      },
       modelBindings: manifest.modelBindings,
       perTarget,
     },
@@ -289,11 +269,7 @@ const deriveSkillsForManifest = (
     { plugin: string; name?: string; skillspace?: string; skills?: Set<string> }
   > = {};
   for (const agent of Object.values(agents)) {
-    const allSkillRefs = new Set<string>([
-      ...agent.skills,
-      ...agent.composed.grants.skills,
-      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.allowedSkills),
-    ]);
+    const allSkillRefs = new Set<string>(agent.skills);
     for (const ref of allSkillRefs) {
       const named = parseNamedRef(ref);
       const space = parseSpaceItemRef(ref, "/");
@@ -328,64 +304,28 @@ const deriveSkillsForManifest = (
   return skills;
 };
 
-const deriveTraitsForManifest = (
-  agents: Readonly<Record<string, CompileManifestAgent>>,
-): Record<string, CompileManifestTrait> => {
-  const traits: Record<string, CompileManifestTrait> = {};
-  for (const agent of Object.values(agents)) {
-    for (const t of agent.traits) {
-      traits[t.id] ??= { id: t.id, ref: t.ref };
-    }
+const deriveToolsForManifest = (options: {
+  readonly base: CompileManifest;
+  readonly registry: PluginRegistry;
+}): Record<string, CompileManifestCanonicalTool> => {
+  const registries = collectPluginRegistries(options.registry);
+  const loadedPluginNames = new Set(registries.keys());
+  const tools: Record<string, CompileManifestCanonicalTool> = {};
+  for (const [key, entry] of Object.entries(options.base.tools)) {
+    if (loadedPluginNames.has(entry.plugin)) continue;
+    tools[key] = entry;
   }
-  return traits;
-};
-
-const deriveToolsForManifest = (
-  agents: Readonly<Record<string, CompileManifestAgent>>,
-  registries: ReadonlyMap<string, PluginRegistry>,
-): Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> => {
-  const toolAccum: Record<
-    string,
-    { plugin: string; name?: string; toolspace?: string }
-  > = {};
-  for (const agent of Object.values(agents)) {
-    const allToolRefs = new Set<string>([
-      ...agent.composed.grants.tools,
-      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.toolGrants),
-    ]);
-    for (const ref of allToolRefs) {
-      const named = parseNamedRef(ref);
-      const space = parseSpaceItemRef(ref, "/");
-      if (space) {
-        const owner = space.pluginPrefix ?? agent.plugin;
-        const key = `${owner}:${space.space}/${space.name}`;
-        toolAccum[key] ??= { plugin: owner, toolspace: space.space, name: space.name };
-      } else {
-        const owner = named.pluginPrefix ?? agent.plugin;
-        const key = `${owner}:${named.name}`;
-        toolAccum[key] ??= { plugin: owner, name: named.name };
-      }
-    }
-  }
-
-  const tools: Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> = {};
-  for (const [key, acc] of Object.entries(toolAccum)) {
-    if (acc.toolspace && acc.name) {
+  for (const registry of registries.values()) {
+    for (const tool of registry.tools.values()) {
+      const key = `${registry.pluginName}:${tool.name}`;
       tools[key] = {
-        plugin: acc.plugin,
-        toolspace: acc.toolspace,
-        name: acc.name,
-      };
-    } else if (acc.name) {
-      // PQ-075: project the declared side-effect authority, when the
-      // source registry declares one. Undeclared tools omit the field
-      // (default-then-require migration — see ToolAuthoritySchema) so
-      // existing plugins that predate this field are unaffected.
-      const authority = registries.get(acc.plugin)?.tools.get(acc.name)?.authority;
-      tools[key] = {
-        plugin: acc.plugin,
-        name: acc.name,
-        ...(authority ? { authority } : {}),
+        plugin: registry.pluginName,
+        name: tool.name,
+        // PQ-075: project the declared side-effect authority, when the
+        // source registry declares one. Undeclared tools omit the field
+        // (default-then-require migration — see ToolAuthoritySchema) so
+        // existing plugins that predate this field are unaffected.
+        ...(tool.authority ? { authority: tool.authority } : {}),
       };
     }
   }
@@ -526,10 +466,6 @@ export const buildCompileManifestForTarget = (options: {
       ...agent,
       composed: {
         ...agent.composed,
-        grants: {
-          tools: sortStrings(new Set(Object.values(perTarget).flatMap((slice) => slice.toolGrants))),
-          skills: sortStrings(new Set(Object.values(perTarget).flatMap((slice) => slice.allowedSkills))),
-        },
         perTarget,
       },
       manifestHash: "",
@@ -545,9 +481,10 @@ export const buildCompileManifestForTarget = (options: {
 
   const skills = deriveSkillsForManifest(agents);
 
-  const traits = deriveTraitsForManifest(agents);
-
-  const tools = deriveToolsForManifest(agents, collectPluginRegistries(options.registry));
+  const tools = deriveToolsForManifest({
+    base: options.base,
+    registry: options.registry,
+  });
 
   const orbits = deriveOrbitsForManifest({
     base: options.base,
@@ -576,7 +513,6 @@ export const buildCompileManifestForTarget = (options: {
     modelspaces,
     skills,
     tools,
-    traits,
     orbits,
     sops,
   });

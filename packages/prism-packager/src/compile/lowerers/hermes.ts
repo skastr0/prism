@@ -10,7 +10,6 @@ import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
@@ -122,13 +121,11 @@ const hermesNativeHookEvent = (event: Hook["event"]): string => {
 };
 
 const collectCanonicalToolNames = (
-  sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): ReadonlyMap<string, string> =>
-  collectBindingNameMap(bindings, (binding) => {
-    const owner = ownerPluginForBinding(sourcePluginName, binding);
-    return cliToolNameForBinding(owner, binding);
-  });
+  collectBindingNameMap(bindings, (binding) =>
+    cliToolNameForBinding(binding),
+  );
 
 const hookMatcher = (
   nativeEvent: string,
@@ -268,12 +265,8 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     const bindings = mcpBindingsForAgentsAndTools(
       input.target.sourcePluginName,
       input.tools,
-      input.agents,
     );
-    const canonicalToolNames = collectCanonicalToolNames(
-      input.target.sourcePluginName,
-      bindings,
-    );
+    const canonicalToolNames = collectCanonicalToolNames(bindings);
 
     // Group hooks by native event: one `<event>:` key holds every hook that
     // lowers to it. Wrapper files stay per-hook (distinct handlers); only the

@@ -19,7 +19,6 @@ import {
   bindingsOwnedByPlugin,
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import {
   collectArtifactSourceFiles,
@@ -105,7 +104,7 @@ const uniqueBindings = (
 ): ReadonlyArray<ResolvedContractBinding> => {
   const byToolName = new Map<string, ResolvedContractBinding>();
   for (const binding of bindings) {
-    const toolName = ampPluginToolNameForBinding(sourcePluginName, binding);
+    const toolName = ampPluginToolNameForBinding(binding);
     const existing = byToolName.get(toolName);
     if (!existing) {
       byToolName.set(toolName, binding);
@@ -113,19 +112,16 @@ const uniqueBindings = (
     }
 
     const same =
-      existing.kind === binding.kind &&
       existing.toolPluginName === binding.toolPluginName &&
       existing.toolName === binding.toolName &&
-      existing.toolSourcePath === binding.toolSourcePath &&
-      existing.contract?.pluginName === binding.contract?.pluginName &&
-      existing.contract?.name === binding.contract?.name;
+      existing.toolSourcePath === binding.toolSourcePath;
     if (!same) {
       throw new Error(`Amp tool name collision for '${toolName}'`);
     }
   }
   return [...byToolName.values()].sort((left, right) =>
-    ampPluginToolNameForBinding(sourcePluginName, left).localeCompare(
-      ampPluginToolNameForBinding(sourcePluginName, right),
+    ampPluginToolNameForBinding(left).localeCompare(
+      ampPluginToolNameForBinding(right),
     ),
   );
 };
@@ -152,7 +148,7 @@ const collectAmpOwnedBindings = (
 ): ReadonlyArray<ResolvedContractBinding> =>
   uniqueBindings(
     input.target.sourcePluginName,
-    bindingsOwnedByPlugin(input.target.sourcePluginName, input.tools, input.agents),
+    bindingsOwnedByPlugin(input.target.sourcePluginName, input.tools),
   );
 
 /** Full referenced surface for hook matchers and role-skill documentation. */
@@ -161,11 +157,7 @@ const collectAmpReferencedBindings = (
 ): ReadonlyArray<ResolvedContractBinding> =>
   uniqueBindings(
     input.target.sourcePluginName,
-    mcpBindingsForAgentsAndTools(
-      input.target.sourcePluginName,
-      input.tools,
-      input.agents,
-    ),
+    mcpBindingsForAgentsAndTools(input.target.sourcePluginName, input.tools),
   );
 
 const stringField = (record: Record<string, unknown>, field: string): string | undefined => {
@@ -249,7 +241,7 @@ const planAmpHooks = async (
 ): Promise<PlannedAmpHook[]> => {
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => ampPluginToolNameForBinding(input.target.sourcePluginName, binding),
+    (binding) => ampPluginToolNameForBinding(binding),
   );
   const planned: PlannedAmpHook[] = [];
   for (const [index, hook] of [...(input.hooks ?? [])]
@@ -442,7 +434,7 @@ const renderAmpAgentSkillMarkdown = (
   target: AmpCodeLowerTarget,
 ): string => {
   const name = generatedAgentSkillName(agent.name);
-  const skillNames = [...new Set([...agent.skills, ...agent.allowedSkills])]
+  const skillNames = [...new Set(agent.skills)]
     .sort((left, right) => left.localeCompare(right));
   const lines: string[] = [];
   lines.push(
@@ -457,39 +449,6 @@ const renderAmpAgentSkillMarkdown = (
     "",
     agent.body,
   );
-
-  if (agent.toolBindings.length > 0) {
-    const toolsByOwner = new Map<string, string[]>();
-    for (const binding of agent.toolBindings) {
-      const toolName = ampPluginToolNameForBinding(target.sourcePluginName, binding);
-      const ownerPlugin = generatedPluginId(
-        ownerPluginForBinding(target.sourcePluginName, binding),
-      );
-      const ownerTools = toolsByOwner.get(ownerPlugin) ?? [];
-      ownerTools.push(toolName);
-      toolsByOwner.set(ownerPlugin, ownerTools);
-    }
-
-    lines.push(
-      "",
-      "## Available Amp Tools",
-      "",
-      "Owner generated Amp plugins register these tools globally in this workspace. Consumer role skills reference owner plugins rather than re-bundling foreign tool logic:",
-      "",
-    );
-    for (const [ownerPlugin, ownerToolNames] of [...toolsByOwner.entries()].sort(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      lines.push(`From \`${ownerPlugin}\`:`);
-      lines.push("");
-      for (const toolName of [...new Set(ownerToolNames)].sort((left, right) =>
-        left.localeCompare(right),
-      )) {
-        lines.push(`- \`${toolName}\``);
-      }
-      lines.push("");
-    }
-  }
 
   if (skillNames.length > 0) {
     lines.push(

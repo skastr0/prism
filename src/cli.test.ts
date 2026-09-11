@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
-import { prismOxlintPluginJs } from "./init-templates.js";
 import { deriveProjectKey } from "./project-key.js";
 import { WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore } from "./workflow-store.js";
 import { registerWorkflowStore } from "./workflow-store-registry.js";
@@ -1228,80 +1227,8 @@ export const workflow = defineWorkflow({
 
 type JsonObject = Record<string, unknown>;
 
-type LintRule = {
-  create: (context: {
-    getFilename: () => string;
-    report: (diagnostic: JsonObject) => void;
-  }) => Record<string, ((node: JsonObject) => void) | undefined>;
-};
-
-type LintPlugin = {
-  rules: Record<string, LintRule>;
-};
-
 const readJson = async (path: string): Promise<JsonObject> =>
   JSON.parse(await readFile(path, "utf8")) as JsonObject;
-
-const loadGeneratedLintPlugin = async (): Promise<LintPlugin> => {
-  const root = await createTempRoot();
-  const pluginPath = join(root, "prism-oxlint-plugin.mjs");
-  await writeFile(pluginPath, prismOxlintPluginJs);
-  const module = (await import(pathToFileURL(pluginPath).href)) as { default: LintPlugin };
-  return module.default;
-};
-
-const identifier = (name: string): JsonObject => ({ type: "Identifier", name });
-const literal = (value: string): JsonObject => ({ type: "Literal", value });
-const memberExpression = (object: JsonObject, property: JsonObject): JsonObject => ({
-  type: "MemberExpression",
-  object,
-  property,
-});
-const callExpression = (callee: JsonObject, args: JsonObject[]): JsonObject => ({
-  type: "CallExpression",
-  callee,
-  arguments: args,
-});
-const property = (name: string, value: JsonObject): JsonObject => ({
-  type: "Property",
-  key: identifier(name),
-  value,
-});
-const objectExpression = (properties: JsonObject[]): JsonObject => ({
-  type: "ObjectExpression",
-  properties,
-});
-const schemaStructCall = (): JsonObject =>
-  callExpression(memberExpression(identifier("Schema"), identifier("Struct")), [
-    objectExpression([]),
-  ]);
-
-const runGeneratedRule = async (
-  ruleName: string,
-  node: JsonObject,
-  filename = "agents/builder.agent.ts",
-  visitorKey: "CallExpression" | "ExportDefaultDeclaration" = "CallExpression"
-): Promise<JsonObject[]> => {
-  const plugin = await loadGeneratedLintPlugin();
-  const reports: JsonObject[] = [];
-  const visitors = plugin.rules[ruleName]?.create({
-    getFilename: () => filename,
-    report: (diagnostic) => reports.push(diagnostic),
-  });
-
-  visitors?.[visitorKey]?.(node);
-  return reports;
-};
-
-const exportDefaultDeclaration = (declaration: JsonObject): JsonObject => ({
-  type: "ExportDefaultDeclaration",
-  declaration,
-});
-const satisfiesExpression = (expression: JsonObject, typeAnnotation: JsonObject): JsonObject => ({
-  type: "TSSatisfiesExpression",
-  expression,
-  typeAnnotation,
-});
 
 const createInstallAllFixture = async (): Promise<{
   monorepoRoot: string;
@@ -1416,11 +1343,6 @@ export default {
   return { pluginRoot, outRoot, prismHome };
 };
 
-afterEach(async () => {
-  const roots = tempRoots.splice(0);
-  await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
-});
-
 test("init --typescript scaffolds OXC configs, scripts, and local plugin", async () => {
   const root = await createTempRoot();
 
@@ -1429,7 +1351,6 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain(".oxlintrc.json");
   expect(result.stdout).toContain(".oxfmtrc.json");
-  expect(result.stdout).toContain("prism-oxlint-plugin.js");
 
   const pluginRoot = join(root, "typed-plugin");
   const packageJson = await readJson(join(pluginRoot, "package.json"));
@@ -1447,16 +1368,8 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   });
 
   const oxlintConfig = await readJson(join(pluginRoot, ".oxlintrc.json"));
-  expect(oxlintConfig.jsPlugins).toEqual([
-    {
-      name: "prism",
-      specifier: "./prism-oxlint-plugin.js",
-    },
-  ]);
-  expect(oxlintConfig.rules).toMatchObject({
-    "prism/no-inline-slot-schemas": "error",
-    "prism/no-trait-tool-contract-overrides": "error",
-  });
+  expect(oxlintConfig.jsPlugins).toBeUndefined();
+  expect(oxlintConfig.rules).toBeUndefined();
 
   const oxfmtConfig = await readJson(join(pluginRoot, ".oxfmtrc.json"));
   expect(oxfmtConfig.$schema).toBe("./node_modules/oxfmt/configuration_schema.json");
@@ -1727,94 +1640,6 @@ description: Testing guidance
   );
   expect(result.stdout).toContain("✅ Plugin is valid");
   expect(result.stdout).not.toContain("run with --verbose");
-});
-
-test("generated Oxlint rule rejects inline Schema slot fills but allows imported schemas", async () => {
-  const invalidBinding = callExpression(identifier("bindTrait"), [
-    literal("submittable"),
-    objectExpression([
-      property(
-        "tools",
-        objectExpression([
-          property(
-            "submit_work",
-            objectExpression([
-              property(
-                "slots",
-                objectExpression([property("builder_report", schemaStructCall())])
-              ),
-            ])
-          ),
-        ])
-      ),
-    ]),
-  ]);
-  const validBinding = callExpression(identifier("bindTrait"), [
-    literal("submittable"),
-    objectExpression([
-      property(
-        "tools",
-        objectExpression([
-          property(
-            "submit_work",
-            objectExpression([
-              property(
-                "slots",
-                objectExpression([property("builder_report", identifier("BuilderReport"))])
-              ),
-            ])
-          ),
-        ])
-      ),
-    ]),
-  ]);
-
-  await expect(
-    runGeneratedRule("no-inline-slot-schemas", invalidBinding)
-  ).resolves.toHaveLength(1);
-  await expect(
-    runGeneratedRule("no-inline-slot-schemas", validBinding)
-  ).resolves.toHaveLength(0);
-  await expect(
-    runGeneratedRule("no-inline-slot-schemas", invalidBinding, "tools/submit_work.tool.ts")
-  ).resolves.toHaveLength(0);
-});
-
-test("generated Oxlint rule rejects trait-owned slots and tool input/output replacement", async () => {
-  const traitObject = objectExpression([
-    property("name", literal("submittable")),
-    property("slots", objectExpression([property("builder_report", objectExpression([]))])),
-    property(
-      "tools",
-      objectExpression([
-        property(
-          "submit_work",
-          objectExpression([
-            property("ref", literal("orbit-core:submit_work")),
-            property("input", identifier("WorkSubmissionBase")),
-            property("output", identifier("OrbitDispatchReceipt")),
-          ])
-        ),
-      ])
-    ),
-  ]);
-  const traitDefinition = exportDefaultDeclaration(
-    satisfiesExpression(traitObject, identifier("TraitSource"))
-  );
-
-  const reports = await runGeneratedRule(
-    "no-trait-tool-contract-overrides",
-    traitDefinition,
-    "traits/submittable.trait.ts",
-    "ExportDefaultDeclaration"
-  );
-
-  expect(reports).toHaveLength(3);
-  expect(reports.map((report) => String(report.message))).toEqual([
-    expect.stringContaining("root-level slots"),
-    expect.stringContaining("input/output replacement"),
-    expect.stringContaining("input/output replacement"),
-  ]);
 });
 
 test("refresh requires --project when project scope is requested", async () => {
@@ -2213,7 +2038,7 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain(
-    "Manifest targets: agents=[opencode, claude-code]; orbits=[opencode, claude-code]; tools=[opencode, claude-code]; toolspaces=[opencode, claude-code]; modelspaces=[opencode, claude-code]"
+    "Manifest targets: agents=[opencode, claude-code]; orbits=[opencode, claude-code]; tools=[opencode, claude-code]; modelspaces=[opencode, claude-code]; skillspaces=[opencode, claude-code]"
   );
   expect(result.stdout).toContain("Matching requested harnesses: opencode, claude-code");
   expect(result.stdout).toContain("Compile output scope: project");

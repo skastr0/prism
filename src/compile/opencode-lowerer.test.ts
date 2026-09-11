@@ -9,8 +9,7 @@ import { planLowering } from "./lowerers/opencode.js";
 import { applySync } from "../sync/apply.js";
 import { planSync } from "../sync/plan.js";
 import { emptySnapshotManifest } from "../state/snapshot.js";
-import type { ResolvedContractBinding } from "./resolve.js";
-import { Contract, Sop } from "./sources.js";
+import { CanonicalTool, Sop } from "./sources.js";
 
 const tempRoots: string[] = [];
 
@@ -29,7 +28,6 @@ const readJson = async <T>(path: string): Promise<T> =>
   JSON.parse(await readFile(path, "utf8")) as T;
 
 const createComposedAgent = (
-  toolBindings: ReadonlyArray<ResolvedContractBinding>,
   overrides: Partial<ComposedAgent> = {},
 ): ComposedAgent => ({
   name: "worker",
@@ -39,9 +37,6 @@ const createComposedAgent = (
   model: undefined,
   targetOverride: {},
   skills: [],
-  allowedSkills: [],
-  toolBindings,
-  allowedTools: [],
   ...overrides,
 });
 
@@ -57,7 +52,7 @@ test("opencode planLowering is pure desired state: agent files plus per-key conf
 
   const lowered = await planLowering({
     agents: [
-      createComposedAgent([], {
+      createComposedAgent({
         model: { model: "anthropic/claude", temperature: 0.2 },
         color: "green",
       }),
@@ -76,7 +71,7 @@ test("opencode planLowering is pure desired state: agent files plus per-key conf
     file.targetPath.endsWith(join("agents", "worker.md")),
   );
   expect(agentMd).toBeDefined();
-  expect(agentMd!.content).toContain("name: worker");
+  expect(agentMd!.content).toContain('name: "worker"');
   // Owner markers are gone — ownership is snapshot-manifest membership.
   expect(agentMd!.content).not.toContain("<!-- prism:");
 
@@ -113,7 +108,7 @@ test("opencode config regions preserve hand-authored opencode.json content", asy
   );
 
   const lowered = await planLowering({
-    agents: [createComposedAgent([], { model: { model: "anthropic/claude" } })],
+    agents: [createComposedAgent({ model: { model: "anthropic/claude" } })],
     orbits: [],
     sops: [],
     tools: [],
@@ -170,7 +165,7 @@ test("opencode orphaned regions are removed without touching neighbors", async (
     });
 
   const first = await lower([
-    createComposedAgent([], { model: { model: "anthropic/claude", temperature: 0.2 } }),
+    createComposedAgent({ model: { model: "anthropic/claude", temperature: 0.2 } }),
   ]);
   const firstPlan = await planSync({
     desired: { harness: "opencode", root: outputRoot, files: first.files, regions: first.regions },
@@ -184,7 +179,7 @@ test("opencode orphaned regions are removed without touching neighbors", async (
   await writeFile(jsonTarget, `${JSON.stringify(withUserKey, null, 2)}\n`);
 
   // Second compile drops temperature — its region must be removed as orphaned.
-  const second = await lower([createComposedAgent([], { model: { model: "anthropic/claude" } })]);
+  const second = await lower([createComposedAgent({ model: { model: "anthropic/claude" } })]);
   const { readSnapshot } = await import("../state/store.js");
   const snapshot = await readSnapshot({ prismHome, harness: "opencode", root: outputRoot });
   const secondPlan = await planSync({
@@ -208,29 +203,33 @@ test("opencode generated plugin registration is a plugin-array membership region
       `import { Schema } from "effect";`,
       ``,
       `export default {`,
+      `  name: "submit",`,
       `  description: "submit",`,
-      `  Input: Schema.Struct({ message: Schema.String }),`,
-      `  handle: async (input: { message: string }) => ({ ok: true, message: input.message }),`,
+      `  input: Schema.Struct({ message: Schema.String }),`,
+      `  output: Schema.Struct({ ok: Schema.Boolean }),`,
+      `  handle: async () => ({ ok: true }),`,
       `};`,
       ``,
     ].join("\n"),
   );
 
+  const tool = new CanonicalTool({
+    name: "submit",
+    sourcePath: toolSource,
+    description: "submit",
+    input: Schema.Struct({ message: Schema.String }),
+    output: Schema.Struct({ ok: Schema.Boolean }),
+    slots: {},
+    async handle() {
+      return { ok: true };
+    },
+  });
+
   const lowered = await planLowering({
-    agents: [
-      createComposedAgent([
-        {
-          kind: "permission",
-          logicalName: "submit",
-          toolPluginName: "opencode-lowerer-test",
-          toolName: "submit",
-          toolSourcePath: toolSource,
-        },
-      ]),
-    ],
+    agents: [createComposedAgent()],
     orbits: [],
     sops: [],
-    tools: [],
+    tools: [tool],
     target: {
       scope: "global",
       root: outputRoot,
@@ -261,69 +260,13 @@ test("opencode generated plugin registration is a plugin-array membership region
     ).href,
   );
 
+  // OpenCode stays allow-everything: the compiler registers the plugin but
+  // emits no blanket permission.deny rails for generated tool namespaces.
   const permissionRegion = lowered.regions.find(
     (region) => region.kind === "json-key" && region.regionKey.startsWith("permission."),
   );
-  expect(permissionRegion).toBeDefined();
-  if (permissionRegion?.kind !== "json-key") throw new Error("unreachable");
-  expect(permissionRegion.value).toBe("deny");
+  expect(permissionRegion).toBeUndefined();
 }, 60000);
-
-test("opencode planLowering reports generated contract mirror collisions", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".opencode");
-  const pluginRoot = join(root, "mirror-demo");
-  const sourcePath = join(pluginRoot, "tools", "submit.tool.ts");
-  const generatedPath = "contracts/submit.contract.ts";
-
-  const firstContract = new Contract({
-    name: "submit-a",
-    sourcePath,
-    pluginName: "mirror-demo",
-    generatedFiles: [{ relativePath: generatedPath, content: "export const value = 1;\n" }],
-  });
-  const secondContract = new Contract({
-    name: "submit-b",
-    sourcePath,
-    pluginName: "mirror-demo",
-    generatedFiles: [{ relativePath: generatedPath, content: "export const value = 2;\n" }],
-  });
-
-  await expect(
-    planLowering({
-      agents: [
-        createComposedAgent([
-          {
-            kind: "synthetic",
-            logicalName: "submitA",
-            contract: firstContract,
-            toolPluginName: "mirror-demo",
-            toolName: "submit-a",
-            toolSourcePath: sourcePath,
-          },
-          {
-            kind: "synthetic",
-            logicalName: "submitB",
-            contract: secondContract,
-            toolPluginName: "mirror-demo",
-            toolName: "submit-b",
-            toolSourcePath: sourcePath,
-          },
-        ]),
-      ],
-      orbits: [],
-      sops: [],
-      tools: [],
-      target: {
-        scope: "project",
-        root: outputRoot,
-        sourcePluginName: "mirror-demo",
-      },
-    }),
-  ).rejects.toThrow(
-    "generated contract name collision at mirror-demo:contracts/submit.contract.ts",
-  );
-});
 test("opencode lowerer emits sop SKILL.md and per-phase reference downloads", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".opencode");
@@ -366,7 +309,7 @@ test("opencode lowerer emits sop SKILL.md and per-phase reference downloads", as
     file.targetPath.endsWith(join("skills", "beacon", "SKILL.md")),
   );
   if (!skill) throw new Error("sop SKILL.md missing");
-  expect(skill.content).toContain("description: Marketing method.");
+  expect(skill.content).toContain('description: "Marketing method."');
   expect(skill.content).toContain("[`references/explore.md`](references/explore.md)");
   expect(skill.content).toContain("Cross-phase frame.");
 

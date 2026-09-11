@@ -36,7 +36,18 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-const registry = () => emptyRegistry("/tmp/forge", "forge", "1.0.0");
+const registry = () => {
+  const reg = emptyRegistry("/tmp/forge", "forge", "1.0.0");
+  reg.tools.set(
+    "run_shell",
+    makeTool({ name: "run_shell", sourcePath: "/tmp/forge/tools/run_shell.tool.ts" }),
+  );
+  reg.tools.set(
+    "read_file",
+    makeTool({ name: "read_file", sourcePath: "/tmp/forge/tools/read_file.tool.ts" }),
+  );
+  return reg;
+};
 
 const registryWithModels = () => {
   const reg = registry();
@@ -58,7 +69,7 @@ const descriptorFor = (name: string, hash: string): AgentCacheDescriptor => ({
   inputs: [{ plugin: "forge", path: `agents/${name}.agent.ts`, contentHash: hash }],
 });
 
-const agent = (name: string, hash: string, tools: readonly string[] = []): ComposedAgent => ({
+const agent = (name: string, hash: string): ComposedAgent => ({
   name,
   description: `${name} agent`,
   body: `# ${name}`,
@@ -66,17 +77,7 @@ const agent = (name: string, hash: string, tools: readonly string[] = []): Compo
   model: { model: `${name}-model` },
   targetOverride: {},
   skills: ["forge:testing"],
-  allowedSkills: ["forge:testing"],
-  allowedTools: [...tools],
-  toolBindings: tools.map((tool) => ({
-    kind: "permission" as const,
-    logicalName: tool,
-    toolPluginName: "forge",
-    toolName: tool,
-    toolSourcePath: `/tmp/forge/tools/${tool}.tool.ts`,
-  })),
   manifest: {
-    traits: [{ id: "forge:builder", ref: "builder" }],
     modelBindings: { modelspace: "forge:models", profile: name },
   },
 });
@@ -88,7 +89,7 @@ describe("compile manifest writer", () => {
       registry: registry(),
       target: "opencode",
       scope: "project",
-      composed: [agent("builder", "a".repeat(64), ["run_shell"]), agent("reviewer", "b".repeat(64))],
+      composed: [agent("builder", "a".repeat(64)), agent("reviewer", "b".repeat(64))],
       cacheDescriptors: new Map([
         ["builder", descriptorFor("builder", "a".repeat(64))],
         ["reviewer", descriptorFor("reviewer", "b".repeat(64))],
@@ -99,7 +100,7 @@ describe("compile manifest writer", () => {
       registry: registry(),
       target: "claude-code",
       scope: "global",
-      composed: [agent("builder", "a".repeat(64), ["run_shell"])],
+      composed: [agent("builder", "a".repeat(64))],
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
     });
     const pruned = buildCompileManifestForTarget({
@@ -107,7 +108,7 @@ describe("compile manifest writer", () => {
       registry: registry(),
       target: "opencode",
       scope: "project",
-      composed: [agent("builder", "a".repeat(64), ["run_shell", "read_file"])],
+      composed: [agent("builder", "a".repeat(64))],
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
     });
 
@@ -116,24 +117,12 @@ describe("compile manifest writer", () => {
       "claude-code",
       "opencode",
     ]);
-    expect(pruned.agents["forge:builder"]!.composed.perTarget.opencode?.allowedTools).toEqual([
-      "run_shell",
-      "read_file",
-    ]);
-    expect(pruned.agents["forge:builder"]!.composed.perTarget.opencode?.toolGrants).toEqual([
-      "forge:run_shell",
-      "forge:read_file",
-    ]);
-    expect(pruned.agents["forge:builder"]!.composed.grants.tools).toEqual([
-      "forge:read_file",
-      "forge:run_shell",
-    ]);
     expect(pruned.compileTargets).toEqual([
       { harness: "claude-code", scope: "global" },
       { harness: "opencode", scope: "project" },
     ]);
     expect(verifyCompileManifestHash(pruned)).toBe(true);
-    // tools top-level populated from grants (minimal plugin+name or plugin+toolspace+name, source-free)
+    // tools top-level populated from loaded canonical tools (minimal plugin+name, source-free)
     expect(Object.keys(pruned.tools || {}).sort()).toEqual(["forge:read_file", "forge:run_shell"]);
     expect(pruned.tools?.["forge:run_shell"]).toEqual({ plugin: "forge", name: "run_shell" });
     expect(pruned.tools?.["forge:read_file"]).toEqual({ plugin: "forge", name: "read_file" });
@@ -147,17 +136,13 @@ describe("compile manifest writer", () => {
       modelspace: "models",
       profiles: ["builder"],
     });
-    // traits populated from per-agent traits only (deduped by id, source-path free)
-    expect(Object.keys(pruned.traits).sort()).toEqual(["forge:builder"]);
-    expect(pruned.traits["forge:builder"]).toEqual({ id: "forge:builder", ref: "builder" });
-
     // orbits support: explicit pass on build populates minimal source-free entries for the plugin
     const withOrbits = buildCompileManifestForTarget({
       base: emptyCompileManifest(),
       registry: registry(),
       target: "opencode",
       scope: "project",
-      composed: [agent("builder", "a".repeat(64), ["run_shell"])],
+      composed: [agent("builder", "a".repeat(64))],
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
       orbits: [
         { name: "delivery-contract", phases: [] },
@@ -178,7 +163,7 @@ describe("compile manifest writer", () => {
     // no sourcePath etc in manifest orbit entries
     expect(JSON.stringify(withOrbits.orbits)).not.toContain("sourcePath");
     expect(verifyCompileManifestHash(withOrbits)).toBe(true);
-    // tools also populated (from the agent grants in this build)
+    // tools also populated (from the loaded plugin's canonical tools)
     expect(Object.keys(withOrbits.tools || {}).length).toBeGreaterThan(0);
     expect(JSON.stringify(withOrbits.tools)).not.toContain("sourcePath");
   });
@@ -250,7 +235,7 @@ describe("compile manifest writer", () => {
       registry: registryWithModels(),
       target: "opencode",
       scope: "project",
-      composed: [agent("builder", "a".repeat(64), ["run_shell"])],
+      composed: [agent("builder", "a".repeat(64))],
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
     });
 
@@ -274,7 +259,7 @@ describe("compile manifest writer", () => {
       registry: reg,
       target: "opencode",
       scope: "project",
-      composed: [agent("builder", "a".repeat(64), ["run_shell", "read_file"])],
+      composed: [agent("builder", "a".repeat(64))],
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
     });
 
@@ -347,7 +332,7 @@ describe("compile manifest writer", () => {
       registry: registry(),
       target: "opencode",
       scope: "project",
-      composed: [agent("builder", "a".repeat(64), ["tool_a"])],
+      composed: [agent("builder", "a".repeat(64))],
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
     });
     const manifestB = buildCompileManifestForTarget({
@@ -355,7 +340,7 @@ describe("compile manifest writer", () => {
       registry: registry(),
       target: "opencode",
       scope: "project",
-      composed: [agent("builder", "b".repeat(64), ["tool_b"])],
+      composed: [agent("builder", "b".repeat(64))],
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "b".repeat(64))]]),
     });
 
@@ -379,8 +364,6 @@ describe("compile manifest writer", () => {
     const builderB = readB.manifest.agents["forge:builder"];
     expect(builderA?.sourceHash).toBe("a".repeat(64));
     expect(builderB?.sourceHash).toBe("b".repeat(64));
-    expect(builderA?.composed.grants.tools).toEqual(["forge:tool_a"]);
-    expect(builderB?.composed.grants.tools).toEqual(["forge:tool_b"]);
     expect(verifyCompileManifestHash(readA.manifest)).toBe(true);
     expect(verifyCompileManifestHash(readB.manifest)).toBe(true);
   });

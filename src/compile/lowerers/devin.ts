@@ -16,7 +16,6 @@ import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -127,13 +126,11 @@ const devinNativeHookEvent = (event: Hook["event"]): string => {
 };
 
 const collectCanonicalToolNames = (
-  sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): ReadonlyMap<string, string> =>
   collectBindingNameMap(bindings, (binding) => {
-    const owner = ownerPluginForBinding(sourcePluginName, binding);
     // PR1 has no MCP wire names; fall back to logical binding id for matchers.
-    return cliToolNameForBinding(owner, binding);
+    return cliToolNameForBinding(binding);
   });
 
 const hookMatcher = (
@@ -224,12 +221,7 @@ const planHooks = async (input: LowerInput, files: DesiredFile[]): Promise<Plann
   if (!input.registry || hooks.length === 0) return [];
 
   const canonicalToolNames = collectCanonicalToolNames(
-    input.target.sourcePluginName,
-    mcpBindingsForAgentsAndTools(
-      input.target.sourcePluginName,
-      input.tools ?? [],
-      input.agents,
-    ),
+    mcpBindingsForAgentsAndTools(input.target.sourcePluginName, input.tools ?? []),
   );
   const planned: PlannedHook[] = [];
   const pluginSegment = normalizeBundleSegment(input.target.sourcePluginName, "plugin");

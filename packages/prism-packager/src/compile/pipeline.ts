@@ -18,8 +18,6 @@ import {
   projectOrbitsForCompileManifest,
   projectSopsForCompileManifest,
   resolveAgent,
-  resolveOrbitSkillPermissions,
-  resolveOrbitToolPermissions,
   validateOrbit,
 } from "./resolve.js";
 import {
@@ -310,138 +308,6 @@ const collectCacheOutputs = (
   return outputs;
 };
 
-const applyOrbitToolPermissions = (
-  agents: ReadonlyArray<ComposedAgent>,
-  permissions: ReadonlyMap<string, ReadonlyArray<ComposedAgent["toolBindings"][number]>>,
-): ComposedAgent[] =>
-  agents.map((agent) => {
-    const permitted = permissions.get(agent.name) ?? [];
-    if (permitted.length === 0) return agent;
-
-    const existing = new Set(agent.toolBindings.map((binding) => binding.logicalName));
-    const merged = [...agent.toolBindings];
-    for (const binding of permitted) {
-      if (existing.has(binding.logicalName)) {
-        continue;
-      }
-      merged.push(binding);
-      existing.add(binding.logicalName);
-    }
-
-    return {
-      ...agent,
-      toolBindings: merged.sort((left, right) =>
-        left.logicalName.localeCompare(right.logicalName),
-      ),
-    };
-  });
-
-const applyOrbitSkillPermissions = (
-  agents: ReadonlyArray<ComposedAgent>,
-  permissions: ReadonlyMap<string, ReadonlyArray<string>>,
-): ComposedAgent[] =>
-  agents.map((agent) => {
-    const permitted = permissions.get(agent.name) ?? [];
-    if (permitted.length === 0) return agent;
-
-    return {
-      ...agent,
-      allowedSkills: [...new Set([...agent.allowedSkills, ...permitted])].sort((left, right) =>
-        left.localeCompare(right),
-      ),
-    };
-  });
-
-const registryTargetsHarness = (
-  registry: PluginRegistry,
-  artifact: SourceNoun,
-  target: HarnessId,
-): boolean => {
-  const selection = sourceSelectionFromManifestTargets(registry.targets, {
-    runtime: registry.runtime,
-  });
-  return selectSourcesForTarget(selection, target).nouns[artifact];
-};
-
-const findRegistryByPluginName = (
-  registry: PluginRegistry,
-  pluginName: string,
-): PluginRegistry | undefined => {
-  if (registry.pluginName === pluginName) return registry;
-
-  for (const dep of registry.deps.values()) {
-    const found = findRegistryByPluginName(dep, pluginName);
-    if (found) return found;
-  }
-
-  return undefined;
-};
-
-const bindingToolsTargetHarness = (
-  registry: PluginRegistry,
-  binding: ComposedAgent["toolBindings"][number],
-  target: HarnessId,
-): boolean => {
-  const owner = findRegistryByPluginName(registry, binding.toolPluginName);
-  return owner ? registryTargetsHarness(owner, "tools", target) : false;
-};
-
-const assertAgentToolBindingsAreTargeted = (
-  agents: ReadonlyArray<ComposedAgent>,
-  registry: PluginRegistry,
-  target: HarnessId,
-): Effect.Effect<void, CompileError> => {
-  const leakingAgent = agents
-    .map((agent) => ({
-      agent,
-      binding: agent.toolBindings.find((binding) => !bindingToolsTargetHarness(registry, binding, target)),
-    }))
-    .find(({ binding }) => binding !== undefined);
-
-  if (!leakingAgent?.binding) return Effect.void;
-
-  return Effect.fail(
-    new AgentValidationError({
-      sourcePath: "<composed-agent>",
-      agentName: leakingAgent.agent.name,
-      field: "tools",
-      message:
-        `agent '${leakingAgent.agent.name}' resolves canonical tool binding '${leakingAgent.binding.logicalName}' ` +
-        `from plugin '${leakingAgent.binding.toolPluginName}' for target '${target}', but that plugin's ` +
-        `targets.tools does not include '${target}'`,
-    }),
-  );
-};
-
-const assertTargetSupportsGeneratedCanonicalTools = (
-  target: string,
-  agents: ReadonlyArray<ComposedAgent>,
-): Effect.Effect<void, CompileError> => {
-  const capabilities = getCompileTargetCapabilities(target);
-  if (capabilities.generatedCanonicalTools === "executable") {
-    return Effect.void;
-  }
-
-  const agentsWithBindings = agents
-    .filter((agent) => agent.toolBindings.length > 0)
-    .map((agent) => `${agent.name} (${agent.toolBindings.length})`);
-
-  if (agentsWithBindings.length === 0) {
-    return Effect.void;
-  }
-
-  return Effect.fail(
-    new UnsupportedTargetCapabilityError({
-      target,
-      capability: "generated-canonical-tools",
-      message:
-        `canonical tool bindings require an executable generated-tool runtime; ` +
-        `${target} currently lowers native tool allowances and skills only. ` +
-        `Agents with canonical tool bindings: ${agentsWithBindings.join(", ")}`,
-    }),
-  );
-};
-
 const assertTargetSupportsAgents = (
   target: string,
   hasTargetedAgents: boolean,
@@ -458,46 +324,6 @@ const assertTargetSupportsAgents = (
       message:
         `${target} does not support compiled Prism agents. ` +
         `Use target-specific skills or another compile target with a generated agent surface.`,
-    }),
-  );
-};
-
-
-const assertTargetSupportsSkillPermissions = (
-  target: string,
-  agents: ReadonlyArray<ComposedAgent>,
-): Effect.Effect<void, CompileError> => {
-  const capabilities = getCompileTargetCapabilities(target);
-  if (capabilities.skillPermissions === "supported") {
-    return Effect.void;
-  }
-
-  const agentsWithPermissionOnlySkills = agents
-    .map((agent) => {
-      const dependencySkills = new Set(agent.skills);
-      const permissionOnlySkills = agent.allowedSkills.filter(
-        (skill) => !dependencySkills.has(skill),
-      );
-      return { agent, permissionOnlySkills };
-    })
-    .filter(({ permissionOnlySkills }) => permissionOnlySkills.length > 0)
-    .map(({ agent, permissionOnlySkills }) =>
-      `${agent.name} (${permissionOnlySkills.join(", ")})`,
-    );
-
-  if (agentsWithPermissionOnlySkills.length === 0) {
-    return Effect.void;
-  }
-
-  return Effect.fail(
-    new UnsupportedTargetCapabilityError({
-      target,
-      capability: "skill-permissions",
-      message:
-        `${target} does not support per-agent skill permission visibility. ` +
-        `Use direct agent skill dependencies for this target or compile a target ` +
-        `with skill permission support. Agents with permission-only skills: ` +
-        agentsWithPermissionOnlySkills.join(", "),
     }),
   );
 };
@@ -572,25 +398,6 @@ const resolveCompileTargetContext = (
       useCache: !options.dryRun && options.packageMode !== true,
     };
   });
-
-const mcpBindingsForTarget = (options: {
-  readonly registry: PluginRegistry;
-  readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly artifacts: TargetArtifacts;
-}): ReturnType<typeof bindingsOwnedByPlugin> =>
-  bindingsOwnedByPlugin(
-    options.registry.pluginName,
-    options.artifacts.tools,
-    options.agents,
-  );
-
-const portFromMcpMetadata = (metadata: { readonly port?: number } | undefined): number | undefined =>
-  metadata?.port !== undefined &&
-  Number.isInteger(metadata.port) &&
-  metadata.port > 0 &&
-  metadata.port <= 65535
-    ? metadata.port
-    : undefined;
 
 const selectTargetSurfaces = (
   registry: PluginRegistry,
@@ -707,47 +514,6 @@ const prepareTargetSops = (
   );
 };
 
-const applyOrbitGrantsAndAssertCapabilities = (options: {
-  readonly target: string;
-  readonly targetId: HarnessId;
-  readonly registry: PluginRegistry;
-  readonly composed: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
-}): Effect.Effect<ComposedAgent[], CompileError> =>
-  Effect.gen(function* () {
-    const orbitToolPermissions = yield* resolveOrbitToolPermissions(
-      options.orbits,
-      options.registry,
-    );
-    const orbitSkillPermissions =
-      getCompileTargetCapabilities(options.target).skillPermissions === "supported"
-        ? resolveOrbitSkillPermissions(options.orbits, options.registry)
-        : new Map<string, ReadonlyArray<string>>();
-    const composedWithOrbitTools = applyOrbitToolPermissions(
-      options.composed,
-      orbitToolPermissions,
-    );
-    yield* assertAgentToolBindingsAreTargeted(
-      composedWithOrbitTools,
-      options.registry,
-      options.targetId,
-    );
-    const composedForLowering = applyOrbitSkillPermissions(
-      composedWithOrbitTools,
-      orbitSkillPermissions,
-    );
-    yield* assertTargetSupportsGeneratedCanonicalTools(
-      options.target,
-      composedForLowering,
-    );
-    yield* assertTargetSupportsSkillPermissions(
-      options.target,
-      composedForLowering,
-    );
-
-    return composedForLowering;
-  });
-
 const selectTargetArtifacts = (
   registry: PluginRegistry,
   surfaces: TargetSurfaceSelection,
@@ -784,8 +550,7 @@ const selectTargetArtifacts = (
 // ---------------------------------------------------------------------------
 
 /**
- * Bindings a plugin owns for a single (target, scope) — own canonical tools
- * plus synthetic contract-dispatch bindings from agent traits.
+ * Bindings a plugin owns for a single (target, scope) — its canonical tools.
  */
 export const resolveOwnedToolBindingsForTarget = (
   registry: PluginRegistry,
@@ -797,18 +562,7 @@ export const resolveOwnedToolBindingsForTarget = (
     const tools = surfaces.tools
       ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
       : [];
-    const agents: ComposedAgent[] = [];
-    if (surfaces.agents) {
-      for (const [, agent] of [...registry.agents.entries()].sort(([a], [b]) =>
-        a.localeCompare(b),
-      )) {
-        agents.push(composeAgent(yield* resolveAgent(agent, registry, target)));
-      }
-    }
-    const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
-    const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
-    const agentsWithOrbitTools = applyOrbitToolPermissions(agents, orbitToolPermissions);
-    return bindingsOwnedByPlugin(registry.pluginName, tools, agentsWithOrbitTools);
+    return bindingsOwnedByPlugin(registry.pluginName, tools);
   });
 
 const writeToolCliRuntimeModule = async (
@@ -839,7 +593,6 @@ const prepareToolCliRuntime = (options: {
     const targetBindings = bindingsOwnedByPlugin(
       options.registry.pluginName,
       options.artifacts.tools,
-      options.agents,
     );
     if (targetBindings.length === 0) return;
 
@@ -948,7 +701,6 @@ const planTargetLowering = (options: {
       const ownedBindings = bindingsOwnedByPlugin(
         options.registry.pluginName,
         options.artifacts.tools,
-        options.agents,
       );
       if (ownedBindings.length > 0) {
         const descriptions = new Map<string, string>();
@@ -1049,13 +801,7 @@ const prepareLoweringInputs = (
     });
     const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
     const sops = prepareTargetSops(registry, surfaces.sops);
-    const composedForLowering = yield* applyOrbitGrantsAndAssertCapabilities({
-      target: options.target,
-      targetId: context.targetId,
-      registry,
-      composed: agentResult.composed,
-      orbits,
-    });
+    const composedForLowering = agentResult.composed;
     const artifacts = selectTargetArtifacts(registry, surfaces, context.targetId);
     const { accepted, fidelity } = yield* planHooksForTarget(artifacts.hooks, context.targetId);
 

@@ -18,8 +18,6 @@ import type {
   Personality,
   Skill,
   Skillspace,
-  Toolspace,
-  Trait,
 } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
 import { ensureDir, exists, readFile, removeDir, writeFile } from "../fs.js";
@@ -37,15 +35,13 @@ export const CACHE_FORMAT_VERSION = 3;
  * fixes such as generated tool naming or permission-lowering changes.
  */
 export const COMPILER_SEMANTICS_VERSION =
-  "2026-07-03-model-free-agent-surface-v1";
+  "2026-09-10-remove-tool-grants-v1";
 
 type SourceLike =
   | Identity
   | Personality
   | Modelspace
   | Skillspace
-  | Toolspace
-  | Trait
   | CanonicalTool
   | Skill
   | Agent;
@@ -86,14 +82,6 @@ interface CacheMissingSource {
 
 type CacheSourceDescriptor = CacheResolvedSource | CacheMissingSource;
 
-type CacheTraitDescriptor = {
-  readonly ref: string;
-  readonly binding: Agent["traits"][number];
-  readonly source: CacheSourceDescriptor;
-  readonly trait: Trait | undefined;
-  readonly tools: ReadonlyArray<CacheSourceDescriptor>;
-};
-
 type CacheModelPeer = {
   readonly name: string;
   readonly sourcePath: string;
@@ -104,10 +92,7 @@ type AgentCacheReferences = {
   readonly personality: CacheSourceDescriptor | undefined;
   readonly model: CacheSourceDescriptor | undefined;
   readonly modelPeers: ReadonlyArray<CacheModelPeer>;
-  readonly traits: ReadonlyArray<CacheTraitDescriptor>;
-  readonly access: ReturnType<typeof collectAccessRefs>;
   readonly skillRefs: ReadonlyArray<string>;
-  readonly toolspaces: ReadonlyArray<CacheSourceDescriptor>;
   readonly skillspaces: ReadonlyArray<CacheSourceDescriptor>;
   readonly managedSkills: ReadonlyArray<CacheSourceDescriptor>;
 };
@@ -208,89 +193,8 @@ const resolveSpaceDescriptor = async <T extends SourceLike>(
   };
 };
 
-const collectTraitDescriptors = async (
-  agent: Agent,
-  registry: PluginRegistry,
-): Promise<ReadonlyArray<CacheTraitDescriptor>> =>
-  Promise.all(
-    agent.traits.map(async (binding) => {
-      const source = await resolveSourceDescriptor(binding.ref, registry, (owner) => owner.traits);
-      const owner = registryForRef(binding.ref, registry);
-      const trait = owner?.traits.get(parseNamedRef(binding.ref).name);
-      const toolDescriptors: CacheSourceDescriptor[] = [];
-      if (trait) {
-        for (const attachment of Object.values(trait.tools)) {
-          const toolSource = await resolveSourceDescriptor(
-            attachment.ref,
-            registry,
-            (o) => o.tools,
-          );
-          toolDescriptors.push(toolSource);
-        }
-      }
-      return {
-        ref: binding.ref,
-        binding,
-        source,
-        trait,
-        tools: toolDescriptors,
-      };
-    }),
-  );
-
-const collectAccessRefs = (
-  agent: Agent,
-  traits: ReadonlyArray<{ trait: Trait | undefined }>,
-): {
-  readonly tools: ReadonlyArray<string>;
-  readonly toolGroups: ReadonlyArray<string>;
-  readonly skills: ReadonlyArray<string>;
-} => {
-  const tools = new Set(agent.access.tools);
-  const toolGroups = new Set(agent.access.toolGroups);
-  const skills = new Set(agent.access.skills);
-
-  for (const { trait } of traits) {
-    if (!trait) continue;
-    for (const tool of trait.access.tools) {
-      tools.add(tool);
-    }
-    for (const toolGroup of trait.access.toolGroups) {
-      toolGroups.add(toolGroup);
-    }
-    for (const skill of trait.access.skills) {
-      skills.add(skill);
-    }
-  }
-
-  return {
-    tools: [...tools].sort((left, right) => left.localeCompare(right)),
-    toolGroups: [...toolGroups].sort((left, right) => left.localeCompare(right)),
-    skills: [...skills].sort((left, right) => left.localeCompare(right)),
-  };
-};
-
-const collectSkillRefs = (
-  agent: Agent,
-  traits: ReadonlyArray<{ trait: Trait | undefined }>,
-): ReadonlyArray<string> => {
-  const skills = new Set([...agent.skills, ...agent.access.skills]);
-
-  for (const { trait } of traits) {
-    if (!trait) continue;
-    for (const skill of trait.access.skills) {
-      skills.add(skill);
-    }
-    for (const skill of trait.inject.skills) {
-      skills.add(skill);
-    }
-    for (const skill of trait.require.skills) {
-      skills.add(skill);
-    }
-  }
-
-  return [...skills].sort((left, right) => left.localeCompare(right));
-};
+const collectSkillRefs = (agent: Agent): ReadonlyArray<string> =>
+  [...new Set(agent.skills)].sort((left, right) => left.localeCompare(right));
 
 export const computeCacheKey = (
   agentSource: string,
@@ -326,19 +230,6 @@ const collectModelPeers = (
           `${left.name}:${left.sourcePath}`.localeCompare(`${right.name}:${right.sourcePath}`),
         )
     : [];
-
-const resolveToolspaceDescriptors = async (
-  access: ReturnType<typeof collectAccessRefs>,
-  registry: PluginRegistry,
-): Promise<ReadonlyArray<CacheSourceDescriptor>> =>
-  Promise.all([
-    ...access.tools.map((toolRef) =>
-      resolveSpaceDescriptor(toolRef, registry, "/", (owner) => owner.toolspaces),
-    ),
-    ...access.toolGroups.map((toolGroupRef) =>
-      resolveSpaceDescriptor(toolGroupRef, registry, "#", (owner) => owner.toolspaces),
-    ),
-  ]);
 
 const resolveSkillspaceDescriptors = async (
   skillRefs: ReadonlyArray<string>,
@@ -376,19 +267,14 @@ const resolveAgentCacheReferences = async (
     ? await resolveSpaceDescriptor(agent.model, registry, "/", (owner) => owner.modelspaces)
     : undefined;
   const modelPeers = collectModelPeers(agent, registry);
-  const traits = await collectTraitDescriptors(agent, registry);
-  const access = collectAccessRefs(agent, traits);
-  const skillRefs = collectSkillRefs(agent, traits);
+  const skillRefs = collectSkillRefs(agent);
 
   return {
     identity,
     personality,
     model,
     modelPeers,
-    traits,
-    access,
     skillRefs,
-    toolspaces: await resolveToolspaceDescriptors(access, registry),
     skillspaces: await resolveSkillspaceDescriptors(skillRefs, registry),
     managedSkills: await resolveManagedSkillDescriptors(skillRefs, registry),
   };
@@ -412,9 +298,6 @@ const collectReferenceDescriptors = (
   references.identity,
   references.personality,
   references.model,
-  ...references.traits.map((item) => item.source),
-  ...references.traits.flatMap((item) => item.tools),
-  ...references.toolspaces,
   ...references.skillspaces,
   ...references.managedSkills,
 ];
@@ -443,14 +326,6 @@ const agentSourceFingerprint = (
     personality: references.personality,
     model: references.model,
     modelPeers: references.modelPeers,
-    traits: references.traits.map(({ ref, binding, source, tools }) => ({
-      ref,
-      binding,
-      source,
-      tools,
-    })),
-    access: references.access,
-    toolspaces: references.toolspaces,
     skillspaces: references.skillspaces,
     managedSkills: references.managedSkills,
   },

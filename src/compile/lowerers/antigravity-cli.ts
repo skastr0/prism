@@ -17,9 +17,7 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
-  groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -38,12 +36,6 @@ import {
   uniqueSorted,
   type LowerOutput,
 } from "./shared.js";
-import {
-  toolsCliEmitEnabled,
-  toolsCliInjectMode,
-  type ToolsCliInjectMode,
-} from "../../tools-cli/flags.js";
-import { renderToolCliAgentGuidance } from "../../tools-cli/inject.js";
 
 const TARGET_ID = "antigravity-cli" as const;
 const PLUGIN_PREFIX = "prism-generated";
@@ -99,15 +91,15 @@ const composeAntigravityAgentFrontmatter = (
     if (typeof override.model === "string") frontmatter.model = override.model;
   }
 
-  const tools = uniqueSorted([
-    ...(Array.isArray(override?.tools) && override.tools.every((tool) => typeof tool === "string")
+  const tools = uniqueSorted(
+    Array.isArray(override?.tools) && override.tools.every((tool) => typeof tool === "string")
       ? override.tools
-      : []),
-    ...agent.allowedTools,
-  ], { dropEmpty: true });
+      : [],
+    { dropEmpty: true },
+  );
   if (tools.length > 0) frontmatter.tools = tools;
 
-  const skills = uniqueSorted(agent.allowedSkills, { dropEmpty: true });
+  const skills = uniqueSorted(agent.skills, { dropEmpty: true });
   if (skills.length > 0) frontmatter.skills = skills;
 
   return frontmatter;
@@ -115,24 +107,8 @@ const composeAntigravityAgentFrontmatter = (
 
 const renderAntigravityAgentMarkdown = (
   agent: ComposedAgent,
-  target: AntigravityCliLowerTarget,
-  includeCliGuidance: boolean,
-  cliMode: ToolsCliInjectMode,
-): string => {
-  const groups = includeCliGuidance
-    ? [...groupAgentToolBindingsByOwner(target.sourcePluginName, agent)].map(
-        ([ownerPlugin, bindings]) => ({
-          pluginName: ownerPlugin,
-          toolNames: bindings.map((binding) =>
-            ownerPlugin === target.sourcePluginName ? binding.logicalName : binding.toolName
-          ),
-        }),
-      )
-    : [];
-  const guidance = renderToolCliAgentGuidance(groups, cliMode).trimEnd();
-  const body = [agent.body.trimEnd(), guidance].filter((section) => section.length > 0).join("\n\n");
-  return `${serializeFrontmatter(composeAntigravityAgentFrontmatter(agent))}\n\n${body}\n`;
-};
+): string =>
+  `${serializeFrontmatter(composeAntigravityAgentFrontmatter(agent))}\n\n${agent.body.trimEnd()}\n`;
 
 const targetIncludesAntigravity = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
@@ -285,15 +261,8 @@ const planHooks = async (
   if (hooks.length === 0 || !input.registry || !artifactTargetsAntigravity(input.registry, "hooks")) return;
 
   const canonicalToolNames = collectBindingNameMap(
-    mcpBindingsForAgentsAndTools(
-      input.target.sourcePluginName,
-      input.tools,
-      input.agents,
-    ),
-    (binding) => {
-      const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-      return cliToolNameForBinding(owner, binding);
-    },
+    mcpBindingsForAgentsAndTools(input.target.sourcePluginName, input.tools),
+    (binding) => cliToolNameForBinding(binding),
   );
   const config: Record<string, Record<string, unknown>> = {};
   for (const hook of hooks) {
@@ -333,8 +302,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
   const plugin = input.target.sourcePluginName;
   const root = pluginRoot(input.target);
-  const emitCli = toolsCliEmitEnabled();
-  const cliMode = toolsCliInjectMode();
 
   const contextFiles = await collectContextFiles(input);
   if (contextFiles.length > 0) {
@@ -348,12 +315,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   for (const agent of input.agents) {
     pushDesiredFile(files, {
       targetPath: join(root, "agents", `${agent.name}.md`),
-      content: renderAntigravityAgentMarkdown(
-        agent,
-        input.target,
-        emitCli,
-        cliMode,
-      ),
+      content: renderAntigravityAgentMarkdown(agent),
       plugin,
     });
   }

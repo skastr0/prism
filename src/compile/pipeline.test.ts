@@ -1,44 +1,25 @@
 import { afterEach, expect, test } from "bun:test";
 
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Cause, Effect, Option, Schema } from "effect";
 import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
-import { readLockfile } from "./lockfile.js";
-import {
-  cliToolNamesForBindings,
-} from "./tool-runtime-bundle.js";
-import { generatedSyntheticToolName } from "./generated-plugin.js";
-import { bindingFromToolSource } from "./tool-bindings.js";
-import {
-  compileManifestPath,
-  readCompileManifest,
-  verifyAgentManifestHash,
-  verifyCompileManifestHash,
-} from "./compile-manifest.js";
-import { WORKFLOW_REFS_HARNESS, workflowAgentsPath, workflowModelsPath, workflowRefsRoot, workflowSkillsPath, workflowToolsPath } from "./workflow-refs-emitter.js";
-import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
-import { deriveProjectKey } from "../project-key.js";
-import { expandPath } from "../fs.js";
+import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
-import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
+import { resolveAgent, validateOrbit } from "./resolve.js";
 import {
   Agent,
-  CanonicalTool,
   Identity,
   Orbit,
   Personality,
   Skill,
-  Trait,
-  type NormalizedAccess,
   type NormalizedOrbitPhase,
   type OrbitParameter,
 } from "./sources.js";
-import { createCanonicalCompileFixture } from "./test-fixtures.js";
 import {
   formatManifestTargets,
   getManifestArtifactTargets,
@@ -49,7 +30,6 @@ import {
 import { computeContentHash } from "../content-hash.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { commitSnapshot, readSnapshot } from "../state/store.js";
-import type { DesiredRegion } from "../sync/desired.js";
 import { serializeRegionRef } from "../sync/plan.js";
 
 const tempRoots: string[] = [];
@@ -83,22 +63,6 @@ const directoryExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const readDirectoryTextFiles = async (
-  path: string,
-): Promise<Record<string, string>> => {
-  const entries = (await readdir(path)).sort((left, right) =>
-    left.localeCompare(right),
-  );
-  return Object.fromEntries(
-    await Promise.all(
-      entries.map(async (entry) => [
-        entry,
-        await readFile(join(path, entry), "utf8"),
-      ]),
-    ),
-  );
-};
-
 const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
   pathToFileURL(
     join(
@@ -110,30 +74,6 @@ const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
       "server.mjs",
     ),
   ).href;
-
-const generatedStaleSourcePluginEntry = (projectRoot: string, pluginId: string): string =>
-  pathToFileURL(
-    join(projectRoot, ".opencode", "plugins", pluginId, "src", "server.ts"),
-  ).href;
-
-const sanitizeKimiMcpNamePart = (part: string): string =>
-  part.replace(/[^a-zA-Z0-9_-]/gu, "_").replace(/_+/gu, "_");
-
-const kimiStableHash8 = (input: string): string => {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index++) {
-    hash ^= input.codePointAt(index)!;
-    hash = Math.trunc(Math.imul(hash, 0x01000193));
-  }
-  return hash.toString(16).padStart(8, "0");
-};
-
-const qualifyKimiMcpToolName = (serverName: string, toolName: string): string => {
-  const full = `mcp__${sanitizeKimiMcpNamePart(serverName)}__${sanitizeKimiMcpNamePart(toolName)}`;
-  if (full.length <= 64) return full;
-  const hash = kimiStableHash8(full);
-  return `${full.slice(0, 64 - hash.length - 1)}_${hash}`;
-};
 
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -155,13 +95,6 @@ const getFailure = (
   return failure.value as CompileError;
 };
 
-const parseOpencodeSkillPermissions = (markdown: string): Record<string, string> => {
-  const frontmatter = matter(markdown).data as {
-    permission?: { skill?: Record<string, string> };
-  };
-  return frontmatter.permission?.skill ?? {};
-};
-
 const effectImportPath = join(
   process.cwd(),
   "node_modules",
@@ -172,15 +105,6 @@ const effectImportPath = join(
 ).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
-
-const withEnv = <A>(name: string, value: string, run: () => Promise<A>): Promise<A> => {
-  const previous = process.env[name];
-  process.env[name] = value;
-  return run().finally(() => {
-    if (previous === undefined) delete process.env[name];
-    else process.env[name] = previous;
-  });
-};
 
 const createHermesHttpToolPlugin = async (options?: {
   readonly target?: "hermes" | "codex-cli" | "claude-code";
@@ -241,35 +165,8 @@ export default {
   return { pluginRoot, hermesRoot };
 };
 
-const skillPermissionAction = (
-  permission: Record<string, string>,
-  skill: string,
-): string => permission[skill] ?? permission["*"] ?? "ask";
-
-const visibleSkillsForPermission = (
-  skills: ReadonlyArray<string>,
-  permission: Record<string, string>,
-): string[] =>
-  skills
-    .filter((skill) => skillPermissionAction(permission, skill) !== "deny")
-    .sort((left, right) => left.localeCompare(right));
-
-const emptyAccess = { tools: [], toolGroups: [], skills: [] };
-
-const createValidationTrait = (name: string): Trait =>
-  new Trait({
-    name,
-    sourcePath: `/tmp/${name}.trait.ts`,
-    instructions: [],
-    access: emptyAccess,
-    tools: {},
-    inject: { skills: [] },
-    require: { tools: [], skills: [] },
-  });
-
 const createValidationAgent = (
   name: string,
-  traits: ReadonlyArray<string> = [],
   sourcePath = `/tmp/${name}.agent.ts`,
 ): Agent =>
   new Agent({
@@ -277,39 +174,14 @@ const createValidationAgent = (
     sourcePath,
     description: `${name} agent`,
     identity: "identity",
-    traits: traits.map((ref) => ({ ref, tools: {} })),
-    access: emptyAccess,
     skills: [],
     targets: {},
-  });
-
-const createCapabilityTrait = (options: {
-  readonly name: string;
-  readonly access?: NormalizedAccess;
-  readonly tools?: Record<string, { ref: string }>;
-  readonly injectSkills?: string[];
-  readonly requireTools?: string[];
-  readonly requireSkills?: string[];
-}): Trait =>
-  new Trait({
-    name: options.name,
-    sourcePath: `/tmp/${options.name}.trait.ts`,
-    instructions: [],
-    access: options.access ?? emptyAccess,
-    tools: options.tools ?? {},
-    inject: { skills: options.injectSkills ?? [] },
-    require: {
-      tools: options.requireTools ?? [],
-      skills: options.requireSkills ?? [],
-    },
   });
 
 const createCapabilityAgent = (options: {
   readonly name?: string;
   readonly identity?: string;
   readonly personality?: string;
-  readonly traits?: string[];
-  readonly access?: NormalizedAccess;
   readonly skills?: string[];
 }): Agent =>
   new Agent({
@@ -318,23 +190,8 @@ const createCapabilityAgent = (options: {
     description: "Capability worker",
     identity: options.identity ?? "identity",
     ...(options.personality ? { personality: options.personality } : {}),
-    traits: (options.traits ?? []).map((ref) => ({ ref, tools: {} })),
-    access: options.access ?? emptyAccess,
     skills: options.skills ?? [],
     targets: {},
-  });
-
-const createCapabilityTool = (name: string): CanonicalTool =>
-  new CanonicalTool({
-    name,
-    sourcePath: `/tmp/${name}.tool.ts`,
-    description: `${name} tool`,
-    input: Schema.Struct({}),
-    output: Schema.Struct({}),
-    slots: {},
-    async handle() {
-      return {};
-    },
   });
 
 const createResolveAgentRegistry = (): PluginRegistry => {
@@ -380,28 +237,22 @@ const createValidationOrbit = (options: {
       {
         name: "Validate phase",
         agents: [],
-        requires: [],
         ...options.phase,
       },
     ],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
 
 const createOrbitValidationRegistry = (): PluginRegistry => {
   const registry = emptyRegistry("/tmp/orbit-validation", "orbit-validation", "0.1.0");
-  registry.traits.set("reviewable", createValidationTrait("reviewable"));
-  registry.traits.set("self-assessing", createValidationTrait("self-assessing"));
-  registry.agents.set("builder", createValidationAgent("builder", ["self-assessing"]));
-  registry.agents.set("reviewer", createValidationAgent("reviewer", ["reviewable"]));
+  registry.agents.set("builder", createValidationAgent("builder"));
+  registry.agents.set("reviewer", createValidationAgent("reviewer"));
   const depRegistry = emptyRegistry("/tmp/orbit-validation-dep", "orbit-validation-dep", "0.1.0");
-  depRegistry.traits.set("self-assessing", createValidationTrait("self-assessing"));
   depRegistry.agents.set(
     "builder",
     createValidationAgent(
       "builder",
-      ["self-assessing"],
       registry.agents.get("builder")!.sourcePath,
     ),
   );
@@ -521,28 +372,361 @@ const expectOrbitSourceParseFailure = async (
   return { failure, sourcePath };
 };
 
+const canonicalFixtureModelBlock = (harness: string): string => {
+  if (harness === "opencode") {
+    return JSON.stringify({
+      model: "openai/gpt-5.4",
+      variant: "xhigh",
+      temperature: 0.2,
+    });
+  }
+  if (harness === "claude-code") {
+    return JSON.stringify({ model: "sonnet", temperature: 0.1 });
+  }
+  return JSON.stringify({ model: `${harness}-builder` });
+};
+
+const canonicalFixtureReviewerModelBlock = (harness: string): string => {
+  if (harness === "opencode") {
+    return JSON.stringify({
+      strategy: "round-robin",
+      models: [
+        { model: "openai/gpt-5.4-reviewer-a", variant: "medium", temperature: 0.1 },
+        { model: "openai/gpt-5.4-reviewer-b", variant: "medium", temperature: 0.1 },
+      ],
+    });
+  }
+  if (harness === "claude-code") {
+    return JSON.stringify({ model: "opus", temperature: 0.1 });
+  }
+  return JSON.stringify({ model: `${harness}-reviewer` });
+};
+
+/**
+ * Self-contained canonical compile fixture (migrated to the no-grants
+ * contract): shared agent-core modelspace/skillspace deps, canonical
+ * protocol-core tools, local canonical tools, three agents, and a
+ * delivery-contract orbit.
+ */
 const createCanonicalLanguageFixture = async (options?: {
-  invalidOrbit?: boolean;
-  invalidOrbitPermissionAgent?: boolean;
-  inlineSlotSchema?: boolean;
-  undeclaredSlot?: boolean;
-  mixedTraitRefsBeforeSlotBinding?: boolean;
   withCanonicalToolBindings?: boolean;
-}) => {
+}): Promise<{ pluginRoot: string; projectRoot: string }> => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");
   const projectRoot = join(root, "project");
-  return createCanonicalCompileFixture({
-    pluginRoot,
-    projectRoot,
-    invalidOrbit: options?.invalidOrbit,
-    invalidOrbitPermissionAgent: options?.invalidOrbitPermissionAgent,
-    inlineSlotSchema: options?.inlineSlotSchema,
-    undeclaredSlot: options?.undeclaredSlot,
-    mixedTraitRefsBeforeSlotBinding: options?.mixedTraitRefsBeforeSlotBinding,
-    withCanonicalToolBindings: options?.withCanonicalToolBindings,
-  });
+  const coreRoot = join(pluginRoot, "deps", "agent-core");
+  const protocolRoot = join(pluginRoot, "deps", "protocol-core");
+  const targetHarnesses = ["opencode", "claude-code"] as const;
+  const withOrchestrator = options?.withCanonicalToolBindings !== false;
+
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "canonical-compile-fixture",
+        version: "0.1.0",
+        deps: {
+          "agent-core": "./deps/agent-core",
+          "protocol-core": "./deps/protocol-core",
+        },
+        targets: {
+          agents: [...targetHarnesses],
+          orbits: [...targetHarnesses],
+          tools: [...targetHarnesses],
+          modelspaces: [...targetHarnesses],
+          skillspaces: [...targetHarnesses],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await writeText(
+    join(coreRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "agent-core",
+        version: "0.1.0",
+        targets: {
+          modelspaces: [...targetHarnesses],
+          skillspaces: [...targetHarnesses],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await writeText(
+    join(protocolRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "protocol-core",
+        version: "0.1.0",
+        targets: {
+          tools: [...targetHarnesses],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await writeText(
+    join(coreRoot, "modelspaces", "default-models.modelspace.ts"),
+    `
+export default {
+  name: "default-models",
+  description: "Shared logical model profiles",
+  profiles: {
+    builder: {
+      description: "Primary build profile",
+      targets: {
+        opencode: ${canonicalFixtureModelBlock("opencode")},
+        "claude-code": ${canonicalFixtureModelBlock("claude-code")},
+      },
+    },
+    reviewer: {
+      description: "Primary review profile",
+      targets: {
+        opencode: ${canonicalFixtureReviewerModelBlock("opencode")},
+        "claude-code": ${canonicalFixtureReviewerModelBlock("claude-code")},
+      },
+    },
+  },
 };
+`,
+  );
+
+  await writeText(
+    join(coreRoot, "skillspaces", "core-skills.skillspace.ts"),
+    `
+export default {
+  name: "core-skills",
+  description: "Harness-native core skill names",
+  skills: {
+    testing: {
+      targets: {
+        opencode: { name: "testing" },
+        "claude-code": { name: "testing" },
+      },
+    },
+  },
+};
+`,
+  );
+
+  await writeText(
+    join(protocolRoot, "tools", "external-submit.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "external-submit",
+  description: "Submit completed work through an external protocol plugin",
+  input: Schema.Struct({
+    summary: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+  }),
+  async handle(input, context) {
+    return { acknowledged: true };
+  },
+};
+`,
+  );
+
+  await writeText(
+    join(protocolRoot, "tools", "create_glyph.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "create_glyph",
+  description: "Create a protocol-owned glyph",
+  input: Schema.Struct({
+    board: Schema.Literal("project-alpha", "project-beta"),
+    id: Schema.String,
+    title: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+    board: Schema.Literal("project-alpha", "project-beta"),
+    id: Schema.String,
+  }),
+  async handle(input, context) {
+    return { acknowledged: true, board: input.board, id: input.id };
+  },
+};
+`,
+  );
+
+  for (const tool of [
+    { name: "submit-work", description: "Submit completed work" },
+    { name: "commit-work", description: "Commit validated implementation work" },
+    { name: "submit-review", description: "Submit review findings" },
+  ] as const) {
+    await writeText(
+      join(pluginRoot, "tools", `${tool.name}.tool.ts`),
+      `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: ${JSON.stringify(tool.name)},
+  description: ${JSON.stringify(tool.description)},
+  input: Schema.Struct({
+    summary: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+  }),
+  async handle(input, context) {
+    return { acknowledged: true };
+  },
+};
+`,
+    );
+  }
+
+  await writeText(
+    join(pluginRoot, "identities", "builder.identity.md"),
+    `---
+description: Build specialist for canonical compile tests
+---
+
+# Builder
+
+You implement one committed glyph and validate it before review.
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "identities", "reviewer.identity.md"),
+    `---
+description: Review specialist for canonical compile tests
+---
+
+# Reviewer
+
+You assess completed work and report whether it is ready to ship.
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "agents", "builder.agent.ts"),
+    `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "builder",
+  description: "Builder agent for canonical compile integration tests",
+  identity: "builder",
+  model: modelProfileRef("agent-core", "default-models", "builder"),
+  skills: [skillspaceRef("agent-core", "core-skills", "testing")],
+  targets: {
+    opencode: {
+      mode: "subagent",
+      maxSteps: 12,
+    },
+    "claude-code": {
+      top_p: 0.7,
+    },
+  },
+} satisfies AgentSource;
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "agents", "reviewer.agent.ts"),
+    `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "reviewer",
+  description: "Reviewer agent for canonical compile integration tests",
+  identity: "reviewer",
+  model: modelProfileRef("agent-core", "default-models", "reviewer"),
+  skills: [skillspaceRef("agent-core", "core-skills", "testing")],
+  targets: {
+    opencode: {
+      mode: "subagent",
+    },
+    "claude-code": {
+      top_p: 0.5,
+    },
+  },
+} satisfies AgentSource;
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "agents", "security-reviewer.agent.ts"),
+    `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "security-reviewer",
+  description: "Security reviewer variant using the same review profile",
+  identity: "reviewer",
+  model: modelProfileRef("agent-core", "default-models", "reviewer"),
+  skills: [skillspaceRef("agent-core", "core-skills", "testing")],
+  targets: {
+    opencode: {
+      mode: "subagent",
+    },
+    "claude-code": {
+      top_p: 0.4,
+    },
+  },
+} satisfies AgentSource;
+`,
+  );
+
+  const orchestratorBlock = withOrchestrator
+    ? `
+  orchestrator: {
+    agent: agentRef("builder"),
+  },`
+    : "";
+  await writeText(
+    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
+    `import { agentRef, type OrbitSource } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "delivery-contract",
+  description: "Validate that work moves through the right agents",
+  phases: [
+    {
+      name: "Implement change",
+      agents: [agentRef("builder")],
+      notes: {
+        "Input": "Work item is ready to build",
+        "Done": "Implementation is ready for review",
+      },
+    },
+    {
+      name: "Review change",
+      agents: [agentRef("reviewer")],
+      notes: {
+        "Input": "Implementation is ready for review",
+        "Done": "Review findings are recorded",
+      },
+    },
+    {
+      name: "Hand off work",
+      agents: [agentRef("builder"), agentRef("reviewer")],
+      notes: {
+        "Input": "Build and review are complete",
+        "Done": "Work has been handed off cleanly",
+      },
+    },
+  ],${orchestratorBlock}
+  body: "Use this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.",
+} satisfies OrbitSource;
+`,
+  );
+
+  return { pluginRoot, projectRoot };
+};
+
 
 const createAntigravityPluginFixture = async (): Promise<{
   pluginRoot: string;
@@ -565,7 +749,6 @@ const createAntigravityPluginFixture = async (): Promise<{
           agents: ["antigravity-cli"],
           orbits: ["antigravity-cli"],
           tools: ["antigravity-cli"],
-          toolspaces: ["antigravity-cli"],
           hooks: ["antigravity-cli"],
         },
       },
@@ -577,12 +760,6 @@ const createAntigravityPluginFixture = async (): Promise<{
   await writeText(join(pluginRoot, "rules", "project", "project-context.md"), `# Project context\n\nKeep plugin-local project guidance.\n`);
   await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
   await writeText(join(pluginRoot, "identities", "worker.identity.md"), `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the plugin bundle.\n`);
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
-export default {
-  name: "workspace",
-  tools: { read_repo: { targets: { "antigravity-cli": { name: "read_file" } } } },
-};
-`);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
 
 export default {
@@ -593,43 +770,36 @@ export default {
   async handle(input, context) { return { acknowledged: true }; },
 };
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { toolRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "submittable",
-  description: "Can submit work",
-  instructions: "Submit work through the typed Antigravity plugin tool.",
-  access: { tools: [toolRef("workspace", "read_repo")] },
-  tools: { submit_work: { ref: "submit-work" } },
-  require: { tools: ["submit_work"] },
-};
-`);
   await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "worker",
   description: "Antigravity plugin worker",
   identity: "worker",
-  traits: ["submittable"],
   skills: [skillRef("testing")],
+  targets: {
+    "antigravity-cli": {
+      tools: ["read_file"],
+    },
+  },
 };
 `);
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery",
   description: "Deliver work through Antigravity",
-  phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
+  phases: [{ name: "Build", agents: [agentRef("worker")] }],
 };
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-read",
   description: "Audit read calls",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
+  match: { tool: { kind: "hook-native-tool", name: "read_file" } },
   handle: (event) => Effect.succeed(
     event.tool.input?.block
       ? { decision: "block" as const, message: "read-blocked" }
@@ -644,136 +814,12 @@ export default {
   name: "audit-submit",
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.canonical("submit_work") },
+  match: { tool: hookTool.canonical("submit-work") },
   handle: (event) => Effect.succeed(
     event.tool.input?.block
       ? { decision: "block" as const, message: "canonical-blocked" }
       : { decision: "continue" as const },
   ),
-};
-`);
-
-  return { pluginRoot, projectRoot };
-};
-
-const createStandaloneToolFixture = async (): Promise<{
-  pluginRoot: string;
-  projectRoot: string;
-}> => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "tool-only-demo");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "tool-only-demo",
-        version: "0.1.0",
-        targets: {
-          tools: ["codex-cli", "claude-code", "antigravity-cli", "factory-droid", "cursor"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  await writeText(
-    join(pluginRoot, "tools", "echo-message.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export default {
-  name: "echo-message",
-  description: "Echo a message",
-  input: Schema.Struct({ message: Schema.String }),
-  output: Schema.Struct({ message: Schema.String }),
-  async handle(input) {
-    return { message: input.message };
-  },
-};
-`,
-  );
-
-  return { pluginRoot, projectRoot };
-};
-
-const createCodexProjectFixture = async (): Promise<{
-  pluginRoot: string;
-  projectRoot: string;
-}> => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "codex-project-demo");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "codex-project-demo",
-        version: "0.4.0",
-        targets: {
-          rules: ["codex-cli"],
-          skills: ["codex-cli"],
-          agents: ["codex-cli"],
-          tools: ["codex-cli"],
-          toolspaces: ["codex-cli"],
-          hooks: ["codex-cli"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Codex context\n\nUse project-local Codex guidance.\n`);
-  await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
-  await writeText(join(pluginRoot, "identities", "reviewer.identity.md"), `---\ndescription: Reviewer identity\n---\n\n# Reviewer\n\nReview through Codex.\n`);
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
-export default {
-  name: "workspace",
-  tools: { shell: { targets: { "codex-cli": { name: "shell.command" } } } },
-};
-`);
-  await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export default {
-  name: "submit-work",
-  description: "Submit completed work",
-  input: Schema.Struct({ summary: Schema.String }),
-  output: Schema.Struct({ acknowledged: Schema.Boolean }),
-  async handle(_input, _context) { return { acknowledged: true }; },
-};
-`);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `
-export default {
-  name: "submittable",
-  description: "Can submit work",
-  instructions: "Submit through the generated Codex tool.",
-  tools: { submit_work: { ref: "submit-work" } },
-  require: { tools: ["submit_work"] },
-};
-`);
-  await writeText(join(pluginRoot, "agents", "reviewer.agent.ts"), `import { skillRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "reviewer",
-  description: "Codex project reviewer",
-  identity: "reviewer",
-  traits: ["submittable"],
-  skills: [skillRef("testing")],
-};
-`);
-  await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "audit-shell",
-  description: "Audit shell calls",
-  event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
-  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
 };
 `);
 
@@ -800,7 +846,6 @@ const createOpenCodeHookFixture = async (options?: {
         version: "0.1.0",
         targets: {
           hooks: ["opencode"],
-          toolspaces: ["opencode"],
           tools: ["opencode"],
         },
       },
@@ -808,29 +853,23 @@ const createOpenCodeHookFixture = async (options?: {
       2,
     )}\n`,
   );
-  await writeText(join(pluginRoot, "toolspaces", "core.toolspace.ts"), `
-export default {
-  name: "core",
-  tools: { shell: { targets: { opencode: { name: "bash" } } } },
-};
-`);
   await writeText(join(pluginRoot, "hooks", "audit-before.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-before",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("core", "shell")) },
+  match: { tool: hookTool.native("bash") },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
 };
 `);
   await writeText(join(pluginRoot, "hooks", "audit-after.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-after",
   event: hookEvent.toolAfter,
-  match: { tool: hookTool.tool(toolRef("core", "shell")) },
+  match: { tool: hookTool.native("bash") },
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "ignored for observational hooks" }),
 };
 `);
@@ -850,7 +889,7 @@ import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 export default {
   name: "audit-submit",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.canonical("submit_work") },
+  match: { tool: hookTool.canonical("submit-work") },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
 };
 `);
@@ -987,25 +1026,6 @@ const createExternalPermissionOnlyFixture = async (): Promise<{
   await mkdir(projectRoot, { recursive: true });
 
   await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "permission-only-consumer",
-        version: "0.1.0",
-        deps: {
-          "protocol-core": "./deps/protocol-core",
-        },
-        targets: {
-          agents: ["opencode"],
-          skills: ["opencode"],
-          skillspaces: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
     join(protocolRoot, "plugin.json"),
     `${JSON.stringify(
       {
@@ -1018,45 +1038,6 @@ const createExternalPermissionOnlyFixture = async (): Promise<{
       null,
       2,
     )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-
-Use the protocol tool.
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "submittable.trait.ts"),
-    `
-export default {
-  name: "submittable",
-  description: "Can submit externally",
-  tools: {
-    submit_work: {
-      ref: "protocol-core:external-submit",
-    },
-  },
-  require: {
-    tools: ["submit_work"],
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `
-export default {
-  name: "worker",
-  description: "Permission-only consumer worker",
-  identity: "worker",
-  traits: ["submittable"],
-};
-`,
   );
   await writeText(
     join(protocolRoot, "schemas", "shared.ts"),
@@ -1100,168 +1081,6 @@ export default {
 };
 `,
   );
-  await writeText(
-    join(projectRoot, ".opencode", "opencode.json"),
-    `${JSON.stringify(
-      {
-        plugin: [
-          "prism-generated-permission-only-consumer",
-          "prism-generated-stale-dep",
-          generatedPluginEntry(
-            projectRoot,
-            "prism-generated-permission-only-consumer",
-          ),
-          generatedStaleSourcePluginEntry(
-            projectRoot,
-            "prism-generated-permission-only-consumer",
-          ),
-          generatedPluginEntry(projectRoot, "prism-generated-stale-dep"),
-          generatedStaleSourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
-        ],
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  return { pluginRoot, protocolRoot, projectRoot };
-};
-
-const createExternalSyntheticOnlyFixture = async (): Promise<{
-  pluginRoot: string;
-  protocolRoot: string;
-  projectRoot: string;
-}> => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "consumer");
-  const projectRoot = join(root, "project");
-  const protocolRoot = join(pluginRoot, "deps", "protocol-core");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "external-synthetic-consumer",
-        version: "0.1.0",
-        deps: {
-          "protocol-core": "./deps/protocol-core",
-        },
-        targets: {
-          agents: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(protocolRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "protocol-core",
-        version: "0.1.0",
-        targets: {
-          tools: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-
-Use the typed protocol wrapper.
-`,
-  );
-  await writeText(
-    join(pluginRoot, "schemas", "worker-details.ts"),
-    `import { Schema } from "effect";
-
-export const WorkerDetails = Schema.Struct({
-  confidence: Schema.Literal("low", "high"),
-});
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "submittable.trait.ts"),
-    `
-export default {
-  name: "submittable",
-  description: "Can submit externally through a typed wrapper",
-  tools: {
-    submit_work: {
-      ref: "protocol-core:external-submit",
-    },
-  },
-  require: {
-    tools: ["submit_work"],
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { bindTrait } from "prism";
-import { WorkerDetails } from "../schemas/worker-details.ts";
-
-export default {
-  name: "worker",
-  description: "Synthetic external worker",
-  identity: "worker",
-  traits: [
-    bindTrait("submittable", {
-      tools: {
-        submit_work: {
-          slots: {
-            details: WorkerDetails,
-          },
-        },
-      },
-    }),
-  ],
-};
-`,
-  );
-  await writeText(
-    join(protocolRoot, "schemas", "shared.ts"),
-    `import { Schema } from "effect";
-
-export const SharedInput = Schema.Struct({
-  summary: Schema.String,
-});
-`,
-  );
-  await writeText(
-    join(protocolRoot, "tools", "external-submit.tool.ts"),
-    `import { Schema } from "effect";
-import { schemaSlot } from "prism";
-import { SharedInput } from "../schemas/shared.ts";
-
-export default {
-  name: "external-submit",
-  description: "Submit completed work through an external protocol plugin",
-  input: SharedInput,
-  output: Schema.Struct({
-    acknowledged: Schema.Boolean,
-  }),
-  slots: {
-    details: schemaSlot({
-      description: "Consumer-specific details",
-    }),
-  },
-  async handle(input, context) {
-    return { acknowledged: true };
-  },
-};
-`,
-  );
 
   return { pluginRoot, protocolRoot, projectRoot };
 };
@@ -1282,46 +1101,9 @@ test("readManifest accepts canonical compile target keys", async () => {
     agents: ["opencode", "claude-code"],
     orbits: ["opencode", "claude-code"],
     tools: ["opencode", "claude-code"],
-    toolspaces: ["opencode", "claude-code"],
     modelspaces: ["opencode", "claude-code"],
+    skillspaces: ["opencode", "claude-code"],
   });
-});
-
-test("canonical fixture writes local tool sources with review-only slot", async () => {
-  const { pluginRoot } = await createCanonicalLanguageFixture();
-
-  const submitWork = await readFile(
-    join(pluginRoot, "tools", "submit-work.tool.ts"),
-    "utf8",
-  );
-  const commitWork = await readFile(
-    join(pluginRoot, "tools", "commit-work.tool.ts"),
-    "utf8",
-  );
-  const submitReview = await readFile(
-    join(pluginRoot, "tools", "submit-review.tool.ts"),
-    "utf8",
-  );
-
-  expect(submitWork).toContain('name: "submit-work"');
-  expect(submitWork).toContain('description: "Submit completed work"');
-  expect(commitWork).toContain('name: "commit-work"');
-  expect(commitWork).toContain(
-    'description: "Commit validated implementation work"',
-  );
-  expect(submitReview).toContain('name: "submit-review"');
-  expect(submitReview).toContain('description: "Submit review findings"');
-
-  for (const source of [submitWork, commitWork, submitReview]) {
-    expect(source).toContain("summary: Schema.String");
-    expect(source).toContain("acknowledged: Schema.Boolean");
-  }
-  expect(submitWork).not.toContain("schemaSlot");
-  expect(commitWork).not.toContain("schemaSlot");
-  expect(submitReview).toContain("schemaSlot");
-  expect(submitReview).toContain(
-    'description: "Agent-specific review fields"',
-  );
 });
 
 test("readManifest treats skillspaces as compile artifacts", async () => {
@@ -1777,162 +1559,6 @@ export default {
   expect(result.composed[0]!.model).toBeUndefined();
 });
 
-test("canonical TS-authored agents resolve shared toolspace and modelspace bindings", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const builder = result.composed.find((agent) => agent.name === "builder");
-  const reviewer = result.composed.find((agent) => agent.name === "reviewer");
-  const securityReviewer = result.composed.find(
-    (agent) => agent.name === "security-reviewer",
-  );
-
-  expect(builder).toBeDefined();
-  expect(reviewer).toBeDefined();
-  expect(securityReviewer).toBeDefined();
-  expect(builder?.skills).toEqual(["testing"]);
-  expect(reviewer?.skills).toEqual(["testing"]);
-  expect(securityReviewer?.skills).toEqual(["testing"]);
-  expect(builder?.allowedTools).toEqual(["bash", "grep", "read"]);
-  expect(reviewer?.allowedTools).toEqual(["grep", "read"]);
-  expect(securityReviewer?.allowedTools).toEqual(["grep", "read"]);
-  expect(builder?.toolBindings.map((binding) => binding.logicalName)).toEqual([
-    "commit_work",
-    "create_glyph",
-    "submit_work",
-  ]);
-  expect(reviewer?.toolBindings.map((binding) => binding.logicalName)).toEqual([
-    "submit_review",
-    "submit_work",
-  ]);
-  expect(securityReviewer?.toolBindings.map((binding) => binding.logicalName)).toEqual([
-    "submit_review",
-    "submit_work",
-  ]);
-  expect(builder?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.kind).toBe(
-    "permission",
-  );
-  expect(
-    reviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.kind,
-  ).toBe("permission");
-  expect(
-    securityReviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")
-      ?.kind,
-  ).toBe("permission");
-  expect(builder?.toolBindings.find((binding) => binding.logicalName === "commit_work")?.kind).toBe(
-    "permission",
-  );
-  expect(builder?.toolBindings.find((binding) => binding.logicalName === "create_glyph")?.kind).toBe(
-    "permission",
-  );
-  const reviewerSubmitReview = reviewer?.toolBindings.find(
-    (binding) => binding.logicalName === "submit_review",
-  );
-  const securitySubmitReview = securityReviewer?.toolBindings.find(
-    (binding) => binding.logicalName === "submit_review",
-  );
-  expect(reviewerSubmitReview?.kind).toBe("synthetic");
-  if (!reviewerSubmitReview?.contract || !securitySubmitReview?.contract) {
-    throw new Error("expected review slot fills to synthesize tool contracts");
-  }
-  expect(reviewerSubmitReview.contract.name).not.toBe(
-    securitySubmitReview.contract.name,
-  );
-  expect(
-    builder?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.contract,
-  ).toBeUndefined();
-  expect(
-    reviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.contract,
-  ).toBeUndefined();
-
-  const projectKey = deriveProjectKey(expandPath(projectRoot)).key;
-  expect(await pathExists(compileManifestPath(testPrismHome(), projectKey))).toBe(true);
-  const manifestRead = await readCompileManifest(testPrismHome(), projectKey);
-  expect(manifestRead.quarantinedPath).toBeUndefined();
-  expect(verifyCompileManifestHash(manifestRead.manifest)).toBe(true);
-  expect(manifestRead.manifest.compileTargets).toEqual([
-    { harness: "opencode", scope: "project" },
-  ]);
-  const builderEntry = manifestRead.manifest.agents["canonical-compile-fixture:builder"];
-  expect(builderEntry).toBeDefined();
-  if (!builder || !builderEntry) throw new Error("expected builder and manifest entry");
-  expect(builderEntry && verifyAgentManifestHash(builderEntry)).toBe(true);
-  expect(builderEntry?.sourceHash).toMatch(/^[a-f0-9]{64}$/);
-  expect(builderEntry?.traits.map((trait) => trait.id)).toEqual([
-    "canonical-compile-fixture:committable",
-    "canonical-compile-fixture:self-assessing",
-    "canonical-compile-fixture:submittable",
-  ]);
-  expect(builderEntry?.composed.modelBindings).toEqual({
-    modelspace: "agent-core:default-models",
-    profile: "builder",
-  });
-  expect(builderEntry.composed.grants.tools).toEqual([
-    "canonical-compile-fixture:commit-work",
-    "protocol-core:create_glyph",
-    "protocol-core:external-submit",
-  ]);
-  expect(builderEntry?.composed.perTarget.opencode).toEqual({
-    scope: "project",
-    model: builder.model ?? null,
-    toolGrants: builderEntry.composed.grants.tools,
-    allowedTools: builder.allowedTools,
-    allowedSkills: builder.allowedSkills,
-  });
-
-  const workflowAgentsRefPath = workflowAgentsPath(testPrismHome(), projectKey);
-  const workflowModelsRefPath = workflowModelsPath(testPrismHome(), projectKey);
-  const workflowSkillsRefPath = workflowSkillsPath(testPrismHome(), projectKey);
-  const workflowToolsRefPath = workflowToolsPath(testPrismHome(), projectKey);
-  expect(await pathExists(workflowAgentsRefPath)).toBe(true);
-  expect(await pathExists(workflowModelsRefPath)).toBe(true);
-  expect(await pathExists(workflowSkillsRefPath)).toBe(true);
-  expect(await pathExists(workflowToolsRefPath)).toBe(true);
-  const workflowRefs = await readFile(workflowAgentsRefPath, "utf8");
-  expect(workflowRefs).toContain("Generated by Prism. Do not edit.");
-  expect(workflowRefs).toContain('"canonicalCompileFixture": {');
-  expect(workflowRefs).toContain('"builder":');
-  expect(workflowRefs).toContain(`manifestHash: ${JSON.stringify(builderEntry.manifestHash)}`);
-  expect(workflowRefs).toContain('installs: ["opencode"]');
-  const workflowModelsContent = await readFile(workflowModelsRefPath, "utf8");
-  expect(workflowModelsContent).toContain("kind: \"model-profile-ref\"");
-  expect(workflowModelsContent).toContain("default-models");
-  expect(workflowModelsContent).toContain("agent-core");
-  const workflowSkillsContent = await readFile(workflowSkillsRefPath, "utf8");
-  expect(workflowSkillsContent).toContain("Generated by Prism. Do not edit.");
-  expect(workflowSkillsContent).toContain("managed-skill-ref");
-  expect(workflowSkillsContent).toContain('"testing"');
-  expect(workflowSkillsContent).toContain("deliveryContract");
-  const workflowToolsContent = await readFile(workflowToolsRefPath, "utf8");
-  expect(workflowToolsContent).toContain("Generated by Prism. Do not edit.");
-  expect(workflowToolsContent).toContain("canonical-tool-ref");
-  expect(workflowToolsContent).toContain("toolspace-tool-ref");
-  expect(workflowToolsContent).toContain("commitWork");
-  expect(workflowToolsContent).toContain("protocolCore");
-  expect(workflowToolsContent).toContain("createGlyph");
-  expect(workflowToolsContent).not.toContain("sourcePath");
-  expect(workflowToolsContent).not.toContain(".tool.ts");
-  const workflowRefsSnapshot = await readSnapshot({
-    prismHome: testPrismHome(),
-    harness: WORKFLOW_REFS_HARNESS,
-    root: workflowRefsRoot(testPrismHome(), projectKey),
-  });
-  expect(workflowRefsSnapshot.manifest.entries.some((entry) => entry.targetPath === workflowAgentsRefPath)).toBe(true);
-  expect(workflowRefsSnapshot.manifest.entries.some((entry) => entry.targetPath === workflowModelsRefPath)).toBe(true);
-  expect(workflowRefsSnapshot.manifest.entries.some((entry) => entry.targetPath === workflowSkillsRefPath)).toBe(true);
-  expect(workflowRefsSnapshot.manifest.entries.some((entry) => entry.targetPath === workflowToolsRefPath)).toBe(true);
-});
-
 test("resolveAgent reports missing identity and personality references", async () => {
   const missingIdentityRegistry = createResolveAgentRegistry();
   missingIdentityRegistry.identities.clear();
@@ -1964,216 +1590,6 @@ test("resolveAgent reports missing identity and personality references", async (
   if (missingPersonalityFailure._tag === "UnknownReferenceError") {
     expect(missingPersonalityFailure.field).toBe("personality");
     expect(missingPersonalityFailure.referenceName).toBe("missing-personality");
-  }
-});
-
-test("resolveAgent fails when trait required skills are not allowed", async () => {
-  const registry = createResolveAgentRegistry();
-  registry.skills.set(
-    "reviewing",
-    new Skill({
-      name: "reviewing",
-      sourcePath: "/tmp/skills/reviewing/SKILL.md",
-    }),
-  );
-  registry.traits.set(
-    "requires-reviewing",
-    createCapabilityTrait({
-      name: "requires-reviewing",
-      requireSkills: ["reviewing"],
-    }),
-  );
-
-  const exit = await Effect.runPromiseExit(
-    resolveAgent(
-      createCapabilityAgent({ traits: ["requires-reviewing"] }),
-      registry,
-      "opencode",
-    ),
-  );
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("AgentValidationError");
-  if (failure._tag === "AgentValidationError") {
-    expect(failure.field).toBe("traits");
-    expect(failure.message).toBe(
-      "trait 'resolve-agent-demo:requires-reviewing' requires missing skills: reviewing",
-    );
-  }
-});
-
-test("resolveAgentCapabilities merges trait grants and sorts capability output", async () => {
-  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
-  registry.tools.set("submit-work", createCapabilityTool("submit-work"));
-  registry.traits.set(
-    "zeta",
-    createCapabilityTrait({
-      name: "zeta",
-      access: {
-        tools: ["workspace/zeta"],
-        toolGroups: ["workspace/group-zeta"],
-        skills: ["skill-zeta"],
-      },
-      injectSkills: ["skill-injected"],
-      tools: { submit_work: { ref: "submit-work" } },
-    }),
-  );
-  registry.traits.set(
-    "alpha",
-    createCapabilityTrait({
-      name: "alpha",
-      requireTools: ["submit_work"],
-    }),
-  );
-  const agent = createCapabilityAgent({
-    traits: ["alpha", "zeta"],
-    access: {
-      tools: ["workspace/native"],
-      toolGroups: ["workspace/group-native"],
-      skills: ["skill-native"],
-    },
-    skills: ["direct-z", "direct-a"],
-  });
-
-  const capabilities = await Effect.runPromise(
-    resolveAgentCapabilities(agent, registry),
-  );
-
-  expect(capabilities.traits.map((trait) => trait.canonicalId)).toEqual([
-    "capability-demo:alpha",
-    "capability-demo:zeta",
-  ]);
-  expect(capabilities.canonicalTraitIds).toEqual([
-    "capability-demo:alpha",
-    "capability-demo:zeta",
-  ]);
-  expect(capabilities.skills).toEqual(["direct-z", "direct-a"]);
-  expect(capabilities.access).toEqual({
-    tools: ["workspace/native", "workspace/zeta"],
-    toolGroups: ["workspace/group-native", "workspace/group-zeta"],
-    skills: ["skill-injected", "skill-native", "skill-zeta"],
-  });
-  expect(capabilities.toolRefs).toEqual([
-    {
-      logicalName: "submit_work",
-      kind: "permission",
-      toolPluginName: "capability-demo",
-      toolName: "submit-work",
-      toolSourcePath: "/tmp/submit-work.tool.ts",
-    },
-  ]);
-});
-
-test("resolveAgentCapabilities preserves trait duplicate and requirement failures", async () => {
-  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
-  registry.traits.set("alpha", createCapabilityTrait({ name: "alpha" }));
-  registry.traits.set(
-    "needs-tool",
-    createCapabilityTrait({
-      name: "needs-tool",
-      requireTools: ["submit_work"],
-    }),
-  );
-
-  const duplicateExit = await Effect.runPromiseExit(
-    resolveAgentCapabilities(
-      createCapabilityAgent({ traits: ["alpha", "alpha"] }),
-      registry,
-    ),
-  );
-  const duplicateFailure = getFailure(duplicateExit);
-  expect(duplicateFailure._tag).toBe("AgentValidationError");
-  if (duplicateFailure._tag === "AgentValidationError") {
-    expect(duplicateFailure.field).toBe("traits[1]");
-    expect(duplicateFailure.message).toBe(
-      "declares duplicate trait 'capability-demo:alpha'",
-    );
-  }
-
-  const missingExit = await Effect.runPromiseExit(
-    resolveAgentCapabilities(
-      createCapabilityAgent({ traits: ["needs-tool"] }),
-      registry,
-    ),
-  );
-  const missingFailure = getFailure(missingExit);
-  expect(missingFailure._tag).toBe("AgentValidationError");
-  if (missingFailure._tag === "AgentValidationError") {
-    expect(missingFailure.field).toBe("traits");
-    expect(missingFailure.message).toBe(
-      "trait 'capability-demo:needs-tool' requires missing tools: submit_work",
-    );
-  }
-});
-
-test("resolveAgentCapabilities accepts identical logical tool bindings", async () => {
-  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
-  registry.tools.set("submit-work", createCapabilityTool("submit-work"));
-  registry.traits.set(
-    "left",
-    createCapabilityTrait({
-      name: "left",
-      tools: { submit_work: { ref: "submit-work" } },
-    }),
-  );
-  registry.traits.set(
-    "right",
-    createCapabilityTrait({
-      name: "right",
-      tools: { submit_work: { ref: "submit-work" } },
-    }),
-  );
-
-  const capabilities = await Effect.runPromise(
-    resolveAgentCapabilities(
-      createCapabilityAgent({ traits: ["left", "right"] }),
-      registry,
-    ),
-  );
-
-  expect(capabilities.toolRefs).toEqual([
-    {
-      logicalName: "submit_work",
-      kind: "permission",
-      toolPluginName: "capability-demo",
-      toolName: "submit-work",
-      toolSourcePath: "/tmp/submit-work.tool.ts",
-    },
-  ]);
-});
-
-test("resolveAgentCapabilities rejects conflicting logical tool bindings", async () => {
-  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
-  registry.tools.set("left-tool", createCapabilityTool("left-tool"));
-  registry.tools.set("right-tool", createCapabilityTool("right-tool"));
-  registry.traits.set(
-    "left",
-    createCapabilityTrait({
-      name: "left",
-      tools: { submit_work: { ref: "left-tool" } },
-    }),
-  );
-  registry.traits.set(
-    "right",
-    createCapabilityTrait({
-      name: "right",
-      tools: { submit_work: { ref: "right-tool" } },
-    }),
-  );
-
-  const exit = await Effect.runPromiseExit(
-    resolveAgentCapabilities(
-      createCapabilityAgent({ traits: ["left", "right"] }),
-      registry,
-    ),
-  );
-  const failure = getFailure(exit);
-
-  expect(failure._tag).toBe("AgentValidationError");
-  if (failure._tag === "AgentValidationError") {
-    expect(failure.field).toBe("traits");
-    expect(failure.message).toBe(
-      "traits 'capability-demo:left' and 'capability-demo:right' define conflicting tool bindings for 'submit_work'",
-    );
   }
 });
 
@@ -2243,92 +1659,9 @@ test("compilePluginForTarget collects per-op failures instead of aborting the ba
   }
 });
 
-test("orbit phase validation succeeds when assigned agents satisfy requirements", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-  expect(
-    skill.startsWith(
-      "---\nname: delivery-contract\ndescription: Validate that work moves through the right trait-conforming agents\n---\n",
-    ),
-  ).toBe(true);
-  expect(skill).toContain("### 1. Implement change — agent `builder`");
-  expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
-  // Derived skill renders trait protocols once, deduplicated across agents.
-  expect(skill).toContain("## Trait protocols active in this orbit");
-  expect(skill).toContain("`canonical-compile-fixture:reviewable`");
-  expect(skill).toContain("`canonical-compile-fixture:self-assessing`");
-  expect(
-    await pathExists(
-      join(projectRoot, ".opencode", "orbits", "delivery-contract.md"),
-    ),
-  ).toBe(false);
-
-  const warmOpencode = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-  const generatedPluginSkips = warmOpencode.operations.filter(
-    (operation) =>
-      operation.kind === "skip" &&
-      operation.targetPath.includes(join(".opencode", "plugins", "prism-generated")),
-  );
-  expect(generatedPluginSkips.length).toBeGreaterThan(0);
-  expect(warmOpencode.operations.filter(
-    (operation) =>
-      (operation.kind === "create" || operation.kind === "repair") &&
-      operation.targetPath.includes(join(".opencode", "plugins", "prism-generated")),
-  )).toEqual([]);
-});
-
-test("orbit validation fails when assigned agents do not satisfy requirements", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    invalidOrbit: true,
-  });
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("OrbitValidationError");
-  if (failure._tag === "OrbitValidationError") {
-    expect(failure.field).toBe("phases[1].requires[0]");
-    expect(failure.message).toContain("reviewable");
-    expect(failure.message).toContain("only 0 match");
-  }
-});
-
-test("loadPlugin normalizes orbit phase references requirements and metadata", async () => {
+test("loadPlugin normalizes orbit phase references and metadata", async () => {
   const pluginRoot = await createOrbitLoadFixture(
-    `import { agentRef, orbitRef, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef, orbitRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "phase-normalization",
@@ -2337,7 +1670,6 @@ export default {
     {
       name: "Singular agent",
       agent: agentRef("builder"),
-      requires: [{ all: [traitRef("self-assessing"), traitRef("reviewable")], min: 2 }],
       notes: { Input: "scope", Done: "handoff" },
       telos: "Build the change",
       real_world_change: "User can finish the workflow",
@@ -2380,7 +1712,6 @@ export default {
     name: "Singular agent",
     agent: "builder",
     agents: ["builder"],
-    requires: [{ all: ["self-assessing", "reviewable"], min: 2 }],
     notes: { Input: "scope", Done: "handoff" },
     telos: "Build the change",
     real_world_change: "User can finish the workflow",
@@ -2400,7 +1731,6 @@ export default {
     name: "Bound template",
     orbit_binding: { orbit: "template", bindings: { required: "value" } },
     agents: [],
-    requires: [],
     notes: undefined,
   });
   expect(Object.hasOwn(boundTemplate ?? {}, "notes")).toBe(true);
@@ -2410,7 +1740,6 @@ export default {
     name: "Empty plural alias",
     agent: "reviewer",
     agents: [],
-    requires: [],
     notes: undefined,
   });
 });
@@ -2446,24 +1775,9 @@ test("loadPlugin reports SourceParseError paths for invalid orbit phase refs", a
         "phases[0].agents[0]: reference object must include a non-empty 'name'",
     },
     {
-      phase: `{ name: "Invalid raw singular and requirement", agent: { kind: "agent-ref", name: "" }, requires: [{ all: [{ kind: "trait-ref", name: "" }] }] }`,
-      message:
-        "phases[0].agents[0]: reference object must include a non-empty 'name'",
-    },
-    {
       phase: `{ name: "Invalid singular field", agents: [], agent: { kind: "agent-ref", name: "" } }`,
       message:
         "phases[0].agent: reference object must include a non-empty 'name'",
-    },
-    {
-      phase: `{ name: "Invalid singular and requirement", agents: [], agent: { kind: "agent-ref", name: "" }, requires: [{ all: [{ kind: "trait-ref", name: "" }] }] }`,
-      message:
-        "phases[0].requires[0].all[0]: reference object must include a non-empty 'name'",
-    },
-    {
-      phase: `{ name: "Invalid requirement", requires: [{ all: [{ kind: "trait-ref", name: "" }] }] }`,
-      message:
-        "phases[0].requires[0].all[0]: reference object must include a non-empty 'name'",
     },
   ];
 
@@ -2491,10 +1805,10 @@ test("validateOrbit rejects direct parameterized orbit references", async () => 
   expect(failure.message).toContain("use orbit_binding instead");
 });
 
-test("validateOrbit accepts direct concrete orbit references without checking phase-local requirements", async () => {
+test("validateOrbit accepts direct concrete orbit references", async () => {
   const registry = createOrbitValidationRegistry();
   const orbit = createValidationOrbit({
-    phase: { orbit: "concrete", requires: [{ all: ["missing-trait"], min: 0 }] },
+    phase: { orbit: "concrete" },
   });
 
   await Effect.runPromise(validateOrbit(orbit, registry));
@@ -2539,7 +1853,7 @@ test("validateOrbit validates orbit_binding target and parameter contracts", asy
   }
 });
 
-test("validateOrbit preserves phase reference and requirement failure ordering", async () => {
+test("validateOrbit preserves phase reference failure ordering", async () => {
   const cases: Array<{
     readonly phase: Partial<NormalizedOrbitPhase>;
     readonly field: string;
@@ -2559,46 +1873,6 @@ test("validateOrbit preserves phase reference and requirement failure ordering",
       phase: { agents: ["builder", "builder"] },
       field: "phases[0].agents[1]",
       message: "assigns duplicate agent 'builder'",
-    },
-    {
-      phase: { agents: ["builder", "alias:builder"] },
-      field: "phases[0].agents[1]",
-      message: "assigns duplicate agent 'alias:builder'",
-    },
-    {
-      phase: { requires: [{ all: ["reviewable"] }] },
-      field: "phases[0].requires",
-      message: "declares trait requirements but assigns no agents",
-    },
-    {
-      phase: { orbit: "builder", requires: [{ all: ["reviewable"] }] },
-      field: "phases[0].requires",
-      message: "declares trait requirements but assigns no agents",
-    },
-    {
-      phase: { agents: ["builder"], requires: [{ all: ["reviewable"], min: 0 }] },
-      field: "phases[0].requires[0].min",
-      message: "min must be an integer greater than or equal to 1",
-    },
-    {
-      phase: { agents: ["builder"], requires: [{ all: [], min: 0 }] },
-      field: "phases[0].requires[0].min",
-      message: "min must be an integer greater than or equal to 1",
-    },
-    {
-      phase: { agents: ["builder"], requires: [{ all: ["missing-trait"], min: 0 }] },
-      field: "phases[0].requires[0].min",
-      message: "min must be an integer greater than or equal to 1",
-    },
-    {
-      phase: { agents: ["builder"], requires: [{ all: [] }] },
-      field: "phases[0].requires[0].all",
-      message: "trait requirement must include at least one trait",
-    },
-    {
-      phase: { agents: ["builder"], requires: [{ all: ["missing-trait"] }] },
-      field: "phases[0].requires[0].all[0]",
-      message: "references unknown trait 'missing-trait'",
     },
   ];
 
@@ -2626,34 +1900,10 @@ test("validateOrbit rejects template placeholders inside references before resol
   expect(failure.message).toBe("reference names cannot contain template placeholders");
 });
 
-test("orbit orchestrator validation fails when the orchestrator agent does not exist", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    invalidOrbitPermissionAgent: true,
-  });
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("OrbitValidationError");
-  if (failure._tag === "OrbitValidationError") {
-    expect(failure.field).toBe("orchestrator.agent");
-    expect(failure.message).toContain("unknown agent");
-  }
-});
-
-test("orbit skill renders orchestrator section and grants the orbit skill to the orchestrator", async () => {
+test("orbit skill renders the orchestrator section", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
-  const result = await Effect.runPromise(
+  await Effect.runPromise(
     compilePluginForTarget({
       prismHome: testPrismHome(),
       pluginPath: pluginRoot,
@@ -2670,199 +1920,6 @@ test("orbit skill renders orchestrator section and grants the orbit skill to the
   );
   expect(skill).toContain("## Orchestrator");
   expect(skill).toContain("`builder`");
-  expect(skill).toContain("`create_glyph`");
-
-  // The orchestrator agent (builder) auto-receives the orbit skill.
-  const builder = result.composed.find((agent) => agent.name === "builder");
-  expect(builder?.allowedSkills).toContain("delivery-contract");
-});
-
-test("orbit-wide tool_permissions materialize on every phase agent", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  // Replace the orbit file with one that uses orbit-wide tool_permissions
-  // and no orchestrator. Both phase agents (builder + reviewer) should get the
-  // wide-granted tool.
-  await writeText(
-    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "delivery-contract",
-  description: "Wide-grant variant",
-  phases: [
-    {
-      name: "Implement change",
-      agents: [agentRef("builder")],
-      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
-    },
-    {
-      name: "Review change",
-      agents: [agentRef("reviewer")],
-      requires: [{ all: [traitRef("reviewable"), traitRef("self-assessing")] }],
-    },
-  ],
-  tool_permissions: [
-    { ref: "protocol-core:create_glyph", as: "create_glyph" },
-  ],
-};
-`,
-  );
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const builder = result.composed.find((agent) => agent.name === "builder");
-  const reviewer = result.composed.find((agent) => agent.name === "reviewer");
-  expect(
-    builder?.toolBindings.some((binding) => binding.logicalName === "create_glyph"),
-  ).toBe(true);
-  expect(
-    reviewer?.toolBindings.some((binding) => binding.logicalName === "create_glyph"),
-  ).toBe(true);
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-  expect(skill).toContain("## Tools available to every phase agent");
-  expect(skill).toContain("`create_glyph`");
-});
-
-test("orbit parser rejects the obsolete tool_permissions shape with agents", async () => {
-  const projectRoot = await createTempRoot();
-  const pluginRoot = join(projectRoot, "plugin");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "obsolete-shape",
-        version: "0.1.0",
-        targets: {
-          orbits: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  await writeText(
-    join(pluginRoot, "orbits", "obsolete.orbit.ts"),
-    `
-export default {
-  name: "obsolete",
-  description: "Uses the deprecated tool_permissions shape with agents",
-  phases: [],
-  tool_permissions: [
-    { agents: ["builder"], tools: ["protocol-core:create_glyph"] },
-  ],
-};
-`,
-  );
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(exit._tag).toBe("Failure");
-  if (exit._tag !== "Failure") return;
-  const failure = Cause.failureOption(exit.cause);
-  if (Option.isNone(failure)) {
-    throw new Error("expected typed compile failure");
-  }
-  const error = failure.value as CompileError;
-  expect(error._tag).toBe("SourceParseError");
-});
-
-test("slot-filled trait tools fail closed on inline schemas", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    inlineSlotSchema: true,
-  });
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("SourceParseError");
-  expect(failure.message).toContain("must be an imported schema identifier");
-});
-
-test("slot-filled trait tools fail closed on undeclared slots", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    undeclaredSlot: true,
-  });
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("AgentValidationError");
-  expect(failure.message).toContain("fills undeclared tool slot(s): unknown_verdict");
-});
-
-test("slot source capture tolerates trait refs before slot-filled bindings", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    mixedTraitRefsBeforeSlotBinding: true,
-  });
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const generatedRoot = join(
-    projectRoot,
-    ".opencode",
-    "plugins",
-    "prism-generated-canonical-compile-fixture",
-  );
-  const bundle = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
-  expect(bundle).toContain(
-    generatedSyntheticToolName(
-      "canonical-compile-fixture",
-      "submit_review__review_findings_slot",
-    ),
-  );
-  expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
 });
 
 test("loadPlugin preserves agent normalization failure order", async () => {
@@ -2875,7 +1932,6 @@ test("loadPlugin preserves agent normalization failure order", async () => {
   name: "not-worker",
   description: "Worker",
   identity: "worker",
-  traits: [{ kind: "trait-ref", name: "" }],
 };
 `,
       message: "AgentNameMismatchError:not-worker",
@@ -2885,64 +1941,7 @@ test("loadPlugin preserves agent normalization failure order", async () => {
   name: "worker",
   description: "Worker",
   identity: "worker",
-  traits: [{ kind: "trait-ref", name: "" }],
-  model: "raw-model",
-};
-`,
-      message: "traits[0]: reference object must include a non-empty 'name'",
-    },
-    {
-      agentSource: `export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  traits: [
-    {
-      kind: "trait-binding",
-      trait: { kind: "trait-ref", name: "" },
-      tools: {
-        submit_review: {
-          slots: { verdict: 42 },
-        },
-      },
-    },
-  ],
-  model: "raw-model",
-};
-`,
-      message: "traits[0]: reference object must include a non-empty 'name'",
-    },
-    {
-      agentSource: `export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  traits: [
-    {
-      kind: "trait-binding",
-      trait: "reviewable",
-      tools: {
-        submit_review: {
-          slots: { verdict: 42 },
-        },
-      },
-    },
-  ],
-  model: "raw-model",
-};
-`,
-      message:
-        "traits[0].tools.submit_review.slots.verdict: must be an Effect Schema",
-    },
-    {
-      agentSource: `export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
   model: { kind: "model-profile-ref", modelspace: "", name: "reviewer" },
-  access: {
-    tools: [{ kind: "tool-ref", toolspace: "", name: "shell" }],
-  },
 };
 `,
       message:
@@ -2954,27 +1953,10 @@ test("loadPlugin preserves agent normalization failure order", async () => {
   description: "Worker",
   identity: "worker",
   model: "raw-model",
-  access: {
-    tools: [{ kind: "tool-ref", toolspace: "", name: "shell" }],
-  },
 };
 `,
       message:
         "model: must reference a canonical model profile (<modelspace>/<name> or modelProfileRef(...))",
-    },
-    {
-      agentSource: `export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  access: {
-    tools: [{ kind: "tool-ref", toolspace: "", name: "shell" }],
-  },
-  skills: ["testing"],
-};
-`,
-      message:
-        "access.tools[0]: tool ref object must include a non-empty 'toolspace'",
     },
     {
       agentSource: `export default {
@@ -3077,14 +2059,13 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   expect(parsedAgent.data).toMatchObject({
     name: "worker",
     description: "Antigravity plugin worker",
-    skills: ["delivery", "testing"],
+    skills: ["testing"],
     tools: [
       "read_file",
     ],
   });
   expect(parsedAgent.data.tools ?? []).not.toContain(antigravityMcpToolName);
   expect(parsedAgent.content).toContain("# Worker");
-  expect(parsedAgent.content).toContain("Submit work through the typed Antigravity plugin tool.");
 
   expect(await readFile(join(outputPluginRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
   const orbitSkill = await readFile(join(outputPluginRoot, "skills", "delivery", "SKILL.md"), "utf8");
@@ -3349,49 +2330,21 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     join(projectRoot, ".opencode", "agents", "builder.md"),
     "utf8",
   );
-  const reviewFindingsToolName = generatedSyntheticToolName(
-    "canonical-compile-fixture",
-    "submit_review__review_findings_slot",
-  );
-  expect(opencodeAgent).toContain("name: builder");
+  expect(opencodeAgent).toContain('name: "builder"');
   expect(opencodeAgent).toContain(
-    "description: Builder agent for canonical compile integration tests",
+    'description: "Builder agent for canonical compile integration tests"',
   );
-  expect(opencodeAgent).toContain("permission:");
+  expect(opencodeAgent).not.toContain("permission:");
   expect(opencodeAgent).not.toContain("tools:");
-  expect(opencodeAgent).toContain("read: allow");
-  expect(opencodeAgent).toContain("grep: allow");
-  expect(opencodeAgent).toContain("bash: allow");
-  expect(opencodeAgent).toContain("canonical_compile_fixture_commit_work: allow");
-  expect(opencodeAgent).toContain("protocol_core_external_submit: allow");
-  expect(opencodeAgent).toContain("protocol_core_create_glyph: allow");
-  expect(opencodeAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
-  expect(opencodeAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_glyph");
-  expect(opencodeAgent).toContain(
-    `${reviewFindingsToolName}: deny`,
-  );
-  const submittableInstructionIndex = opencodeAgent.indexOf(
-    "Submit completed work through the typed submission surface before handing off.",
-  );
-  const committableInstructionIndex = opencodeAgent.indexOf(
-    "Commit owned implementation changes only after the submitted work is complete.",
-  );
-  const selfAssessingInstructionIndex = opencodeAgent.indexOf(
-    "Run the relevant validation before final response or handoff.",
-  );
-  expect(submittableInstructionIndex).toBeGreaterThan(-1);
-  expect(committableInstructionIndex).toBeGreaterThan(submittableInstructionIndex);
-  expect(selfAssessingInstructionIndex).toBeGreaterThan(committableInstructionIndex);
+  expect(opencodeAgent).toContain("## Recommended Skills");
+  expect(opencodeAgent).toContain("- `testing`");
 
   const reviewerAgent = await readFile(
     join(projectRoot, ".opencode", "agents", "reviewer.md"),
     "utf8",
   );
-  expect(reviewerAgent).toContain("protocol_core_external_submit: allow");
-  expect(reviewerAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
-  expect(reviewerAgent).toContain("protocol_core_create_glyph: deny");
-  expect(reviewerAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_glyph");
-  expect(reviewerAgent).toContain(`${reviewFindingsToolName}: allow`);
+  expect(reviewerAgent).toContain('name: "reviewer"');
+  expect(reviewerAgent).toContain("- `testing`");
 
   const generatedRoot = join(
     projectRoot,
@@ -3414,9 +2367,10 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     worktree: projectRoot,
   });
   const generatedToolNames = Object.keys(generatedPlugin.tool ?? {});
-  expect(generatedToolNames).toContain(reviewFindingsToolName);
+  expect(generatedToolNames).toContain("canonical_compile_fixture_submit_work");
+  expect(generatedToolNames).toContain("canonical_compile_fixture_commit_work");
+  expect(generatedToolNames).toContain("canonical_compile_fixture_submit_review");
   expect(generatedToolNames).not.toContain("protocol_core_external_submit");
-  expect(generatedToolNames).not.toContain("canonical_compile_fixture_builder_submit_work");
   expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
   expect(await pathExists(join(generatedRoot, "package.json"))).toBe(false);
   expect(await pathExists(join(generatedRoot, "node_modules", "effect", "package.json"))).toBe(false);
@@ -3430,9 +2384,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(generatedServerSource).not.toContain('from "effect"');
   expect(generatedServerSource).not.toContain('from "@opencode-ai/plugin"');
   expect(generatedServerSource).not.toContain('"protocol_core_external_submit":');
-  expect(generatedServerSource).not.toContain("canonical_compile_fixture_builder_submit_work");
-  expect(generatedServerSource).not.toContain("delivery-contract__builder__create_glyph");
-  expect(generatedServerSource).toContain(reviewFindingsToolName);
+  expect(generatedServerSource).toContain("canonical_compile_fixture_submit_work");
   expect(generatedServerSource).not.toContain("Schema.omit");
   expect(generatedServerSource).not.toContain("prism-generated-protocol-core/src/plugins");
 
@@ -3455,12 +2407,9 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   ) as {
     agent: Record<string, Record<string, unknown>>;
     plugin: string[];
-    permission: Record<string, string>;
+    permission?: Record<string, string>;
   };
-  expect(opencodeConfig.permission).toMatchObject({
-    "canonical_compile_fixture_*": "deny",
-    "protocol_core_*": "deny",
-  });
+  expect(opencodeConfig.permission).toBeUndefined();
   expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(
       projectRoot,
@@ -3596,23 +2545,11 @@ test("compilePluginForTarget lowers Amp tools and hooks through one native plugi
         targets: {
           tools: ["amp-code"],
           hooks: ["amp-code"],
-          toolspaces: ["amp-code"],
         },
       },
       null,
       2,
     )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `
-export default {
-  name: "workspace",
-  tools: {
-    echo: { targets: { "amp-code": { name: "amp_hook_demo_echo" } } },
-  },
-};
-`,
   );
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
@@ -3666,12 +2603,12 @@ export default {
   await writeText(
     join(pluginRoot, "hooks", "audit-after.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-after",
   event: hookEvent.toolAfter,
-  match: { tool: hookTool.tool(toolRef("workspace", "echo")) },
+  match: { tool: { kind: "hook-native-tool", name: "amp_hook_demo_echo" } },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
 };
 `,
@@ -4343,9 +3280,9 @@ export default {
   expect(hookFailure.message).toContain("targets.hooks resolves to unsupported harnesses for hooks");
 });
 
-test("opencode trait skill access lowers to permission without becoming a dependency", async () => {
+test("plain skill strings fail closed in agent source skills", async () => {
   const root = await createTempRoot();
-  const pluginRoot = join(root, "plugin");
+  const pluginRoot = join(root, "plain-agent-skills");
   const projectRoot = join(root, "project");
   await mkdir(projectRoot, { recursive: true });
 
@@ -4353,211 +3290,10 @@ test("opencode trait skill access lowers to permission without becoming a depend
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "skill-access-demo",
+        name: "plain-agent-skills",
         version: "0.1.0",
         targets: {
           agents: ["opencode"],
-          skills: ["opencode"],
-          skillspaces: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-
-Use only the skills that fit the work.
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "marketing-enabled.trait.ts"),
-    `import { skillspaceRef, type TraitSource } from "prism";
-
-export default {
-  name: "marketing-enabled",
-  description: "Can use marketing skills",
-  access: {
-    skills: [
-      skillspaceRef("external-skills", "copy-engineering"),
-      skillspaceRef("external-skills", "marketing"),
-    ],
-  },
-} satisfies TraitSource;
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import type { SkillspaceSource } from "prism";
-
-export default {
-  name: "external-skills",
-  description: "Harness-native skills this plugin does not own",
-  skills: {
-    "copy-engineering": {
-      targets: {
-        opencode: { name: "copy-engineering-opencode" },
-      },
-    },
-    marketing: {
-      targets: {
-        opencode: { name: "marketing-opencode" },
-      },
-    },
-  },
-} satisfies SkillspaceSource;
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skills", "contracts", "SKILL.md"),
-    `---
-name: contracts
-description: Contract guidance
----
-
-# Contracts
-
-Lock down interfaces before implementation.
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { skillRef, type AgentSource } from "prism";
-
-export default {
-  name: "worker",
-  description: "Worker with skill permissions",
-  identity: "worker",
-  traits: ["marketing-enabled"],
-  skills: [skillRef("contracts")],
-} satisfies AgentSource;
-`,
-  );
-
-  const firstCompile = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(firstCompile.built).toEqual(["worker"]);
-  expect(firstCompile.fromCache).toEqual([]);
-
-  const opencodeAgent = await readFile(
-    join(projectRoot, ".opencode", "agents", "worker.md"),
-    "utf8",
-  );
-  const frontmatter = matter(opencodeAgent).data as {
-    permission?: { skill?: Record<string, string> };
-  };
-
-  expect(opencodeAgent).toContain("## Recommended Skills");
-  expect(opencodeAgent).toContain("- `contracts`");
-  expect(opencodeAgent).not.toContain("- `copy-engineering-opencode`");
-  expect(opencodeAgent).not.toContain("- `marketing-opencode`");
-  expect(frontmatter.permission?.skill).toEqual({
-    "*": "deny",
-    "contracts": "allow",
-    "copy-engineering-opencode": "allow",
-    "marketing-opencode": "allow",
-  });
-
-  const lockfile = await readLockfile(pluginRoot);
-  expect(lockfile?.entries[0]?.sources.map((source) => source.path).sort()).toContain(
-    "skills/contracts/SKILL.md",
-  );
-  expect(lockfile?.entries[0]?.sources.map((source) => source.path).sort()).toContain(
-    "skillspaces/external-skills.skillspace.ts",
-  );
-  const cacheDir = join(pluginRoot, "dist", ".prism-cache");
-  const cacheAfterFirstCompile = await readDirectoryTextFiles(cacheDir);
-  const lockfileAfterFirstCompile = await readFile(
-    join(pluginRoot, "prism.lock"),
-    "utf8",
-  );
-  expect(Object.keys(cacheAfterFirstCompile)).toHaveLength(1);
-
-  const warmCompile = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-  expect(warmCompile.built).toEqual([]);
-  expect(warmCompile.fromCache).toEqual(["worker"]);
-  expect(await readDirectoryTextFiles(cacheDir)).toEqual(cacheAfterFirstCompile);
-  expect(await readFile(join(pluginRoot, "prism.lock"), "utf8")).toBe(
-    lockfileAfterFirstCompile,
-  );
-
-  await writeText(
-    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import type { SkillspaceSource } from "prism";
-
-export default {
-  name: "external-skills",
-  description: "Harness-native skills this plugin does not own",
-  skills: {
-    "copy-engineering": {
-      targets: {
-        opencode: { name: "copywriting-opencode" },
-      },
-    },
-    marketing: {
-      targets: {
-        opencode: { name: "marketing-opencode" },
-      },
-    },
-  },
-} satisfies SkillspaceSource;
-`,
-  );
-
-  const skillspaceChangedCompile = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-  expect(skillspaceChangedCompile.built).toEqual(["worker"]);
-  expect(skillspaceChangedCompile.fromCache).toEqual([]);
-});
-
-test("trait skill requirements compare resolved concrete skills", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "plugin");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "skill-requirement-demo",
-        version: "0.1.0",
-        targets: {
-          agents: ["opencode"],
-          skills: ["opencode"],
-          skillspaces: ["opencode"],
         },
       },
       null,
@@ -4574,85 +3310,8 @@ description: Worker identity
 `,
   );
   await writeText(
-    join(pluginRoot, "traits", "needs-testing.trait.ts"),
-    `import { skillspaceRef, type TraitSource } from "prism";
-
-export default {
-  name: "needs-testing",
-  description: "Requires testing skill permission",
-  require: {
-    skills: [skillspaceRef("core-skills", "testing")],
-  },
-} satisfies TraitSource;
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skillspaces", "core-skills.skillspace.ts"),
-    `import type { SkillspaceSource } from "prism";
-
-export default {
-  name: "core-skills",
-  skills: {
-    testing: {
-      targets: {
-        opencode: { name: "testing" },
-      },
-    },
-  },
-} satisfies SkillspaceSource;
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skills", "testing", "SKILL.md"),
-    `---
-name: testing
-description: Testing guidance
----
-
-# Testing
-`,
-  );
-  await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { skillRef, type AgentSource } from "prism";
-
-export default {
-  name: "worker",
-  description: "Worker with concrete skill dependency",
-  identity: "worker",
-  traits: ["needs-testing"],
-  skills: [skillRef("testing")],
-} satisfies AgentSource;
-`,
-  );
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(result.composed[0]?.skills).toEqual(["testing"]);
-  expect(result.composed[0]?.allowedSkills).toEqual(["testing"]);
-});
-
-test("plain skill strings fail closed in agent and trait source fields", async () => {
-  const cases: ReadonlyArray<{
-    label: string;
-    expectedKind: "agent" | "trait";
-    expectedMessage?: string;
-    agentSource?: string;
-    traitSource?: string;
-  }> = [
-    {
-      label: "agent.skills",
-      expectedKind: "agent",
-      agentSource: `
+    `
 export default {
   name: "worker",
   description: "Worker",
@@ -4660,178 +3319,24 @@ export default {
   skills: ["testing"],
 };
 `,
-    },
-    {
-      label: "agent.access.skills",
-      expectedKind: "agent",
-      agentSource: `
-export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  access: {
-    skills: ["testing"],
-  },
-};
-`,
-    },
-    {
-      label: "trait.access.skills",
-      expectedKind: "trait",
-      expectedMessage:
-        "access.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
-      traitSource: `
-export default {
-  name: "skillful",
-  description: "Skill access",
-  access: {
-    skills: ["testing"],
-  },
-};
-`,
-    },
-    {
-      label: "trait.inject.skills",
-      expectedKind: "trait",
-      expectedMessage:
-        "inject.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
-      traitSource: `
-export default {
-  name: "skillful",
-  description: "Skill injection",
-  inject: {
-    skills: ["testing"],
-  },
-};
-`,
-    },
-    {
-      label: "trait.require.skills",
-      expectedKind: "trait",
-      expectedMessage:
-        "require.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
-      traitSource: `
-export default {
-  name: "skillful",
-  description: "Skill requirement",
-  require: {
-    skills: ["testing"],
-  },
-};
-`,
-    },
-  ];
-
-  for (const item of cases) {
-    const root = await createTempRoot();
-    const pluginRoot = join(root, item.label.replaceAll(".", "-"));
-    const projectRoot = join(root, "project");
-    await mkdir(projectRoot, { recursive: true });
-
-    await writeText(
-      join(pluginRoot, "plugin.json"),
-      `${JSON.stringify(
-        {
-          name: `plain-${item.label.replaceAll(".", "-")}`,
-          version: "0.1.0",
-          targets: {
-            agents: ["opencode"],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeText(
-      join(pluginRoot, "identities", "worker.identity.md"),
-      `---
-description: Worker identity
----
-
-# Worker
-`,
-    );
-    if (item.traitSource) {
-      await writeText(join(pluginRoot, "traits", "skillful.trait.ts"), item.traitSource);
-    }
-    await writeText(
-      join(pluginRoot, "agents", "worker.agent.ts"),
-      item.agentSource ??
-        `
-export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  traits: ["skillful"],
-};
-`,
-    );
-
-    const exit = await Effect.runPromiseExit(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "opencode",
-        scope: "project",
-        projectPath: projectRoot,
-        dryRun: false,
-      }),
-    );
-
-    const failure = getFailure(exit);
-    expect(failure._tag).toBe("SourceParseError");
-    if (failure._tag === "SourceParseError") {
-      expect(failure.kind).toBe(item.expectedKind);
-      if (item.expectedMessage) {
-        expect(failure.message).toBe(item.expectedMessage);
-      } else {
-        expect(failure.message).toContain("plain skill strings are not allowed");
-      }
-    }
-  }
-});
-
-test("trait parser rejects empty canonical tool refs with exact diagnostic", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "empty-trait-tool-ref");
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "empty-trait-tool-ref",
-        version: "0.1.0",
-        targets: {
-          agents: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  const traitPath = join(pluginRoot, "traits", "reviewable.trait.ts");
-  await writeText(
-    traitPath,
-    `
-export default {
-  name: "reviewable",
-  description: "Review capability",
-  tools: {
-    submit_review: { ref: "   " },
-  },
-};
-`,
   );
 
-  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
 
   const failure = getFailure(exit);
   expect(failure._tag).toBe("SourceParseError");
   if (failure._tag === "SourceParseError") {
-    expect(failure.kind).toBe("trait");
-    expect(failure.sourcePath).toBe(traitPath);
-    expect(failure.message).toBe(
-      "tools.submit_review.ref: must be a non-empty canonical tool reference",
-    );
+    expect(failure.kind).toBe("agent");
+    expect(failure.message).toContain("plain skill strings are not allowed");
   }
 });
 
@@ -4908,87 +3413,7 @@ export default {
   }
 });
 
-test("toolspace refs require a target mapping for the compile harness", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "plugin");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "toolspace-target-demo",
-        version: "0.1.0",
-        targets: {
-          agents: ["claude-code"],
-          toolspaces: ["claude-code"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-`,
-  );
-  await writeText(
-    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `
-export default {
-  name: "workspace",
-  tools: {
-    read: {
-      targets: {
-        opencode: { name: "read" },
-      },
-    },
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { toolRef } from "prism";
-
-export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  access: {
-    tools: [toolRef("workspace", "read")],
-  },
-};
-`,
-  );
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "claude-code",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("MissingTargetResolutionError");
-  if (failure._tag === "MissingTargetResolutionError") {
-    expect(failure.referenceKind).toBe("tool");
-    expect(failure.referenceName).toBe("workspace/read");
-    expect(failure.target).toBe("claude-code");
-  }
-});
-
-test("opencode skillspace target names must be valid permission keys", async () => {
+test("opencode skillspace target names must be valid skill names", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");
   const projectRoot = join(root, "project");
@@ -5019,19 +3444,6 @@ description: Worker identity
 `,
   );
   await writeText(
-    join(pluginRoot, "traits", "external.trait.ts"),
-    `import { skillspaceRef } from "prism";
-
-export default {
-  name: "external",
-  description: "Uses an external skill",
-  access: {
-    skills: [skillspaceRef("external-skills", "copy-engineering")],
-  },
-};
-`,
-  );
-  await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
     `
 export default {
@@ -5048,12 +3460,13 @@ export default {
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `
+    `import { skillspaceRef } from ${JSON.stringify(prismImportPath)};
+
 export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
-  traits: ["external"],
+  skills: [skillspaceRef("external-skills", "copy-engineering")],
 };
 `,
   );
@@ -5075,756 +3488,6 @@ export default {
     expect(failure.field).toBe("skill");
     expect(failure.message).toContain("invalid OpenCode skill name");
   }
-});
-
-test("permission-only skill access lowers into Antigravity agent skill frontmatter", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "plugin");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "unsupported-skill-permission-demo",
-        version: "0.1.0",
-        targets: {
-          agents: ["antigravity-cli"],
-          skillspaces: ["antigravity-cli"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "external.trait.ts"),
-    `import { skillspaceRef } from "prism";
-
-export default {
-  name: "external",
-  description: "Uses an external skill",
-  access: {
-    skills: [skillspaceRef("external-skills", "testing")],
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `
-export default {
-  name: "external-skills",
-  skills: {
-    testing: {
-      targets: {
-        "antigravity-cli": { name: "testing" },
-      },
-    },
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `
-export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  traits: ["external"],
-};
-`,
-  );
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "antigravity-cli",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const agentMarkdown = await readFile(
-    join(projectRoot, ".agents", "plugins", "prism-generated-unsupported-skill-permission-demo", "agents", "worker.md"),
-    "utf8",
-  );
-  expect(agentMarkdown).toContain("skills:");
-  expect(agentMarkdown).toContain('- "testing"');
-});
-
-test("permission-only skill access fails closed for Factory Droid droids", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "plugin");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "factory-skill-permission-demo",
-        version: "0.1.0",
-        targets: {
-          agents: ["factory-droid"],
-          skillspaces: ["factory-droid"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "external.trait.ts"),
-    `import { skillspaceRef } from "prism";
-
-export default {
-  name: "external",
-  description: "Uses an external skill",
-  access: {
-    skills: [skillspaceRef("external-skills", "testing")],
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `
-export default {
-  name: "external-skills",
-  skills: {
-    testing: {
-      targets: {
-        "factory-droid": { name: "testing" },
-      },
-    },
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `
-export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  traits: ["external"],
-};
-`,
-  );
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "factory-droid",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: true,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
-  if (failure._tag === "UnsupportedTargetCapabilityError") {
-    expect(failure.capability).toBe("skill-permissions");
-    expect(failure.message).toContain("permission-only skills");
-  }
-});
-
-test("trait-orbit example lowers assigned traits and orbit skill into opencode permissions", async () => {
-  const projectRoot = await createTempRoot();
-  const pluginRoot = join(process.cwd(), "examples", "trait-orbit-contracts");
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: true,
-    }),
-  );
-
-  const expectedSkillAccess = {
-    builder: [
-      "ast-grep",
-      "backpressure",
-      "build",
-      "code-reviewer",
-      "commit",
-      "contracts",
-      "ddd",
-      "delivery-contract",
-      "effect",
-      "evolve",
-      "forge",
-      "harness-programming",
-      "repo-research",
-      "requirements",
-      "review",
-      "security-reviewer",
-      "semgrep-usage",
-      "testing",
-      "type-level",
-      "unslop",
-    ],
-    reviewer: [
-      "ast-grep",
-      "backpressure",
-      "build",
-      "code-reviewer",
-      "commit",
-      "contracts",
-      "delivery-contract",
-      "evolve",
-      "forge",
-      "harness-programming",
-      "model-intelligence",
-      "repo-research",
-      "requirements",
-      "research",
-      "review",
-      "security-reviewer",
-      "semgrep-usage",
-      "testing",
-      "unslop",
-      "video-research",
-      "web-research",
-    ],
-    "security-reviewer": [
-      "ast-grep",
-      "backpressure",
-      "build",
-      "code-reviewer",
-      "commit",
-      "contracts",
-      "ddd",
-      "effect",
-      "evolve",
-      "forge",
-      "harness-programming",
-      "repo-research",
-      "requirements",
-      "review",
-      "security-reviewer",
-      "semgrep-usage",
-      "testing",
-      "type-level",
-      "unslop",
-    ],
-  } as const;
-
-  for (const [agentName, expectedSkills] of Object.entries(expectedSkillAccess)) {
-    const agent = result.composed.find((candidate) => candidate.name === agentName);
-    expect(agent?.skills).toEqual([]);
-    expect(agent?.allowedSkills).toEqual(expectedSkills);
-
-    const markdown = result.files.find(
-      (file) => file.targetPath.endsWith(`agents/${agentName}.md`),
-    );
-    if (!markdown) {
-      throw new Error(`expected ${agentName} markdown file`);
-    }
-    const frontmatter = matter(markdown.content).data as {
-      permission?: { skill?: Record<string, string> };
-    };
-
-    expect(markdown.content).not.toContain("## Recommended Skills");
-    expect(frontmatter.permission?.skill).toEqual(
-      Object.fromEntries([
-        ["*", "deny"],
-        ...expectedSkills.map((skill) => [skill, "allow"] as const),
-      ]),
-    );
-    expect(expectedSkills).not.toContain("marketing");
-    expect(expectedSkills).not.toContain("media-generation");
-  }
-});
-
-test("domain skill permission traits compile one opencode agent per family", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "plugin");
-  const projectRoot = join(root, "project");
-  const agentCoreRoot = join(
-    process.cwd(),
-    "examples",
-    "trait-orbit-contracts",
-    "deps",
-    "agent-core",
-  );
-  const traitFamilies = [
-    {
-      agent: "engineer",
-      trait: "core-engineering",
-      expected: [
-        "ast-grep",
-        "build",
-        "code-reviewer",
-        "contracts",
-        "harness-programming",
-        "repo-research",
-        "security-reviewer",
-        "semgrep-usage",
-        "testing",
-        "unslop",
-      ],
-    },
-    {
-      agent: "functional-programmer",
-      trait: "functional-thinking",
-      expected: ["contracts", "ddd", "effect", "testing", "type-level"],
-    },
-    {
-      agent: "marketer",
-      trait: "core-marketing",
-      expected: [
-        "brand-positioning",
-        "copy-engineering",
-        "marketing",
-        "offer-architecture",
-        "persuasion-architecture",
-        "subscription-wedge",
-      ],
-    },
-    {
-      agent: "writer",
-      trait: "writing-and-publishing",
-      expected: [
-        "content-mining",
-        "copy-engineering",
-        "platform-twitter",
-        "scribe",
-        "typefully-cli",
-        "voice-profile",
-      ],
-    },
-    {
-      agent: "researcher",
-      trait: "research-practice",
-      expected: [
-        "model-intelligence",
-        "repo-research",
-        "research",
-        "video-research",
-        "web-research",
-      ],
-    },
-    {
-      agent: "frontend-builder",
-      trait: "frontend-implementation",
-      expected: [
-        "build",
-        "frontend-design",
-        "legend-state",
-        "testing",
-        "vercel-react-native-skills",
-      ],
-    },
-    {
-      agent: "media-producer",
-      trait: "media-generation-practice",
-      expected: [
-        "fal-models",
-        "media-generation",
-        "mg-3d-workflow-authoring",
-        "mg-schema",
-        "mg-workflow-authoring",
-        "suno-music-prompting",
-        "video-research",
-      ],
-    },
-  ] as const;
-
-  await mkdir(projectRoot, { recursive: true });
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "domain-skill-trait-consumer",
-        version: "0.1.0",
-        deps: {
-          "agent-core": agentCoreRoot,
-        },
-        targets: {
-          agents: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Domain worker identity
----
-
-# Worker
-`,
-  );
-
-  for (const family of traitFamilies) {
-    await writeText(
-      join(pluginRoot, "agents", `${family.agent}.agent.ts`),
-      `import { bindTrait } from "prism";
-
-export default {
-  name: ${JSON.stringify(family.agent)},
-  description: ${JSON.stringify(`Uses ${family.trait} skill permissions`)},
-  identity: "worker",
-  traits: [bindTrait(${JSON.stringify(`agent-core:${family.trait}`)})],
-};
-`,
-    );
-  }
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: true,
-    }),
-  );
-
-  for (const family of traitFamilies) {
-    const agent = result.composed.find((candidate) => candidate.name === family.agent);
-    expect(agent?.skills).toEqual([]);
-    expect(agent?.allowedSkills).toEqual(family.expected);
-
-    const markdown = result.files.find(
-      (file) => file.targetPath.endsWith(`agents/${family.agent}.md`),
-    );
-    if (!markdown) {
-      throw new Error(`expected ${family.agent} markdown file`);
-    }
-
-    const frontmatter = matter(markdown.content).data as {
-      permission?: { skill?: Record<string, string> };
-    };
-    expect(markdown.content).not.toContain("## Recommended Skills");
-    expect(frontmatter.permission?.skill?.["*"]).toBe("deny");
-    expect(Object.keys(frontmatter.permission?.skill ?? {}).sort()).toEqual([
-      "*",
-      ...family.expected,
-    ].sort());
-  }
-});
-
-test("opencode skill audit harness verifies visibility, direct deps, and missing refs", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "plugin");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "skill-audit-demo",
-        version: "0.1.0",
-        targets: {
-          agents: ["opencode"],
-          skills: ["opencode"],
-          skillspaces: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "testing-enabled.trait.ts"),
-    `import { skillspaceRef } from "prism";
-
-export default {
-  name: "testing-enabled",
-  description: "Can use test methodology",
-  access: {
-    skills: [skillspaceRef("external-skills", "testing")],
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `
-export default {
-  name: "external-skills",
-  skills: {
-    testing: {
-      targets: {
-        opencode: { name: "testing" },
-      },
-    },
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "skills", "contracts", "SKILL.md"),
-    `---
-name: contracts
-description: Contract guidance
----
-
-# Contracts
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { skillRef } from "prism";
-
-export default {
-  name: "worker",
-  description: "Worker with direct and permission-only skills",
-  identity: "worker",
-  traits: ["testing-enabled"],
-  skills: [skillRef("contracts")],
-};
-`,
-  );
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: true,
-    }),
-  );
-  const worker = result.composed.find((agent) => agent.name === "worker");
-  expect(worker?.skills).toEqual(["contracts"]);
-  expect(worker?.allowedSkills).toEqual(["contracts", "testing"]);
-
-  const markdown = result.files.find(
-    (file) => file.targetPath.endsWith("agents/worker.md"),
-  );
-  if (!markdown) {
-    throw new Error("expected worker markdown file");
-  }
-
-  const permissions = parseOpencodeSkillPermissions(markdown.content);
-  expect(permissions).toEqual({
-    "*": "deny",
-    contracts: "allow",
-    testing: "allow",
-  });
-  expect(
-    visibleSkillsForPermission(["contracts", "marketing", "testing"], permissions),
-  ).toEqual(["contracts", "testing"]);
-  expect(markdown.content).toContain("## Recommended Skills");
-  expect(markdown.content).toContain("- `contracts`");
-  expect(markdown.content).not.toContain("- `testing`");
-
-  const missingRoot = await createTempRoot();
-  const missingPluginRoot = join(missingRoot, "plugin");
-  const missingProjectRoot = join(missingRoot, "project");
-  await mkdir(missingProjectRoot, { recursive: true });
-  await writeText(
-    join(missingPluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "missing-skill-audit-demo",
-        version: "0.1.0",
-        targets: {
-          agents: ["opencode"],
-          skillspaces: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(missingPluginRoot, "identities", "worker.identity.md"),
-    `---
-description: Worker identity
----
-
-# Worker
-`,
-  );
-  await writeText(
-    join(missingPluginRoot, "traits", "testing-enabled.trait.ts"),
-    `import { skillspaceRef } from "prism";
-
-export default {
-  name: "testing-enabled",
-  description: "References a missing method skill",
-  access: {
-    skills: [skillspaceRef("external-skills", "missing-method")],
-  },
-};
-`,
-  );
-  await writeText(
-    join(missingPluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `
-export default {
-  name: "external-skills",
-  skills: {
-    testing: {
-      targets: {
-        opencode: { name: "testing" },
-      },
-    },
-  },
-};
-`,
-  );
-  await writeText(
-    join(missingPluginRoot, "agents", "worker.agent.ts"),
-    `
-export default {
-  name: "worker",
-  description: "Worker with a missing skill permission",
-  identity: "worker",
-  traits: ["testing-enabled"],
-};
-`,
-  );
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: missingPluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: missingProjectRoot,
-      dryRun: true,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("UnknownReferenceError");
-  if (failure._tag === "UnknownReferenceError") {
-    expect(failure.field).toBe("skill");
-    expect(failure.referenceName).toBe("external-skills/missing-method");
-  }
-});
-
-test("external permission-only consumers do not emit empty generated plugin shells", async () => {
-  const { pluginRoot, protocolRoot, projectRoot } = await createExternalPermissionOnlyFixture();
-
-  // Per-plugin one-writer scheme: the owner (protocol-core) is the sole
-  // producer of its own OpenCode bundle — compile it explicitly first (see
-  // "tools-only plugins emit the complete owner runtime plugin" above). The
-  // consumer no longer re-materializes it.
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: protocolRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const consumerGeneratedRoot = join(
-    projectRoot,
-    ".opencode",
-    "plugins",
-    "prism-generated-permission-only-consumer",
-  );
-  const protocolGeneratedRoot = join(
-    projectRoot,
-    ".opencode",
-    "plugins",
-    "prism-generated-protocol-core",
-  );
-
-  expect(await pathExists(join(consumerGeneratedRoot, "package.json"))).toBe(false);
-  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(false);
-  expect(await pathExists(join(protocolGeneratedRoot, "dist", "server.mjs"))).toBe(true);
-  expect(await pathExists(join(protocolGeneratedRoot, "src", "server.ts"))).toBe(false);
-  const protocolBundle = await readFile(join(protocolGeneratedRoot, "dist", "server.mjs"), "utf8");
-  expect(protocolBundle).toContain("protocol_core_external_submit");
-  expect(protocolBundle).toContain("protocol_core_unreferenced");
-  expect(protocolBundle).toContain("shared");
-
-  const opencodeAgent = await readFile(
-    join(projectRoot, ".opencode", "agents", "worker.md"),
-    "utf8",
-  );
-  expect(opencodeAgent).toContain("permission:");
-  expect(opencodeAgent).toContain("  skill:");
-  expect(opencodeAgent).toContain('    "*": deny');
-  expect(opencodeAgent).toContain("protocol_core_external_submit: allow");
-  expect(opencodeAgent).toContain("protocol_core_unreferenced: deny");
-
-  const opencodeConfig = JSON.parse(
-    await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
-  ) as { permission?: Record<string, string>; plugin?: string[] };
-  expect(opencodeConfig.permission).toMatchObject({
-    "protocol_core_*": "deny",
-  });
-  expect(opencodeConfig.permission).not.toHaveProperty("permission_only_consumer_*");
-  // The desired generated-plugin entry is ensured as an array-membership
-  // region; entries Prism never snapshot-managed (the legacy stale forms the
-  // fixture seeds) are foreign content now — WS8 teardown cleans the old
-  // ledger era, not the compile path.
-  expect(opencodeConfig.plugin).toContain(
-    generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
-  );
-  expect(opencodeConfig.plugin?.filter(
-    (entry) => entry === generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
-  )).toHaveLength(1);
-  // No empty generated plugin shell is ever registered for the consumer.
-  expect(opencodeConfig.plugin?.filter(
-    (entry) =>
-      entry === generatedPluginEntry(projectRoot, "prism-generated-permission-only-consumer"),
-  )).toHaveLength(1); // the pre-seeded foreign entry only — Prism added none
 });
 
 test("opencode tools-only plugins bundle runtime helper imports from declared deps", async () => {
@@ -5910,282 +3573,11 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
   ) as { permission?: Record<string, string>; plugin?: string[] };
-  expect(opencodeConfig.permission).toMatchObject({
-    "protocol_core_*": "deny",
-  });
+  expect(opencodeConfig.permission).toBeUndefined();
   expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
   );
   expect(opencodeConfig.plugin).not.toContain("prism-generated-protocol-core");
-});
-
-const createSharedOwnerFixture = async (): Promise<{
-  ownerRoot: string;
-  consumerARoot: string;
-  consumerBRoot: string;
-  projectRoot: string;
-}> => {
-  const root = await createTempRoot();
-  const ownerRoot = join(root, "shared-owner");
-  const consumerARoot = join(root, "consumer-a");
-  const consumerBRoot = join(root, "consumer-b");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(ownerRoot, "plugin.json"),
-    `${JSON.stringify(
-      { name: "shared-owner", version: "0.1.0", targets: { tools: ["opencode"] } },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(ownerRoot, "tools", "acknowledge.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export default {
-  name: "acknowledge",
-  description: "Acknowledge a request",
-  input: Schema.Struct({ summary: Schema.String }),
-  output: Schema.Struct({ acknowledged: Schema.Boolean }),
-  async handle() {
-    return { acknowledged: true };
-  },
-};
-`,
-  );
-
-  const writeConsumer = async (consumerRoot: string, name: string): Promise<void> => {
-    await writeText(
-      join(consumerRoot, "plugin.json"),
-      `${JSON.stringify(
-        {
-          name,
-          version: "0.1.0",
-          deps: { "shared-owner": "../shared-owner" },
-          targets: { agents: ["opencode"] },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeText(
-      join(consumerRoot, "identities", "worker.identity.md"),
-      `---\ndescription: Worker identity\n---\n\n# Worker\n`,
-    );
-    await writeText(
-      join(consumerRoot, "traits", "ack-capable.trait.ts"),
-      `
-export default {
-  name: "ack-capable",
-  description: "Can acknowledge via the shared owner tool",
-  tools: { acknowledge: { ref: "shared-owner:acknowledge" } },
-  require: { tools: ["acknowledge"] },
-};
-`,
-    );
-    await writeText(
-      join(consumerRoot, "agents", "worker.agent.ts"),
-      `
-export default {
-  name: "worker",
-  description: "Worker agent",
-  identity: "worker",
-  traits: ["ack-capable"],
-};
-`,
-    );
-  };
-
-  await writeConsumer(consumerARoot, "consumer-a");
-  await writeConsumer(consumerBRoot, "consumer-b");
-
-  return { ownerRoot, consumerARoot, consumerBRoot, projectRoot };
-};
-
-test("two independent consumers of the same foreign owner never conflict and never duplicate the owner's OpenCode bundle", async () => {
-  const { ownerRoot, consumerARoot, consumerBRoot, projectRoot } =
-    await createSharedOwnerFixture();
-
-  const ownerBundlePath = join(
-    projectRoot,
-    ".opencode",
-    "plugins",
-    "prism-generated-shared-owner",
-    "dist",
-    "server.mjs",
-  );
-
-  // Neither consumer's own compile may materialize the owner's bundle file —
-  // that would be exactly the per-consumer re-emission that collided across
-  // a real multi-plugin corpus (src/compile/lowerers/opencode.ts).
-  const consumerA = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: consumerARoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-  expect(consumerA.failures).toHaveLength(0);
-  expect(
-    consumerA.operations.some((operation) => operation.targetPath === ownerBundlePath),
-  ).toBe(false);
-  expect(await pathExists(ownerBundlePath)).toBe(false);
-
-  // A second, independent consumer of the same owner must not conflict with
-  // the first (no PathConflictError) and must likewise emit nothing at the
-  // owner's path.
-  const consumerB = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: consumerBRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-  expect(consumerB.failures).toHaveLength(0);
-  expect(
-    consumerB.operations.some((operation) => operation.targetPath === ownerBundlePath),
-  ).toBe(false);
-  expect(await pathExists(ownerBundlePath)).toBe(false);
-
-  // Both consumers still wire the owner's canonical wire name into their own
-  // opencode.json (allowlist/plugin-array reference), just without a file.
-  const opencodeConfig = JSON.parse(
-    await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
-  ) as { permission?: Record<string, string>; plugin?: string[] };
-  expect(opencodeConfig.permission).toMatchObject({ "shared_owner_*": "deny" });
-  expect(opencodeConfig.plugin).toContain(
-    generatedPluginEntry(projectRoot, "prism-generated-shared-owner"),
-  );
-
-  // The owner's OWN compile is the sole producer of its bundle.
-  const owner = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: ownerRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-  expect(owner.failures).toHaveLength(0);
-  expect(await pathExists(ownerBundlePath)).toBe(true);
-  const ownerBundle = await readFile(ownerBundlePath, "utf8");
-  expect(ownerBundle).toContain("shared_owner_acknowledge");
-});
-
-test("external synthetic wrappers keep the owner runtime dependency without exposing the base tool", async () => {
-  const { pluginRoot, protocolRoot, projectRoot } = await createExternalSyntheticOnlyFixture();
-
-  // Per-plugin one-writer scheme: the owner (protocol-core) is the sole
-  // producer of its own OpenCode bundle — compile it explicitly first. The
-  // consumer's synthetic wrapper still references the owner's wire name but
-  // no longer re-materializes its bundle.
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: protocolRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const consumerGeneratedRoot = join(
-    projectRoot,
-    ".opencode",
-    "plugins",
-    "prism-generated-external-synthetic-consumer",
-  );
-  const protocolGeneratedRoot = join(
-    projectRoot,
-    ".opencode",
-    "plugins",
-    "prism-generated-protocol-core",
-  );
-
-  expect(await pathExists(join(consumerGeneratedRoot, "package.json"))).toBe(false);
-  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(false);
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "dist",
-        "server.mjs",
-      ),
-    ),
-  ).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        consumerGeneratedRoot,
-        "src",
-        "server.ts",
-      ),
-    ),
-  ).toBe(false);
-
-  const consumerServer = await readFile(join(consumerGeneratedRoot, "dist", "server.mjs"), "utf8");
-  const workerDetailsToolName = generatedSyntheticToolName(
-    "external-synthetic-consumer",
-    "submit_work__worker_details",
-  );
-  expect(consumerServer).toContain(workerDetailsToolName);
-  const protocolServer = await readFile(join(protocolGeneratedRoot, "dist", "server.mjs"), "utf8");
-  expect(protocolServer).toContain("protocol_core_external_submit");
-
-  const opencodeAgent = await readFile(
-    join(projectRoot, ".opencode", "agents", "worker.md"),
-    "utf8",
-  );
-  expect(opencodeAgent).toContain(
-    `${workerDetailsToolName}: allow`,
-  );
-  expect(opencodeAgent).toContain("protocol_core_external_submit: deny");
-
-  expect(consumerServer).toContain(workerDetailsToolName);
-  expect(consumerServer).not.toContain("prism-generated-protocol-core/src/plugins/protocol-core/tools/external-submit.tool");
-
-  const opencodeConfig = JSON.parse(
-    await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
-  ) as { permission?: Record<string, string>; plugin?: string[] };
-  expect(opencodeConfig.permission).toMatchObject({
-    "external_synthetic_consumer_*": "deny",
-    "protocol_core_*": "deny",
-  });
-  // Membership, not order: the owner (protocol-core) is now compiled first
-  // per the per-plugin one-writer scheme, so its array entry lands before
-  // the consumer's — insertion order was never a real contract here.
-  expect(opencodeConfig.plugin).toHaveLength(2);
-  expect(opencodeConfig.plugin).toContain(
-    generatedPluginEntry(
-      projectRoot,
-      "prism-generated-external-synthetic-consumer",
-    ),
-  );
-  expect(opencodeConfig.plugin).toContain(
-    generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
-  );
 });
 
 test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin bundle", async () => {
@@ -6253,7 +3645,6 @@ test("compilePluginForTarget lowers Factory Droid plugin-bundle surfaces", async
           skills: ["factory-droid"],
           orbits: ["factory-droid"],
           tools: ["factory-droid"],
-          toolspaces: ["factory-droid"],
           hooks: ["factory-droid"],
         },
       },
@@ -6280,12 +3671,6 @@ description: Testing guidance
 # Testing
 `,
   );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
-export default {
-  name: "workspace",
-  tools: { read_repo: { targets: { "factory-droid": { name: "Read" } } } },
-};
-`);
   await writeText(
     join(pluginRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
@@ -6302,20 +3687,6 @@ export default {
 `,
   );
   await writeText(
-    join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { toolRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "submittable",
-  description: "Can submit work",
-  instructions: "Submit completed work through the generated Factory tool.",
-  access: { tools: [toolRef("workspace", "read_repo")] },
-  tools: { submit_work: { ref: "submit-work" } },
-  require: { tools: ["submit_work"] },
-};
-`,
-  );
-  await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
     `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
@@ -6323,7 +3694,6 @@ export default {
   name: "worker",
   description: "Factory worker",
   identity: "worker",
-  traits: ["submittable"],
   skills: [skillRef("testing")],
   targets: {
     "factory-droid": {
@@ -6334,22 +3704,22 @@ export default {
 };
 `,
   );
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery",
   description: "Deliver work through Factory Droid",
-  phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
+  phases: [{ name: "Build", agents: [agentRef("worker")] }],
 };
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-read",
   description: "Audit Factory read calls",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
+  match: { tool: { kind: "hook-native-tool", name: "Read" } },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
 };
 `);
@@ -6360,7 +3730,7 @@ export default {
   name: "audit-submit",
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.canonical("submit_work") },
+  match: { tool: hookTool.canonical("submit-work") },
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
 };
 `);
@@ -6512,7 +3882,6 @@ test("compilePluginForTarget lowers Pi package and extension surfaces", async ()
           skills: ["pi"],
           orbits: ["pi"],
           tools: ["pi"],
-          toolspaces: ["pi"],
           hooks: ["pi"],
         },
       },
@@ -6543,12 +3912,6 @@ description: Worker identity
 Use Pi package surfaces.
 `,
   );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
-export default {
-  name: "workspace",
-  tools: { read_repo: { targets: { pi: { name: "read" } } } },
-};
-`);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
 
 export default {
@@ -6561,43 +3924,36 @@ export default {
   },
 };
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { toolRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "submittable",
-  description: "Can submit work",
-  instructions: "Submit work through the typed Pi extension tool.",
-  access: { tools: [toolRef("workspace", "read_repo")] },
-  tools: { submit_work: { ref: "submit-work" } },
-  require: { tools: ["submit_work"] },
-};
-`);
   await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "worker",
   description: "Pi package worker",
   identity: "worker",
-  traits: ["submittable"],
   skills: [skillRef("testing")],
+  targets: {
+    pi: {
+      tools: ["read"],
+    },
+  },
 };
 `);
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery",
   description: "Deliver work through Pi",
-  phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
+  phases: [{ name: "Build", agents: [agentRef("worker")] }],
 };
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-read",
   description: "Audit read calls",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
+  match: { tool: { kind: "hook-native-tool", name: "read" } },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
 };
 `);
@@ -6608,7 +3964,7 @@ export default {
   name: "audit-submit",
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.canonical("submit_work") },
+  match: { tool: hookTool.canonical("submit-work") },
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
 };
 `);
@@ -6648,7 +4004,6 @@ export default {
   expect(piAgent).toContain('description: "Pi package worker"');
   expect(piAgent).toContain('tools:');
   expect(piAgent).toContain('- "read"');
-  expect(piAgent).toContain('- "pi_pipeline_demo_submit_work"');
   expect(piAgent).toContain('skills:');
   expect(piAgent).toContain('- "testing"');
   expect(piAgent).not.toContain("<!-- prism:");
@@ -6804,7 +4159,7 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
       name: "pi-source-only",
       version: "0.1.0",
       targets: {
-        toolspaces: ["pi"],
+        modelspaces: ["pi"],
       },
     })}\n`,
   );
@@ -6948,7 +4303,6 @@ export default {
   name: "worker",
   description: "Pi global worker",
   identity: "worker",
-  traits: [],
 };
 `,
   );
@@ -7187,10 +4541,6 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
   expect(claudeAgent).not.toContain("tools:");
   expect(claudeAgent).toContain("skills:");
   expect(claudeAgent).toContain('- "testing"');
-  expect(claudeAgent).toContain("## Trait Instructions");
-  expect(claudeAgent).toContain(
-    "Commit owned implementation changes only after the submitted work is complete.",
-  );
   expect(
     await pathExists(
       join(pluginRootPath, "skills", "delivery-contract", "SKILL.md"),
@@ -7223,7 +4573,6 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
         name: "metadata-only-plugin",
         version: "0.1.0",
         targets: {
-          toolspaces: ["opencode", "claude-code", "antigravity-cli", "codex-cli"],
           modelspaces: ["opencode", "claude-code", "antigravity-cli", "codex-cli"],
         },
       },
@@ -7250,194 +4599,6 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
   }
 });
 
-test("compilePluginForTarget fails when targeted agents bind tools not targeted for that harness", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "tool-target-leak");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "tool-target-leak",
-        version: "0.1.0",
-        targets: {
-          agents: ["opencode"],
-          tools: ["claude-code"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    `---\ndescription: Worker\n---\n\n# Worker\n`,
-  );
-  await writeText(
-    join(pluginRoot, "tools", "echo.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export default {
-  name: "echo",
-  description: "Echo input",
-  input: Schema.Struct({ text: Schema.String }),
-  output: Schema.Struct({ text: Schema.String }),
-  async handle(input) {
-    return input;
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "echoer.trait.ts"),
-    `
-export default {
-  name: "echoer",
-  tools: {
-    echo: { ref: "echo" },
-  },
-  require: { tools: ["echo"] },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `
-export default {
-  name: "worker",
-  description: "Worker",
-  identity: "worker",
-  traits: ["echoer"],
-};
-`,
-  );
-
-  const exit = await Effect.runPromiseExit(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: true,
-    }),
-  );
-
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("AgentValidationError");
-  if (failure._tag === "AgentValidationError") {
-    expect(failure.field).toBe("tools");
-    expect(failure.message).toContain("that plugin's targets.tools does not include 'opencode'");
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Derived orbit skill rendering (AP-022)
-// ---------------------------------------------------------------------------
-
-test("derived orbit skill deduplicates traits and renders multi-agent phase sub-sections", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-
-  // Multi-agent phase renders each agent as its own sub-section.
-  expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
-  expect(skill).toContain("Multiple agents may fulfil this phase");
-  expect(skill).toContain("#### Agent `builder`");
-  expect(skill).toContain("#### Agent `reviewer`");
-
-  // Trait protocols section appears once and dedupes shared traits.
-  const protocolsHeader = skill.match(/## Trait protocols active in this orbit/g);
-  expect(protocolsHeader?.length).toBe(1);
-  // self-assessing is shared by builder + reviewer + security-reviewer; render once.
-  const selfAssessingHits = skill.match(/### `canonical-compile-fixture:self-assessing`/g);
-  expect(selfAssessingHits?.length).toBe(1);
-  const submittableHits = skill.match(/### `canonical-compile-fixture:submittable`/g);
-  expect(submittableHits?.length).toBe(1);
-
-  // Phase transitions and submission protocol sections are present.
-  expect(skill).toContain("## Phase transitions");
-  expect(skill).toContain("## Submission protocol per phase agent");
-});
-
-test("derived orbit skill deduplicates tools across orchestrator and phase grants", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  // Replace the orbit file with one that grants the SAME tool via the
-  // orchestrator AND orbit-wide tool_permissions. The derived skill must
-  // not double-render the tool.
-  await writeText(
-    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "delivery-contract",
-  description: "Dedup tool variant",
-  phases: [
-    {
-      name: "Implement change",
-      agents: [agentRef("builder")],
-      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
-    },
-    {
-      name: "Review change",
-      agents: [agentRef("reviewer")],
-      requires: [{ all: [traitRef("reviewable"), traitRef("self-assessing")] }],
-    },
-  ],
-  orchestrator: {
-    agent: agentRef("builder"),
-    tools: [{ ref: "protocol-core:create_glyph", as: "create_glyph_orch" }],
-  },
-  tool_permissions: [
-    { ref: "protocol-core:create_glyph", as: "create_glyph_wide" },
-  ],
-};
-`,
-  );
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-
-  // Each grant gets its own logical name in its own section, but the canonical
-  // tool ref appears in both sections — check both sections are listed.
-  expect(skill).toContain("`create_glyph_orch` (canonical `protocol-core:create_glyph`)");
-  expect(skill).toContain("`create_glyph_wide` (canonical `protocol-core:create_glyph`)");
-
-  // Wide tool description should appear in the wide section once, not twice.
-  const wideMatches = skill.match(/## Tools available to every phase agent/g);
-  expect(wideMatches?.length).toBe(1);
-});
-
 test("derived orbit skill helper renders parametric stub when invoked on a template", async () => {
   // Direct unit-level invocation of renderDerivedOrbitSkillBody to
   // exercise the parametric branch. We synthesize a minimal Orbit and
@@ -7452,7 +4613,6 @@ test("derived orbit skill helper renders parametric stub when invoked on a templ
     description: "A parametric template",
     parameters: [{ name: "audience", required: true }],
     phases: [],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -7492,7 +4652,6 @@ test("derived orbit skill renders orbit definitions", async () => {
     },
     parameters: [],
     phases: [],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -7523,7 +4682,6 @@ test("orbit definitions participate in template instantiation", async () => {
     },
     parameters: [{ name: "domain", required: true }],
     phases: [],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -7554,7 +4712,6 @@ test("orbit instantiation reports top-level binding failures before templating",
       { name: "second", required: true },
     ],
     phases: [],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -7593,16 +4750,13 @@ test("orbit instantiation builds complete concrete orbit shape", async () => {
       {
         name: "${domain} build",
         agents: ["builder"],
-        requires: [],
         notes: { Done: "${domain} complete" },
         telos: "Build ${domain}.",
       },
     ],
     orchestrator: {
       agent: "builder",
-      tools: [{ ref: "submit-work", logicalName: "submit_work" }],
     },
-    tool_permissions: [{ ref: "create-glyph", logicalName: "create_glyph" }],
     pulsar_checkpoints: [
       {
         after: "${domain} build",
@@ -7630,16 +4784,12 @@ test("orbit instantiation builds complete concrete orbit shape", async () => {
     {
       name: "Forge build",
       agents: ["builder"],
-      requires: [],
       notes: { Done: "Forge complete" },
       telos: "Build Forge.",
     },
   ]);
   expect(instantiated.orchestrator).toEqual(orbit.orchestrator);
   expect(instantiated.orchestrator).not.toBe(orbit.orchestrator);
-  expect(instantiated.orchestrator?.tools).not.toBe(orbit.orchestrator?.tools);
-  expect(instantiated.tool_permissions).toEqual(orbit.tool_permissions);
-  expect(instantiated.tool_permissions).not.toBe(orbit.tool_permissions);
   expect(instantiated.pulsar_checkpoints).toEqual([
     { after: "Forge build", before: "Forge review", note: "Forge checkpoint" },
   ]);
@@ -7662,7 +4812,6 @@ test("orbit instantiation preserves top-level failure ordering", async () => {
         description: "${missingDescription}",
         parameters: [{ name: "missingDescription", required: false }],
         phases: [],
-        tool_permissions: [],
         pulsar_checkpoints: [],
         body: "",
       }),
@@ -7676,7 +4825,6 @@ test("orbit instantiation preserves top-level failure ordering", async () => {
         produces: "${missingProduces}",
         parameters: [{ name: "missingProduces", required: false }],
         phases: [],
-        tool_permissions: [],
         pulsar_checkpoints: [],
         body: "",
       }),
@@ -7692,7 +4840,6 @@ test("orbit instantiation preserves top-level failure ordering", async () => {
         },
         parameters: [{ name: "missingDefinition", required: false }],
         phases: [],
-        tool_permissions: [],
         pulsar_checkpoints: [],
         body: "",
       }),
@@ -7705,7 +4852,6 @@ test("orbit instantiation preserves top-level failure ordering", async () => {
         description: "Checkpoint template",
         parameters: [{ name: "missingCheckpoint", required: false }],
         phases: [],
-        tool_permissions: [],
         pulsar_checkpoints: [{ after: "${missingCheckpoint}" }],
         body: "",
       }),
@@ -7718,7 +4864,6 @@ test("orbit instantiation preserves top-level failure ordering", async () => {
         description: "Evolution template",
         parameters: [{ name: "missingEvolution", required: false }],
         phases: [],
-        tool_permissions: [],
         pulsar_checkpoints: [],
         evolution: "${missingEvolution}",
         body: "",
@@ -7732,7 +4877,6 @@ test("orbit instantiation preserves top-level failure ordering", async () => {
         description: "Body template",
         parameters: [{ name: "missingBody", required: false }],
         phases: [],
-        tool_permissions: [],
         pulsar_checkpoints: [],
         body: "${missingBody}",
       }),
@@ -7765,7 +4909,6 @@ test("derived orbit skill renders per-phase telos, real-world change, and cold-p
       {
         name: "build",
         agents: [],
-        requires: [],
         notes: { Input: "One committed glyph.", Done: "Validation clean." },
         telos: "Bring working software into existence inside the bounds of the glyph.",
         real_world_change:
@@ -7784,7 +4927,6 @@ test("derived orbit skill renders per-phase telos, real-world change, and cold-p
         body: "## Procrastination shapes\n\n- Moving the glyph forward without changing the codebase.\n",
       },
     ],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -7816,7 +4958,6 @@ test("derived orbit phase references render when body or workflow is present", a
       {
         name: "explore",
         agents: [],
-        requires: [],
         telos: "Reduce ambiguity and recommend a direction.",
         real_world_change:
           "An option space exists with the alternatives considered and the rationale for the pick.",
@@ -7827,7 +4968,6 @@ test("derived orbit phase references render when body or workflow is present", a
       {
         name: "build",
         agents: [],
-        requires: [],
         workflow: {
           when: "The phase needs repeatable agent execution.",
           inputs: ["Prepared task"],
@@ -7841,11 +4981,9 @@ test("derived orbit phase references render when body or workflow is present", a
       {
         name: "commit",
         agents: [],
-        requires: [],
         // No body or workflow — should produce no reference file.
       },
     ],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -7876,7 +5014,7 @@ test("orbit body declared in TS source flows into the generated orbit skill", as
 
   await writeText(
     join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery-contract",
@@ -7885,7 +5023,6 @@ export default {
     {
       name: "Implement change",
       agents: [agentRef("builder")],
-      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
     },
   ],
   body: ${JSON.stringify(declaredBody)},
@@ -7926,7 +5063,6 @@ test("orbit phase fields participate in template instantiation", async () => {
       {
         name: "build",
         agents: [],
-        requires: [],
         telos: "Bring ${domain} change into existence.",
         real_world_change: "${domain} reality is different and re-verifiable.",
         cold_pickup_test: "Could a ${domain} reviewer pick up the change cold?",
@@ -7942,7 +5078,6 @@ test("orbit phase fields participate in template instantiation", async () => {
         body: "## ${domain} build notes\n\nKeep scope inside the glyph.\n",
       },
     ],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -7994,7 +5129,6 @@ test("orbit phase template instantiation preserves references bindings and notes
         },
         agent: "builder",
         agents: ["builder"],
-        requires: [{ all: ["reviewable"], min: 1 }],
         notes: { Input: "${domain} input", Done: "${domain} complete" },
         telos: "Build ${domain}.",
       },
@@ -8002,11 +5136,9 @@ test("orbit phase template instantiation preserves references bindings and notes
         name: "empty shape",
         orbit_binding: { orbit: "template", bindings: {} },
         agents: [],
-        requires: [],
         notes: {},
       },
     ],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -8020,7 +5152,6 @@ test("orbit phase template instantiation preserves references bindings and notes
     orbit_binding: { orbit: "template", bindings: { required: "Forge" } },
     agent: "builder",
     agents: ["builder"],
-    requires: [{ all: ["reviewable"], min: 1 }],
     notes: { Input: "Forge input", Done: "Forge complete" },
     telos: "Build Forge.",
   });
@@ -8028,7 +5159,6 @@ test("orbit phase template instantiation preserves references bindings and notes
     name: "empty shape",
     orbit_binding: { orbit: "template" },
     agents: [],
-    requires: [],
   });
   expect(Object.hasOwn(instantiated.phases[1] ?? {}, "notes")).toBe(false);
 });
@@ -8046,11 +5176,9 @@ test("orbit phase template instantiation reports missing phase binding field", a
       {
         name: "plain phase",
         agents: [],
-        requires: [],
         notes: { Input: "${domain} input" },
       },
     ],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });
@@ -8081,7 +5209,6 @@ test("orbit phase template instantiation preserves missing binding order", async
         orbit: "${missingOrbit}",
         orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
         agents: [],
-        requires: [],
         notes: { Input: "${missingNote}" },
         telos: "${missingTelos}",
       },
@@ -8093,7 +5220,6 @@ test("orbit phase template instantiation preserves missing binding order", async
         orbit: "${missingOrbit}",
         orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
         agents: [],
-        requires: [],
         notes: { Input: "${missingNote}" },
       },
       field: "phases[0].orbit",
@@ -8104,7 +5230,6 @@ test("orbit phase template instantiation preserves missing binding order", async
         orbit: "target",
         orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
         agents: [],
-        requires: [],
         notes: { Input: "${missingNote}" },
       },
       field: "phases[0].orbit_binding.bindings.required",
@@ -8114,7 +5239,6 @@ test("orbit phase template instantiation preserves missing binding order", async
         name: "plain",
         orbit_binding: { orbit: "template", bindings: { required: "value" } },
         agents: [],
-        requires: [],
         notes: { Input: "${missingNote}" },
         telos: "${missingTelos}",
       },
@@ -8124,7 +5248,6 @@ test("orbit phase template instantiation preserves missing binding order", async
       phase: {
         name: "plain",
         agents: [],
-        requires: [],
         telos: "${missingTelos}",
         real_world_change: "${missingChange}",
       },
@@ -8134,7 +5257,6 @@ test("orbit phase template instantiation preserves missing binding order", async
       phase: {
         name: "plain",
         agents: [],
-        requires: [],
         telos: "value",
         real_world_change: "${missingChange}",
         cold_pickup_test: "${missingPickup}",
@@ -8145,7 +5267,6 @@ test("orbit phase template instantiation preserves missing binding order", async
       phase: {
         name: "plain",
         agents: [],
-        requires: [],
         real_world_change: "value",
         cold_pickup_test: "${missingPickup}",
         body: "${missingBody}",
@@ -8156,7 +5277,6 @@ test("orbit phase template instantiation preserves missing binding order", async
       phase: {
         name: "plain",
         agents: [],
-        requires: [],
         cold_pickup_test: "value",
         body: "${missingBody}",
       },
@@ -8180,7 +5300,6 @@ test("orbit phase template instantiation preserves missing binding order", async
         { name: "missingBody", required: false },
       ],
       phases: [current.phase],
-      tool_permissions: [],
       pulsar_checkpoints: [],
       body: "",
     });
@@ -8200,7 +5319,7 @@ test("derived orbit skill renders parametric stub for parameterized orbit templa
 
   await writeText(
     join(pluginRoot, "orbits", "parametric-template.orbit.ts"),
-    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "parametric-template",
@@ -8210,7 +5329,6 @@ export default {
     {
       name: "Implement change",
       agents: [agentRef("builder")],
-      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
     },
   ],
 };
@@ -8238,103 +5356,6 @@ export default {
   ).toBe(false);
 });
 
-test("derived orbit skill renders trait sections from description + bound-by + grants without instructions", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-
-  // The committable trait carries a description and grants `commit_work`.
-  expect(skill).toContain("### `canonical-compile-fixture:committable`");
-  expect(skill).toContain("Can create implementation commits");
-  expect(skill).toContain("- Bound by: `builder`");
-  expect(skill).toContain("- Grants tool(s): `commit_work`");
-
-  // Verbatim trait instructions must NOT leak into the orbit skill.
-  expect(skill).not.toContain(
-    "Commit owned implementation changes only after the submitted work is complete.",
-  );
-  expect(skill).not.toContain(
-    "Submit completed work through the typed submission surface before handing off.",
-  );
-
-  // Reviewable trait is bound by the reviewer and grants `submit_review`.
-  expect(skill).toContain("### `canonical-compile-fixture:reviewable`");
-  expect(skill).toContain("- Bound by: `reviewer`");
-  expect(skill).toContain("- Grants tool(s): `submit_review`");
-});
-
-test("derived orbit skill suppresses traits with no description and no grants", async () => {
-  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
-  const { Orbit, Trait, Agent } = await import("./sources.js");
-  const { emptyRegistry } = await import("./registry.js");
-
-  // Build a registry with a single agent whose trait has no description and
-  // no granted tools or skills. The trait section should emit only the
-  // suppression note.
-  const registry = emptyRegistry("/tmp/min", "min", "0.0.0");
-  const trait = new Trait({
-    name: "bare",
-    sourcePath: "/tmp/bare.trait.ts",
-    instructions: ["These instructions should never be rendered in the orbit skill."],
-    access: { tools: [], toolGroups: [], skills: [] },
-    tools: {},
-    inject: { skills: [] },
-    require: { tools: [], skills: [] },
-  });
-  registry.traits.set("bare", trait);
-  const agent = new Agent({
-    name: "worker",
-    sourcePath: "/tmp/worker.agent.ts",
-    description: "Worker agent",
-    identity: "worker",
-    traits: [{ ref: "bare", tools: {} }],
-    access: { tools: [], toolGroups: [], skills: [] },
-    skills: [],
-    targets: {},
-  });
-  registry.agents.set("worker", agent);
-
-  const orbit = new Orbit({
-    name: "min-orbit",
-    sourcePath: "/tmp/min.orbit.ts",
-    description: "minimal",
-    parameters: [],
-    phases: [
-      {
-        name: "Do work",
-        agents: ["worker"],
-        requires: [],
-      },
-    ],
-    tool_permissions: [],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const body = renderDerivedOrbitSkillBody(orbit, registry);
-  expect(body).toContain(
-    "_`min:bare`: no orchestration-relevant surface; see trait source for agent-side instructions._",
-  );
-  // The bare trait's instructions never reach the orbit skill.
-  expect(body).not.toContain("These instructions should never be rendered in the orbit skill.");
-  // No `### \`min:bare\`` block is emitted for the suppressed trait.
-  expect(body).not.toContain("### `min:bare`");
-});
-
 test("derived orbit skill drops the closure-discipline section", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
@@ -8355,30 +5376,6 @@ test("derived orbit skill drops the closure-discipline section", async () => {
   );
 
   expect(skill).not.toContain("## Closure discipline");
-});
-
-test("derived orbit skill drops the input-shape placeholder line", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-
-  expect(skill).not.toContain("Input: Structured input — see canonical tool schema for fields.");
-  // Tool entries still render the head line itself.
-  expect(skill).toContain("`create_glyph` (canonical `protocol-core:create_glyph`)");
 });
 
 test("derived orbit skill agent sub-sections do not render a duplicated **Identity** line", async () => {
@@ -8436,8 +5433,6 @@ test("derived orbit skill personality block renders only archetype + gloss", asy
     description: "Agent paragraph description",
     identity: "worker",
     personality: "passionate-screenwriter",
-    traits: [],
-    access: { tools: [], toolGroups: [], skills: [] },
     skills: [],
     targets: {},
   });
@@ -8452,10 +5447,8 @@ test("derived orbit skill personality block renders only archetype + gloss", asy
       {
         name: "Do work",
         agents: ["worker"],
-        requires: [],
       },
     ],
-    tool_permissions: [],
     pulsar_checkpoints: [],
     body: "",
   });

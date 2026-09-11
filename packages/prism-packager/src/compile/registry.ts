@@ -17,8 +17,6 @@ import {
   Skill,
   Skillspace,
   Sop,
-  Toolspace,
-  Trait,
 } from "./sources.js";
 import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
 
@@ -31,11 +29,9 @@ export interface PluginRegistry {
   runtime: PluginRuntimeConfig;
   identities: Map<string, Identity>;
   personalities: Map<string, Personality>;
-  toolspaces: Map<string, Toolspace>;
   modelspaces: Map<string, Modelspace>;
   skillspaces: Map<string, Skillspace>;
   skills: Map<string, Skill>;
-  traits: Map<string, Trait>;
   tools: Map<string, CanonicalTool>;
   hooks: Map<string, Hook>;
   orbits: Map<string, Orbit>;
@@ -60,11 +56,9 @@ export const emptyRegistry = (
   runtime,
   identities: new Map(),
   personalities: new Map(),
-  toolspaces: new Map(),
   modelspaces: new Map(),
   skillspaces: new Map(),
   skills: new Map(),
-  traits: new Map(),
   tools: new Map(),
   hooks: new Map(),
   orbits: new Map(),

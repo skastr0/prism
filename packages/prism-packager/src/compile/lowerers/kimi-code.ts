@@ -13,9 +13,7 @@ import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
 import {
   bindingsOwnedByPlugin,
   collectBindingNameMap,
-  groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
-  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
@@ -38,9 +36,7 @@ import {
 import {
   toolsCliEmitEnabled,
   toolsCliInjectMode,
-  type ToolsCliInjectMode,
 } from "../../tools-cli/flags.js";
-import { renderToolCliAgentGuidance } from "../../tools-cli/inject.js";
 
 const TARGET_ID = "kimi-code" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -162,12 +158,8 @@ const renderSkill = (frontmatter: Record<string, unknown>, body: string): string
 
 const renderKimiAgentRoleSkill = (
   agent: ComposedAgent,
-  target: KimiCodeLowerTarget,
-  includeCliGuidance: boolean,
-  cliMode: ToolsCliInjectMode,
 ): string => {
-  const nativeTools = uniqueSorted(agent.allowedTools, { dropEmpty: true });
-  const skills = uniqueSorted([...agent.skills, ...agent.allowedSkills], { dropEmpty: true });
+  const skills = uniqueSorted(agent.skills, { dropEmpty: true });
 
   const sections: string[] = [
     `# ${agent.name}`,
@@ -177,27 +169,9 @@ const renderKimiAgentRoleSkill = (
     agent.body.trimEnd(),
   ];
 
-  if (includeCliGuidance) {
-    const groups = [...groupAgentToolBindingsByOwner(target.sourcePluginName, agent)].map(
-      ([ownerPlugin, bindings]) => ({
-        pluginName: ownerPlugin,
-        toolNames: bindings.map((binding) =>
-          ownerPlugin === target.sourcePluginName ? binding.logicalName : binding.toolName
-        ),
-      }),
-    );
-    const guidance = renderToolCliAgentGuidance(groups, cliMode).trimEnd();
-    if (guidance.length > 0) sections.push("", guidance);
-  }
-
-  if (nativeTools.length > 0 || skills.length > 0) {
+  if (skills.length > 0) {
     sections.push("", "## Kimi Role Surface");
-    if (nativeTools.length > 0) {
-      sections.push("", `Native tools requested by this role: ${nativeTools.map((tool) => `\`${tool}\``).join(", ")}.`);
-    }
-    if (skills.length > 0) {
-      sections.push("", `Related Kimi skills: ${skills.map((skill) => `\`${skill}\``).join(", ")}.`);
-    }
+    sections.push("", `Related Kimi skills: ${skills.map((skill) => `\`${skill}\``).join(", ")}.`);
   }
 
   return renderSkill(
@@ -286,8 +260,6 @@ const planAgentRoleSkills = (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
   files: DesiredFile[],
-  includeCliGuidance: boolean,
-  cliMode: ToolsCliInjectMode,
 ): void => {
   for (const agent of input.agents) {
     pushWrite(
@@ -295,12 +267,7 @@ const planAgentRoleSkills = (
       desiredRelativePaths,
       input.target,
       `skills/${roleSkillName(agent.name)}/SKILL.md`,
-      renderKimiAgentRoleSkill(
-        agent,
-        input.target,
-        includeCliGuidance,
-        cliMode,
-      ),
+      renderKimiAgentRoleSkill(agent),
     );
   }
 };
@@ -459,12 +426,10 @@ const planHooks = async (
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools ?? [],
-    input.agents,
   );
-  const canonicalToolNames = collectBindingNameMap(bindings, (binding) => {
-    const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-    return cliToolNameForBinding(owner, binding);
-  });
+  const canonicalToolNames = collectBindingNameMap(bindings, (binding) =>
+    cliToolNameForBinding(binding),
+  );
 
   const planned: PlannedHook[] = [];
   for (const hook of [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name))) {
@@ -567,7 +532,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools ?? [],
-    input.agents,
   );
   const hasToolCliSkill = emitCli && cliMode === "skill" && ownedBindings.length > 0;
 
@@ -582,8 +546,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     input,
     state.desiredRelativePaths,
     state.files,
-    emitCli,
-    cliMode,
   );
   planOrbitSkillWrites(input, state.desiredRelativePaths, state.files);
   planSopSkillWrites(input, state.desiredRelativePaths, state.files);

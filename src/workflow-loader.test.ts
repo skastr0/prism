@@ -1363,17 +1363,6 @@ export default defineWorkflow({
       model: {},
       targetOverride: {},
       skills: [],
-      allowedSkills: [],
-      allowedTools: [],
-      toolBindings: [
-        {
-          kind: "permission",
-          logicalName: "challenge_echo",
-          toolPluginName: ownerPluginName,
-          toolName: "challenge_echo",
-          toolSourcePath: join(root, "tools", "challenge_echo.tool.ts"),
-        },
-      ],
     };
 
     await writeFile(file, workflowSource("default", { worker: "grok", plugin: sourcePluginName }));

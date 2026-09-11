@@ -3,10 +3,8 @@
  *
  * Canonical structured artifacts are TypeScript-authored:
  * - Agent         : agents/*.agent.ts
- * - Trait         : traits/*.trait.ts
  * - Orbit     : orbits/*.orbit.ts
  * - Sop           : sops/*.sop.ts
- * - Toolspace     : toolspaces/*.toolspace.ts
  * - Modelspace    : modelspaces/*.modelspace.ts
  * - Skillspace    : skillspaces/*.skillspace.ts
  *
@@ -31,16 +29,6 @@ const NamedRefObjectSchema = Schema.Struct({
   name: Schema.String,
 });
 
-export const TraitRefInputSchema = Schema.Union(
-  Schema.String,
-  Schema.Struct({
-    kind: Schema.Literal("trait-ref"),
-    plugin: Schema.optional(Schema.String),
-    name: Schema.String,
-  }),
-);
-export type TraitRefInput = typeof TraitRefInputSchema.Type;
-
 export const AgentRefInputSchema = Schema.Union(
   Schema.String,
   Schema.Struct({
@@ -60,28 +48,6 @@ export const OrbitRefInputSchema = Schema.Union(
   }),
 );
 export type OrbitRefInput = typeof OrbitRefInputSchema.Type;
-
-export const ToolRefInputSchema = Schema.Union(
-  Schema.String,
-  Schema.Struct({
-    kind: Schema.Literal("tool-ref"),
-    plugin: Schema.optional(Schema.String),
-    toolspace: Schema.String,
-    name: Schema.String,
-  }),
-);
-export type ToolRefInput = typeof ToolRefInputSchema.Type;
-
-export const ToolGroupRefInputSchema = Schema.Union(
-  Schema.String,
-  Schema.Struct({
-    kind: Schema.Literal("tool-group-ref"),
-    plugin: Schema.optional(Schema.String),
-    toolspace: Schema.String,
-    name: Schema.String,
-  }),
-);
-export type ToolGroupRefInput = typeof ToolGroupRefInputSchema.Type;
 
 export const ModelProfileRefInputSchema = Schema.Union(
   Schema.String,
@@ -134,12 +100,8 @@ export type HookEvent = typeof HookEventSchema.Type;
 export const HookToolMatcherInputSchema = Schema.Union(
   Schema.Struct({ kind: Schema.Literal("hook-any-tool") }),
   Schema.Struct({
-    kind: Schema.Literal("hook-toolspace-tool"),
-    tool: ToolRefInputSchema,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("hook-toolspace-group"),
-    group: ToolGroupRefInputSchema,
+    kind: Schema.Literal("hook-native-tool"),
+    name: Schema.String,
   }),
   Schema.Struct({
     kind: Schema.Literal("hook-canonical-tool"),
@@ -156,12 +118,8 @@ export type HookMatchInput = typeof HookMatchInputSchema.Type;
 export const NormalizedHookToolMatcherSchema = Schema.Union(
   Schema.Struct({ kind: Schema.Literal("any") }),
   Schema.Struct({
-    kind: Schema.Literal("toolspace-tool"),
-    ref: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("toolspace-group"),
-    ref: Schema.String,
+    kind: Schema.Literal("native-tool"),
+    name: Schema.String,
   }),
   Schema.Struct({
     kind: Schema.Literal("canonical-tool"),
@@ -1125,11 +1083,6 @@ const normalizeDirectNamedRefInput = (
     ? normalizeNamedRefParts(field, value)
     : normalizeNamedRefParts(field, { plugin: value.plugin, name: value.name });
 
-export const normalizeTraitRefInput = (
-  field: string,
-  value: TraitRefInput,
-): string | RefNormalizationError => normalizeDirectNamedRefInput(field, value);
-
 export const normalizeAgentRefInput = (
   field: string,
   value: AgentRefInput,
@@ -1139,66 +1092,6 @@ export const normalizeOrbitRefInput = (
   field: string,
   value: OrbitRefInput,
 ): string | RefNormalizationError => normalizeDirectNamedRefInput(field, value);
-
-export const normalizeToolRefInput = (
-  field: string,
-  value: ToolRefInput,
-): string | RefNormalizationError => {
-  if (typeof value === "string") {
-    if (!isNonEmpty(value)) {
-      return invalidRef(field, "tool ref must be a non-empty string");
-    }
-    return value;
-  }
-
-  if (!isNonEmpty(value.toolspace)) {
-    return invalidRef(field, "tool ref object must include a non-empty 'toolspace'");
-  }
-
-  if (!isNonEmpty(value.name)) {
-    return invalidRef(field, "tool ref object must include a non-empty 'name'");
-  }
-
-  if (value.plugin !== undefined && !isNonEmpty(value.plugin)) {
-    return invalidRef(field, "tool ref object 'plugin' must be non-empty when provided");
-  }
-
-  const head = value.plugin ? `${value.plugin}:${value.toolspace}` : value.toolspace;
-  return `${head}/${value.name}`;
-};
-
-export const normalizeToolGroupRefInput = (
-  field: string,
-  value: ToolGroupRefInput,
-): string | RefNormalizationError => {
-  if (typeof value === "string") {
-    if (!isNonEmpty(value)) {
-      return invalidRef(field, "tool group ref must be a non-empty string");
-    }
-    return value;
-  }
-
-  if (!isNonEmpty(value.toolspace)) {
-    return invalidRef(
-      field,
-      "tool group ref object must include a non-empty 'toolspace'",
-    );
-  }
-
-  if (!isNonEmpty(value.name)) {
-    return invalidRef(field, "tool group ref object must include a non-empty 'name'");
-  }
-
-  if (value.plugin !== undefined && !isNonEmpty(value.plugin)) {
-    return invalidRef(
-      field,
-      "tool group ref object 'plugin' must be non-empty when provided",
-    );
-  }
-
-  const head = value.plugin ? `${value.plugin}:${value.toolspace}` : value.toolspace;
-  return `${head}#${value.name}`;
-};
 
 export const normalizeModelProfileRefInput = (
   field: string,
@@ -1355,37 +1248,8 @@ export const ClaudeCodeModelTarget = Schema.Struct({
 export type ClaudeCodeModelTarget = typeof ClaudeCodeModelTarget.Type;
 
 // ---------------------------------------------------------------------------
-// Shared access intent
+// Tool slot declarations (canonical tool contract surface)
 // ---------------------------------------------------------------------------
-
-export const AccessSchema = Schema.Struct({
-  tools: Schema.optional(Schema.Array(ToolRefInputSchema)),
-  toolGroups: Schema.optional(Schema.Array(ToolGroupRefInputSchema)),
-  skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
-});
-export type Access = typeof AccessSchema.Type;
-
-export const NormalizedAccessSchema = Schema.Struct({
-  tools: Schema.Array(Schema.String),
-  toolGroups: Schema.Array(Schema.String),
-  skills: Schema.Array(Schema.String),
-});
-export type NormalizedAccess = typeof NormalizedAccessSchema.Type;
-
-export const SchemaSourceRefSchema = Schema.Struct({
-  sourcePath: Schema.String,
-  exportName: Schema.String,
-});
-export type SchemaSourceRef = typeof SchemaSourceRefSchema.Type;
-
-// ---------------------------------------------------------------------------
-// Trait
-// ---------------------------------------------------------------------------
-
-export const TraitInjectSchema = Schema.Struct({
-  skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
-});
-export type TraitInject = typeof TraitInjectSchema.Type;
 
 export const ToolSchemaSlotSchema = Schema.Struct({
   kind: Schema.Literal("schema"),
@@ -1395,56 +1259,6 @@ export type ToolSchemaSlot = typeof ToolSchemaSlotSchema.Type;
 
 export const ToolSlotSchema = ToolSchemaSlotSchema;
 export type ToolSlot = typeof ToolSlotSchema.Type;
-
-export const TraitToolAttachmentSchema = Schema.Struct({
-  ref: Schema.String,
-});
-export type TraitToolAttachment = typeof TraitToolAttachmentSchema.Type;
-
-export const TraitRequireSchema = Schema.Struct({
-  tools: Schema.optional(Schema.Array(Schema.String)),
-  skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
-});
-export type TraitRequire = typeof TraitRequireSchema.Type;
-
-export const TraitInstructionsInputSchema = Schema.Union(
-  Schema.String,
-  Schema.Array(Schema.String),
-);
-export type TraitInstructionsInput = typeof TraitInstructionsInputSchema.Type;
-
-export const TraitSchema = Schema.Struct({
-  name: Schema.String,
-  description: Schema.optional(Schema.String),
-  instructions: Schema.optional(TraitInstructionsInputSchema),
-  access: Schema.optional(AccessSchema),
-  tools: Schema.optional(Schema.Record({ key: Schema.String, value: TraitToolAttachmentSchema })),
-  inject: Schema.optional(TraitInjectSchema),
-  require: Schema.optional(TraitRequireSchema),
-});
-export const TraitSourceSchema = TraitSchema;
-export type TraitSource = typeof TraitSourceSchema.Type;
-
-export const NormalizedTraitToolAttachmentSchema = Schema.Struct({
-  ref: Schema.String,
-});
-export type NormalizedTraitToolAttachment = typeof NormalizedTraitToolAttachmentSchema.Type;
-
-export class Trait extends Schema.Class<Trait>("Trait")({
-  name: Schema.String,
-  sourcePath: Schema.String,
-  description: Schema.optional(Schema.String),
-  instructions: Schema.Array(Schema.String),
-  access: NormalizedAccessSchema,
-  tools: Schema.Record({ key: Schema.String, value: NormalizedTraitToolAttachmentSchema }),
-  inject: Schema.Struct({
-    skills: Schema.Array(Schema.String),
-  }),
-  require: Schema.Struct({
-    tools: Schema.Array(Schema.String),
-    skills: Schema.Array(Schema.String),
-  }),
-}) {}
 
 // ---------------------------------------------------------------------------
 // Canonical Tool
@@ -1481,58 +1295,12 @@ export class CanonicalTool extends Schema.Class<CanonicalTool>("CanonicalTool")(
 // Agent
 // ---------------------------------------------------------------------------
 
-const TraitBindingToolInputSchema = Schema.Struct({
-  slots: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
-});
-
-const TraitBindingToolsInputSchema = Schema.Record({
-  key: Schema.String,
-  value: TraitBindingToolInputSchema,
-});
-
-export const KindedTraitBindingInputSchema = Schema.Struct({
-  kind: Schema.Literal("trait-binding"),
-  trait: TraitRefInputSchema,
-  tools: Schema.optional(TraitBindingToolsInputSchema),
-});
-
-export const PlainTraitBindingInputSchema = Schema.Struct({
-  trait: TraitRefInputSchema,
-  tools: Schema.optional(TraitBindingToolsInputSchema),
-});
-
-export const TraitBindingInputSchema = Schema.Union(
-  KindedTraitBindingInputSchema,
-  PlainTraitBindingInputSchema,
-);
-export type TraitBindingInput = typeof TraitBindingInputSchema.Type;
-
-export const NormalizedTraitBindingToolSlotSchema = Schema.Struct({
-  schema: Schema.Unknown,
-  source: SchemaSourceRefSchema,
-});
-export type NormalizedTraitBindingToolSlot =
-  typeof NormalizedTraitBindingToolSlotSchema.Type;
-
-export const NormalizedTraitBindingToolSchema = Schema.Struct({
-  slots: Schema.Record({ key: Schema.String, value: NormalizedTraitBindingToolSlotSchema }),
-});
-export type NormalizedTraitBindingTool = typeof NormalizedTraitBindingToolSchema.Type;
-
-export const NormalizedTraitBindingSchema = Schema.Struct({
-  ref: Schema.String,
-  tools: Schema.Record({ key: Schema.String, value: NormalizedTraitBindingToolSchema }),
-});
-export type NormalizedTraitBinding = typeof NormalizedTraitBindingSchema.Type;
-
 export const AgentSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
   identity: Schema.String,
   personality: Schema.optional(Schema.String),
   model: Schema.optional(ModelProfileRefInputSchema),
-  traits: Schema.optional(Schema.Array(Schema.Union(TraitRefInputSchema, TraitBindingInputSchema))),
-  access: Schema.optional(AccessSchema),
   skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
   color: Schema.optional(Schema.String),
   targets: Schema.optional(
@@ -1549,8 +1317,6 @@ export class Agent extends Schema.Class<Agent>("Agent")({
   identity: Schema.String,
   personality: Schema.optional(Schema.String),
   model: Schema.optional(Schema.String),
-  traits: Schema.Array(NormalizedTraitBindingSchema),
-  access: NormalizedAccessSchema,
   skills: Schema.Array(Schema.String),
   color: Schema.optional(Schema.String),
   targets: Schema.Record({ key: Schema.String, value: Schema.Object }),
@@ -1571,56 +1337,6 @@ export class Contract extends Schema.Class<Contract>("Contract")({
   sourcePath: Schema.String,
   pluginName: Schema.String,
   generatedFiles: Schema.optional(Schema.Array(GeneratedContractFileSchema)),
-}) {}
-
-// ---------------------------------------------------------------------------
-// Toolspace
-// ---------------------------------------------------------------------------
-
-export const ToolTargetBindingSchema = Schema.Struct({
-  name: Schema.String,
-});
-export type ToolTargetBinding = typeof ToolTargetBindingSchema.Type;
-
-export const ToolDefinitionSchema = Schema.Struct({
-  description: Schema.optional(Schema.String),
-  targets: Schema.Record({ key: Schema.String, value: ToolTargetBindingSchema }),
-});
-export type ToolDefinition = typeof ToolDefinitionSchema.Type;
-
-export const ToolGroupSchema = Schema.Struct({
-  description: Schema.optional(Schema.String),
-  tools: Schema.Array(ToolRefInputSchema),
-});
-export type ToolGroup = typeof ToolGroupSchema.Type;
-
-export const ToolspaceSchema = Schema.Struct({
-  name: Schema.String,
-  description: Schema.optional(Schema.String),
-  tools: Schema.Record({ key: Schema.String, value: ToolDefinitionSchema }),
-  groups: Schema.optional(Schema.Record({ key: Schema.String, value: ToolGroupSchema })),
-});
-export const ToolspaceSourceSchema = ToolspaceSchema;
-export type ToolspaceSource = typeof ToolspaceSourceSchema.Type;
-
-export const NormalizedToolDefinitionSchema = Schema.Struct({
-  description: Schema.optional(Schema.String),
-  targets: Schema.Record({ key: Schema.String, value: Schema.String }),
-});
-export type NormalizedToolDefinition = typeof NormalizedToolDefinitionSchema.Type;
-
-export const NormalizedToolGroupSchema = Schema.Struct({
-  description: Schema.optional(Schema.String),
-  tools: Schema.Array(Schema.String),
-});
-export type NormalizedToolGroup = typeof NormalizedToolGroupSchema.Type;
-
-export class Toolspace extends Schema.Class<Toolspace>("Toolspace")({
-  name: Schema.String,
-  sourcePath: Schema.String,
-  description: Schema.optional(Schema.String),
-  tools: Schema.Record({ key: Schema.String, value: NormalizedToolDefinitionSchema }),
-  groups: Schema.Record({ key: Schema.String, value: NormalizedToolGroupSchema }),
 }) {}
 
 // ---------------------------------------------------------------------------
@@ -1703,25 +1419,8 @@ export const OrbitBindingSchema = Schema.Struct({
 });
 export type OrbitBinding = typeof OrbitBindingSchema.Type;
 
-export const OrbitPhaseTraitRequirementSchema = Schema.Struct({
-  all: Schema.Array(TraitRefInputSchema),
-  min: Schema.optional(Schema.Number),
-});
-export type OrbitPhaseTraitRequirement =
-  typeof OrbitPhaseTraitRequirementSchema.Type;
-
-export const OrbitToolPermissionToolSchema = Schema.Union(
-  Schema.String,
-  Schema.Struct({
-    ref: Schema.String,
-    as: Schema.optional(Schema.String),
-  }),
-);
-export type OrbitToolPermissionTool = typeof OrbitToolPermissionToolSchema.Type;
-
 export const OrbitOrchestratorSchema = Schema.Struct({
   agent: AgentRefInputSchema,
-  tools: Schema.Array(OrbitToolPermissionToolSchema),
 });
 export type OrbitOrchestrator = typeof OrbitOrchestratorSchema.Type;
 
@@ -1753,7 +1452,6 @@ export const OrbitPhaseSchema = Schema.Struct({
   orbit_binding: Schema.optional(OrbitBindingSchema),
   agents: Schema.optional(Schema.Array(AgentRefInputSchema)),
   agent: Schema.optional(AgentRefInputSchema),
-  requires: Schema.optional(Schema.Array(OrbitPhaseTraitRequirementSchema)),
   notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
   telos: Schema.optional(Schema.String),
   real_world_change: Schema.optional(Schema.String),
@@ -1771,13 +1469,6 @@ export const NormalizedOrbitBindingSchema = Schema.Struct({
   ),
 });
 
-export const NormalizedOrbitPhaseTraitRequirementSchema = Schema.Struct({
-  all: Schema.Array(Schema.String),
-  min: Schema.optional(Schema.Number),
-});
-export type NormalizedOrbitPhaseTraitRequirement =
-  typeof NormalizedOrbitPhaseTraitRequirementSchema.Type;
-
 export const NormalizedOrbitPhaseContractSchema = OrbitPhaseContractSchema;
 
 export const NormalizedOrbitPhaseSchema = Schema.Struct({
@@ -1786,7 +1477,6 @@ export const NormalizedOrbitPhaseSchema = Schema.Struct({
   orbit_binding: Schema.optional(NormalizedOrbitBindingSchema),
   agent: Schema.optional(Schema.String),
   agents: Schema.Array(Schema.String),
-  requires: Schema.Array(NormalizedOrbitPhaseTraitRequirementSchema),
   notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
   telos: Schema.optional(Schema.String),
   real_world_change: Schema.optional(Schema.String),
@@ -1797,16 +1487,8 @@ export const NormalizedOrbitPhaseSchema = Schema.Struct({
 });
 export type NormalizedOrbitPhase = typeof NormalizedOrbitPhaseSchema.Type;
 
-export const NormalizedOrbitToolPermissionToolSchema = Schema.Struct({
-  ref: Schema.String,
-  logicalName: Schema.String,
-});
-export type NormalizedOrbitToolPermissionTool =
-  typeof NormalizedOrbitToolPermissionToolSchema.Type;
-
 export const NormalizedOrbitOrchestratorSchema = Schema.Struct({
   agent: Schema.String,
-  tools: Schema.Array(NormalizedOrbitToolPermissionToolSchema),
 });
 export type NormalizedOrbitOrchestrator =
   typeof NormalizedOrbitOrchestratorSchema.Type;
@@ -1865,7 +1547,6 @@ export const OrbitDefinitionSchema = Schema.Struct({
   parameters: Schema.optional(Schema.Array(OrbitParameterSchema)),
   phases: Schema.Array(OrbitPhaseSchema),
   orchestrator: Schema.optional(OrbitOrchestratorSchema),
-  tool_permissions: Schema.optional(Schema.Array(OrbitToolPermissionToolSchema)),
   pulsar_checkpoints: Schema.optional(Schema.Array(OrbitPulsarCheckpointSchema)),
   evolution: Schema.optional(Schema.String),
   body: Schema.optional(Schema.String),
@@ -1884,7 +1565,6 @@ export class Orbit extends Schema.Class<Orbit>("Orbit")({
   parameters: Schema.Array(OrbitParameterSchema),
   phases: Schema.Array(NormalizedOrbitPhaseSchema),
   orchestrator: Schema.optional(NormalizedOrbitOrchestratorSchema),
-  tool_permissions: Schema.Array(NormalizedOrbitToolPermissionToolSchema),
   pulsar_checkpoints: Schema.Array(OrbitPulsarCheckpointSchema),
   evolution: Schema.optional(Schema.String),
   body: Schema.String,

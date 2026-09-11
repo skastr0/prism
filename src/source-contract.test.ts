@@ -9,8 +9,6 @@ import {
   type SkillspaceSource,
   type SopSource,
   type ToolSource,
-  type ToolspaceSource,
-  type TraitSource,
 } from "./index.js";
 import {
   AgentSourceSchema,
@@ -20,8 +18,6 @@ import {
   SkillspaceSourceSchema,
   SopSourceSchema,
   ToolSourceSchema,
-  ToolspaceSourceSchema,
-  TraitSourceSchema,
 } from "./compile/sources.js";
 
 const STRICT_PARSE_OPTIONS = { onExcessProperty: "error" } as const;
@@ -46,48 +42,10 @@ describe("public source contracts", () => {
       identity: "builder",
       personality: "direct",
       model: { kind: "model-profile-ref", modelspace: "models", name: "default" },
-      traits: [
-        "committable",
-        {
-          kind: "trait-binding",
-          trait: "reviewable",
-          tools: {
-            submit_review: {
-              slots: { verdict: Schema.Struct({ summary: Schema.String }) },
-            },
-          },
-        },
-        {
-          trait: { kind: "trait-ref", name: "dispatchable" },
-          tools: {
-            submit_dispatch: {
-              slots: { payload: Schema.Struct({ summary: Schema.String }) },
-            },
-          },
-        },
-      ],
-      access: {
-        tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
-        toolGroups: [{ kind: "tool-group-ref", toolspace: "workspace", name: "repo" }],
-        skills: [{ kind: "skill-ref", name: "testing" }],
-      },
       skills: [{ kind: "skillspace-ref", skillspace: "global", name: "testing" }],
       color: "blue",
       targets: { opencode: { mode: "primary" } },
     } satisfies AgentSource;
-
-    const trait = {
-      name: "reviewable",
-      description: "Can review work.",
-      instructions: ["Read the diff.", "Report findings."],
-      access: { skills: [{ kind: "skill-ref", name: "testing" }] },
-      tools: { submit_review: { ref: "submit_review" } },
-      inject: { skills: [{ kind: "skill-ref", name: "code-reviewer" }] },
-      require: {
-        tools: ["submit_review"],
-        skills: [{ kind: "skill-ref", name: "testing" }],
-      },
-    } satisfies TraitSource;
 
     const tool = {
       name: "submit_review",
@@ -99,23 +57,6 @@ describe("public source contracts", () => {
         return { acknowledged: true };
       },
     } satisfies ToolSource;
-
-    const toolspace = {
-      name: "workspace",
-      description: "Workspace tools.",
-      tools: {
-        run_shell: {
-          description: "Run a shell command.",
-          targets: { opencode: { name: "bash" } },
-        },
-      },
-      groups: {
-        repo: {
-          description: "Repository inspection.",
-          tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
-        },
-      },
-    } satisfies ToolspaceSource;
 
     const modelspace = {
       name: "models",
@@ -150,7 +91,6 @@ describe("public source contracts", () => {
       phases: [{
         name: "Build",
         agents: [{ kind: "agent-ref", name: "builder" }],
-        requires: [{ all: [{ kind: "trait-ref", name: "committable" }], min: 1 }],
         notes: { Done: "Patch verified." },
         telos: "Implement the change.",
         real_world_change: "Code changes exist.",
@@ -168,9 +108,7 @@ describe("public source contracts", () => {
       }],
       orchestrator: {
         agent: { kind: "agent-ref", name: "builder" },
-        tools: [{ ref: "protocol:create_glyph", as: "create_glyph" }],
       },
-      tool_permissions: [{ ref: "protocol:submit_work", as: "submit_work" }],
       pulsar_checkpoints: [{ after: "Build", note: "Run Pulsar." }],
       signal_emitter: {
         destinations: [{
@@ -214,9 +152,7 @@ describe("public source contracts", () => {
     } satisfies SopSource;
 
     expectDecodes(AgentSourceSchema, agent);
-    expectDecodes(TraitSourceSchema, trait);
     expectDecodes(ToolSourceSchema, tool);
-    expectDecodes(ToolspaceSourceSchema, toolspace);
     expectDecodes(ModelspaceSourceSchema, modelspace);
     expectDecodes(SkillspaceSourceSchema, skillspace);
     const decodedOrbit = expectDecodes(OrbitSourceSchema, orbit);
@@ -267,18 +203,66 @@ describe("public source contracts", () => {
     });
   });
 
-  test("orbit tool permission bind is explicitly unsupported", () => {
-    const orbit = {
+  test("agent access and traits are rejected as unknown fields", () => {
+    const base = {
+      name: "builder",
+      description: "Builds scoped changes.",
+      identity: "builder",
+    };
+    expectRejects(AgentSourceSchema, { ...base, traits: ["committable"] });
+    expectRejects(AgentSourceSchema, {
+      ...base,
+      access: { skills: [{ kind: "skill-ref", name: "testing" }] },
+    });
+  });
+
+  test("orbit tool permissions and trait requirements are rejected", () => {
+    const base = {
       name: "delivery",
       description: "Delivery orbit.",
       phases: [{ name: "Build", agents: ["builder"] }],
-      tool_permissions: [{
-        ref: "protocol:submit_work",
-        as: "submit_work",
-        bind: { project_key: "prism" },
-      }],
     };
+    expectRejects(OrbitSourceSchema, {
+      ...base,
+      tool_permissions: [{ ref: "protocol:submit_work", as: "submit_work" }],
+    });
+    expectRejects(OrbitSourceSchema, {
+      ...base,
+      phases: [{ name: "Build", agents: ["builder"], requires: [{ all: ["committable"] }] }],
+    });
+    expectRejects(OrbitSourceSchema, {
+      ...base,
+      orchestrator: { agent: "builder", tools: [{ ref: "protocol:create_glyph" }] },
+    });
+  });
 
-    expectRejects(OrbitSourceSchema, orbit);
+  test("hook matchers accept any, native tool names, and canonical refs only", () => {
+    const base = {
+      name: "tool-guard",
+      description: "Guard a tool.",
+      event: hookEvent.toolBefore,
+      handle: () => Effect.succeed({ decision: "continue" as const }),
+    } satisfies HookSource<typeof hookEvent.toolBefore>;
+
+    expectDecodes(HookSourceSchema, {
+      ...base,
+      match: { tool: { kind: "hook-any-tool" } },
+    });
+    expectDecodes(HookSourceSchema, {
+      ...base,
+      match: { tool: { kind: "hook-native-tool", name: "Bash" } },
+    });
+    expectDecodes(HookSourceSchema, {
+      ...base,
+      match: { tool: { kind: "hook-canonical-tool", ref: "submit_review" } },
+    });
+    expectRejects(HookSourceSchema, {
+      ...base,
+      match: { tool: { kind: "hook-toolspace-tool", tool: "workspace/run_shell" } },
+    });
+    expectRejects(HookSourceSchema, {
+      ...base,
+      match: { tool: { kind: "hook-toolspace-group", group: "workspace#repo" } },
+    });
   });
 });

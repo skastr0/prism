@@ -29,7 +29,7 @@ const pathExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const createSyntheticOnlyFixture = async (options: {
+const createOwnedToolFixture = async (options: {
   readonly target?: "antigravity-cli" | "codex-cli" | "kimi-code";
   readonly pluginName?: string;
 } = {}): Promise<{
@@ -37,74 +37,42 @@ const createSyntheticOnlyFixture = async (options: {
   readonly projectRoot: string;
 }> => {
   const target = options.target ?? "codex-cli";
-  const pluginName = options.pluginName ?? "synthetic-cli-consumer";
+  const pluginName = options.pluginName ?? "cli-consumer";
   const root = await createTempRoot();
   const pluginRoot = join(root, "consumer");
   const projectRoot = join(root, "project");
-  const protocolRoot = join(pluginRoot, "deps", "protocol-core");
 
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify({
       name: pluginName,
       version: "0.1.0",
-      deps: { "protocol-core": "./deps/protocol-core" },
-      targets: { agents: [target] },
-    }, null, 2)}\n`,
-  );
-  await writeText(
-    join(protocolRoot, "plugin.json"),
-    `${JSON.stringify({
-      name: "protocol-core",
-      version: "0.1.0",
-      targets: { tools: [target] },
+      targets: { agents: [target], tools: [target] },
     }, null, 2)}\n`,
   );
   await writeText(
     join(pluginRoot, "identities", "worker.identity.md"),
-    `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the typed protocol wrapper.\n`,
+    `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the typed submission tool.\n`,
   );
   await writeText(
-    join(pluginRoot, "schemas", "worker-details.ts"),
-    `import { Schema } from "effect";\n\nexport const WorkerDetails = Schema.Struct({ confidence: Schema.Literal("low", "high") });\n`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "submittable.trait.ts"),
-    `export default {
-  name: "submittable",
-  description: "Can submit through a typed wrapper",
-  tools: { submit_work: { ref: "protocol-core:external-submit" } },
-  require: { tools: ["submit_work"] },
+    join(pluginRoot, "tools", "submit_work.tool.ts"),
+    `import { Schema } from "effect";
+
+export default {
+  name: "submit_work",
+  description: "Submit completed work through the CLI runtime",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle() { return { acknowledged: true }; },
 };
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { bindTrait } from "prism";
-import { WorkerDetails } from "../schemas/worker-details.ts";
-
-export default {
+    `export default {
   name: "worker",
-  description: "Synthetic-only CLI worker",
+  description: "CLI worker",
   identity: "worker",
-  traits: [bindTrait("submittable", {
-    tools: { submit_work: { slots: { details: WorkerDetails } } },
-  })],
-};
-`,
-  );
-  await writeText(
-    join(protocolRoot, "tools", "external-submit.tool.ts"),
-    `import { Schema } from "effect";
-import { schemaSlot } from "prism";
-
-export default {
-  name: "external-submit",
-  description: "Submit through the protocol core",
-  input: Schema.Struct({ summary: Schema.String }),
-  output: Schema.Struct({ acknowledged: Schema.Boolean }),
-  slots: { details: schemaSlot({ description: "Consumer details" }) },
-  async handle() { return { acknowledged: true }; },
 };
 `,
   );
@@ -139,7 +107,7 @@ afterEach(async () => {
 
 test("Antigravity production defaults keep an assigned canonical tool discoverable via a bundle-local CLI skill", async () => {
   const pluginName = "antigravity_cli.consumer";
-  const { pluginRoot, projectRoot } = await createSyntheticOnlyFixture({
+  const { pluginRoot, projectRoot } = await createOwnedToolFixture({
     target: "antigravity-cli",
     pluginName,
   });
@@ -177,8 +145,8 @@ test("Antigravity production defaults keep an assigned canonical tool discoverab
     );
     expect(pointer).toContain(`Load skill \`prism-tools-${pluginName}\``);
     const agent = await readFile(join(pluginRootOut, "agents", "worker.md"), "utf8");
-    expect(agent).toContain(`Load skill \`prism-tools-${pluginName}\``);
-    expect(agent).toContain(`prism tools invoke ${pluginName} <tool-name>`);
+    // Agents no longer carry per-agent tool grants; the plugin-level pointer
+    // rule is the discovery surface.
     expect(agent).not.toContain("mcp_");
     expect(await pathExists(join(pluginRootOut, "mcp_config.json"))).toBe(false);
   });
@@ -186,7 +154,7 @@ test("Antigravity production defaults keep an assigned canonical tool discoverab
 
 test("Kimi production defaults keep an assigned canonical tool discoverable via a bundle-local CLI skill", async () => {
   const pluginName = "kimi-cli-consumer";
-  const { pluginRoot, projectRoot } = await createSyntheticOnlyFixture({
+  const { pluginRoot, projectRoot } = await createOwnedToolFixture({
     target: "kimi-code",
     pluginName,
   });
@@ -224,8 +192,7 @@ test("Kimi production defaults keep an assigned canonical tool discoverable via 
       join(pluginRootOut, "skills", "prism-agent-worker", "SKILL.md"),
       "utf8",
     );
-    expect(role).toContain(`Load skill \`prism-tools-${pluginName}\``);
-    expect(role).toContain(`prism tools invoke ${pluginName} <tool-name>`);
+    expect(role).toContain("# worker");
     expect(role).not.toContain("Generated MCP tools for this role:");
     expect(role).not.toContain("mcp__");
 

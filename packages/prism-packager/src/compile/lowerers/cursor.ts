@@ -141,10 +141,7 @@ const renderHooksJson = async (
   const groupedHooks: Record<string, unknown[]> = {};
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => {
-      const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return cliToolNameForBinding(owner, binding);
-    },
+    (binding) => cliToolNameForBinding(binding),
   );
 
   for (const hook of hooks) {

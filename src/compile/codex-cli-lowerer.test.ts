@@ -138,7 +138,6 @@ test("codex-cli lowerer emits desired files plus config.toml regions", async () 
         targets: {
           rules: ["codex-cli"],
           skills: ["codex-cli"],
-          toolspaces: ["codex-cli"],
           hooks: ["codex-cli"],
         },
       },
@@ -158,27 +157,15 @@ test("codex-cli lowerer emits desired files plus config.toml regions", async () 
   );
 
   await writeText(
-    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `
-export default {
-  name: "workspace",
-  tools: {
-    shell: { targets: { "codex-cli": { name: "shell.command" } } },
-  },
-};
-`,
-  );
-
-  await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  match: { tool: hookTool.native("shell.command") },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const, additionalContext: "unsupported-pretool-context" }),
 };
 `,
@@ -187,13 +174,13 @@ export default {
   await writeText(
     join(pluginRoot, "hooks", "audit-shell-after.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "audit-shell-after",
   description: "Audit shell command responses",
   event: hookEvent.toolAfter,
-  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  match: { tool: hookTool.native("shell.command") },
   handle: (event) => Effect.succeed(event.tool.output?.ok ? { decision: "continue" as const } : { decision: "block" as const, message: "missing tool_response fallback" }),
 };
 `,
@@ -247,17 +234,6 @@ export default {
         model: { model: "gpt-5", effort: "high" },
         targetOverride: { "codex-cli": { model_verbosity: "medium", profile: "review" } },
         skills: [],
-        allowedSkills: [],
-        allowedTools: ["Shell"],
-        toolBindings: [
-          {
-            kind: "permission",
-            logicalName: "echo",
-            toolPluginName: "codex-mcp-fixture",
-            toolName: "echo",
-            toolSourcePath: toolPath,
-          },
-        ],
       },
     ],
     orbits: [],
@@ -284,7 +260,6 @@ export default {
   expect(agentToml?.content).toContain('profile = "review"');
   expect(agentToml?.content).not.toContain('\neffort = "high"');
   expect(agentToml?.content).not.toContain("temperature");
-  expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
   // Tools are CLI-only — no MCP server tables or wire-name comments on the agent.
   expect(agentToml?.content).not.toContain('mcp_servers');
   expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
@@ -651,9 +626,6 @@ test("codex-cli lowerer fails closed for unsupported model config keys", async (
           model: { model: "gpt-5", temperature: 0.2 },
           targetOverride: {},
           skills: [],
-          allowedSkills: [],
-          allowedTools: [],
-          toolBindings: [],
         },
       ],
       orbits: [],

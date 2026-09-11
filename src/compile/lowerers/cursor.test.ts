@@ -15,9 +15,6 @@ const agent = (name: string): ComposedAgent => ({
   model: { model: "composer-2.5-fast" },
   targetOverride: {},
   skills: [],
-  allowedSkills: [],
-  toolBindings: [],
-  allowedTools: [],
 });
 
 const writeSessionHook = async (): Promise<Hook> => {

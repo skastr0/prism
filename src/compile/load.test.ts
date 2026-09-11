@@ -83,7 +83,6 @@ const writeManifest = (pluginRoot: string): Promise<void> =>
           agents: ["opencode"],
           orbits: ["opencode"],
           tools: ["opencode"],
-          toolspaces: ["opencode"],
           modelspaces: ["opencode"],
           skillspaces: ["opencode"],
           hooks: ["opencode"],
@@ -97,23 +96,6 @@ const writeManifest = (pluginRoot: string): Promise<void> =>
 const writeSharedNounSources = async (pluginRoot: string): Promise<void> => {
   await writeManifest(pluginRoot);
   await writeText(
-    join(pluginRoot, "schemas.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export const VerdictSchema = Schema.Struct({ summary: Schema.String });
-`,
-  );
-  await writeText(
-    join(pluginRoot, "traits", "reviewable.trait.ts"),
-    `export default {
-  name: "reviewable",
-  description: "Can review work.",
-  instructions: ["Review the implementation."],
-  tools: { submit_review: { ref: "submit_review" } },
-};
-`,
-  );
-  await writeText(
     join(pluginRoot, "tools", "submit_review.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 
@@ -124,26 +106,6 @@ export default {
   output: Schema.Struct({ acknowledged: Schema.Boolean }),
   async handle() {
     return { acknowledged: true };
-  },
-};
-`,
-  );
-  await writeText(
-    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `export default {
-  name: "workspace",
-  description: "Workspace tool bindings.",
-  tools: {
-    run_shell: {
-      description: "Run a shell command.",
-      targets: { opencode: { name: "bash" } },
-    },
-  },
-  groups: {
-    repo: {
-      description: "Repository tools.",
-      tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
-    },
   },
 };
 `,
@@ -184,7 +146,6 @@ export default {
   phases: [{
     name: "Build",
     agents: [{ kind: "agent-ref", name: "builder" }],
-    requires: [{ all: [{ kind: "trait-ref", name: "reviewable" }] }],
   }],
 };
 `,
@@ -207,31 +168,6 @@ const agentSnapshot = (agent: Agent) => ({
   description: agent.description,
   identity: agent.identity,
   model: agent.model,
-  traits: agent.traits.map((trait) => ({
-    ref: trait.ref,
-    tools: Object.fromEntries(
-      Object.entries(trait.tools).map(([toolName, tool]) => [
-        toolName,
-        {
-          slots: Object.fromEntries(
-            Object.entries(tool.slots).map(([slotName, slot]) => [
-              slotName,
-              {
-                isSchema: Schema.isSchema(slot.schema),
-                source: {
-                  sourcePath: slot.source.sourcePath.endsWith("schemas.ts")
-                    ? "<plugin>/schemas.ts"
-                    : slot.source.sourcePath,
-                  exportName: slot.source.exportName,
-                },
-              },
-            ]),
-          ),
-        },
-      ]),
-    ),
-  })),
-  access: agent.access,
   skills: agent.skills,
   targets: agent.targets,
 });
@@ -239,23 +175,10 @@ const agentSnapshot = (agent: Agent) => ({
 const sourceFamilySnapshot = (registry: PluginRegistry) => {
   const tool = registry.tools.get("submit_review");
   const hook = registry.hooks.get("session-start");
-  const trait = registry.traits.get("reviewable");
-  const toolspace = registry.toolspaces.get("workspace");
   const modelspace = registry.modelspaces.get("models");
   const skillspace = registry.skillspaces.get("global");
   const orbit = registry.orbits.get("delivery");
   return {
-    trait: trait === undefined
-      ? undefined
-      : {
-        name: trait.name,
-        description: trait.description,
-        instructions: trait.instructions,
-        tools: trait.tools,
-        access: trait.access,
-        inject: trait.inject,
-        require: trait.require,
-      },
     tool: tool === undefined
       ? undefined
       : {
@@ -263,14 +186,6 @@ const sourceFamilySnapshot = (registry: PluginRegistry) => {
         description: tool.description,
         inputIsSchema: Schema.isSchema(tool.input),
         outputIsSchema: Schema.isSchema(tool.output),
-      },
-    toolspace: toolspace === undefined
-      ? undefined
-      : {
-        name: toolspace.name,
-        description: toolspace.description,
-        tools: toolspace.tools,
-        groups: toolspace.groups,
       },
     modelspace: modelspace === undefined
       ? undefined
@@ -292,7 +207,6 @@ const sourceFamilySnapshot = (registry: PluginRegistry) => {
         name: orbit.name,
         description: orbit.description,
         phases: orbit.phases,
-        tool_permissions: orbit.tool_permissions,
       },
     hook: hook === undefined
       ? undefined
@@ -308,23 +222,14 @@ test("loadPlugin loads default-exported noun source objects across source famili
   await writeSharedNounSources(pluginRoot);
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { VerdictSchema } from "../schemas";
-import type { AgentSource } from ${JSON.stringify(prismImportPath)};
+    `import type { AgentSource } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "builder",
   description: "Builds scoped changes.",
   identity: "builder",
   model: { kind: "model-profile-ref", modelspace: "models", name: "default" },
-  traits: [{
-    trait: { kind: "trait-ref", name: "reviewable" },
-    tools: { submit_review: { slots: { verdict: VerdictSchema } } },
-  }],
-  access: {
-    tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
-    toolGroups: [{ kind: "tool-group-ref", toolspace: "workspace", name: "repo" }],
-    skills: [{ kind: "skillspace-ref", skillspace: "global", name: "testing" }],
-  },
+  skills: [{ kind: "skillspace-ref", skillspace: "global", name: "testing" }],
 } satisfies AgentSource;
 `,
   );
@@ -334,96 +239,12 @@ export default {
 
   expect(agent).toBeDefined();
   expect(agent?.model).toBe("models/default");
-  expect(agent?.access).toEqual({
-    tools: ["workspace/run_shell"],
-    toolGroups: ["workspace#repo"],
-    skills: ["global/testing"],
-  });
-  expect(agent?.traits[0]?.ref).toBe("reviewable");
-  const slot = agent?.traits[0]?.tools.submit_review?.slots.verdict;
-  expect(slot && Schema.isSchema(slot.schema)).toBe(true);
-  expect(slot?.source).toEqual({
-    sourcePath: join(pluginRoot, "schemas.ts"),
-    exportName: "VerdictSchema",
-  });
-  expect(registry.traits.has("reviewable")).toBe(true);
+  expect(agent?.skills).toEqual(["global/testing"]);
   expect(registry.tools.has("submit_review")).toBe(true);
-  expect(registry.toolspaces.get("workspace")?.groups.repo?.tools).toEqual([
-    "workspace/run_shell",
-  ]);
   expect(registry.modelspaces.has("models")).toBe(true);
   expect(registry.skillspaces.has("global")).toBe(true);
   expect(registry.orbits.get("delivery")?.phases[0]?.agents).toEqual(["builder"]);
   expect(registry.hooks.get("session-start")?.event).toBe("session.start");
-});
-
-test("noun-first trait binding aliases preserve imported slot provenance", async () => {
-  const pluginRoot = await createTempRoot();
-  await writeManifest(pluginRoot);
-  await writeText(
-    join(pluginRoot, "schemas.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export const VerdictSchema = Schema.Struct({ summary: Schema.String });
-`,
-  );
-  await writeText(
-    join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { VerdictSchema } from "../schemas";
-
-const reviewBinding = {
-  trait: "reviewable",
-  tools: { submit_review: { slots: { verdict: VerdictSchema } } },
-};
-
-export default {
-  name: "builder",
-  description: "Builds scoped changes.",
-  identity: "builder",
-  traits: [reviewBinding],
-};
-`,
-  );
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const slot = registry.agents.get("builder")?.traits[0]?.tools.submit_review?.slots.verdict;
-
-  expect(slot && Schema.isSchema(slot.schema)).toBe(true);
-  expect(slot?.source).toEqual({
-    sourcePath: join(pluginRoot, "schemas.ts"),
-    exportName: "VerdictSchema",
-  });
-});
-
-test("noun-first trait bindings reject inline slot schemas with field provenance", async () => {
-  const pluginRoot = await createTempRoot();
-  await writeManifest(pluginRoot);
-  await writeText(
-    join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export default {
-  name: "builder",
-  description: "Builds scoped changes.",
-  identity: "builder",
-  traits: [{
-    trait: "reviewable",
-    tools: {
-      submit_review: {
-        slots: { verdict: Schema.Struct({ summary: Schema.String }) },
-      },
-    },
-  }],
-};
-`,
-  );
-
-  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
-  const failure = getFailure(exit);
-
-  expect(failure.name).toBe("SourceParseError");
-  expect(failure.message).toContain("traits[0].tools.submit_review.slots.verdict");
-  expect(failure.message).toContain("must be an imported schema identifier");
 });
 
 test("hook match.tool is accepted on tool.failure and rejected on non-tool events", async () => {
@@ -464,61 +285,61 @@ export default {
   expect(failure.message).toContain("tool.failure");
 });
 
+test("deleted trait and toolspace source files are not loaded", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeManifest(pluginRoot);
+  await writeText(
+    join(pluginRoot, "traits", "reviewable.trait.ts"),
+    `export default {
+  name: "reviewable",
+  description: "Should not load.",
+  tools: { submit_review: { ref: "submit_review" } },
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
+    `export default {
+  name: "workspace",
+  tools: { shell: { targets: { opencode: { name: "bash" } } } },
+};
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  expect(registry.tools.size).toBe(0);
+  expect("traits" in registry).toBe(false);
+  expect("toolspaces" in registry).toBe(false);
+});
+
 test("helper-based and noun-first agent sources produce equivalent normalized objects", async () => {
   const helperRoot = await createTempRoot();
   const nounRoot = await createTempRoot();
   await writeManifest(helperRoot);
   await writeManifest(nounRoot);
-  for (const pluginRoot of [helperRoot, nounRoot]) {
-    await writeText(
-      join(pluginRoot, "schemas.ts"),
-      `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export const VerdictSchema = Schema.Struct({ summary: Schema.String });
-`,
-    );
-  }
 
   await writeText(
     join(helperRoot, "agents", "builder.agent.ts"),
-    `import { bindTrait, modelProfileRef, skillspaceRef, toolGroupRef, toolRef } from ${JSON.stringify(prismImportPath)};
-import { VerdictSchema } from "../schemas";
+    `import { modelProfileRef, skillspaceRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "builder",
   description: "Builds scoped changes.",
   identity: "builder",
   model: modelProfileRef("models", "default"),
-  traits: [bindTrait("reviewable", {
-    tools: { submit_review: { slots: { verdict: VerdictSchema } } },
-  })],
-  access: {
-    tools: [toolRef("workspace", "run_shell")],
-    toolGroups: [toolGroupRef("workspace", "repo")],
-    skills: [skillspaceRef("global", "testing")],
-  },
+  skills: [skillspaceRef("global", "testing")],
   targets: { opencode: { mode: "primary" } },
 };
 `,
   );
   await writeText(
     join(nounRoot, "agents", "builder.agent.ts"),
-    `import { VerdictSchema } from "../schemas";
-
-export default {
+    `export default {
   name: "builder",
   description: "Builds scoped changes.",
   identity: "builder",
   model: { kind: "model-profile-ref", modelspace: "models", name: "default" },
-  traits: [{
-    trait: "reviewable",
-    tools: { submit_review: { slots: { verdict: VerdictSchema } } },
-  }],
-  access: {
-    tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
-    toolGroups: [{ kind: "tool-group-ref", toolspace: "workspace", name: "repo" }],
-    skills: [{ kind: "skillspace-ref", skillspace: "global", name: "testing" }],
-  },
+  skills: [{ kind: "skillspace-ref", skillspace: "global", name: "testing" }],
   targets: { opencode: { mode: "primary" } },
 };
 `,
@@ -539,17 +360,6 @@ test("helper-based and noun-first non-agent source families produce equivalent n
   await writeSharedNounSources(nounRoot);
 
   await writeText(
-    join(helperRoot, "traits", "reviewable.trait.ts"),
-    `
-export default {
-  name: "reviewable",
-  description: "Can review work.",
-  instructions: ["Review the implementation."],
-  tools: { submit_review: { ref: "submit_review" } },
-};
-`,
-  );
-  await writeText(
     join(helperRoot, "tools", "submit_review.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 
@@ -560,28 +370,6 @@ export default {
   output: Schema.Struct({ acknowledged: Schema.Boolean }),
   async handle() {
     return { acknowledged: true };
-  },
-};
-`,
-  );
-  await writeText(
-    join(helperRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { toolRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "workspace",
-  description: "Workspace tool bindings.",
-  tools: {
-    run_shell: {
-      description: "Run a shell command.",
-      targets: { opencode: { name: "bash" } },
-    },
-  },
-  groups: {
-    repo: {
-      description: "Repository tools.",
-      tools: [toolRef("workspace", "run_shell")],
-    },
   },
 };
 `,
@@ -618,7 +406,7 @@ export default {
   );
   await writeText(
     join(helperRoot, "orbits", "delivery.orbit.ts"),
-    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery",
@@ -626,7 +414,6 @@ export default {
   phases: [{
     name: "Build",
     agents: [agentRef("builder")],
-    requires: [{ all: [traitRef("reviewable")] }],
   }],
 };
 `,

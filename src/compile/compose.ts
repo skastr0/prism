@@ -4,13 +4,9 @@
  */
 
 import type { NormalizedOrbitPhase as OrbitPhase, NormalizedSopPhase as SopPhase } from "./sources.js";
-import type { ResolvedAgent, ResolvedContractBinding } from "./resolve.js";
+import type { ResolvedAgent } from "./resolve.js";
 
 export interface ComposedAgentManifestMetadata {
-  readonly traits: ReadonlyArray<{
-    readonly id: string;
-    readonly ref: string;
-  }>;
   readonly modelBindings: {
     readonly modelspace?: string;
     readonly profile?: string;
@@ -25,9 +21,6 @@ export interface ComposedAgent {
   readonly model: Record<string, unknown> | undefined;
   readonly targetOverride: Record<string, unknown>;
   readonly skills: ReadonlyArray<string>;
-  readonly allowedSkills: ReadonlyArray<string>;
-  readonly toolBindings: ReadonlyArray<ResolvedContractBinding>;
-  readonly allowedTools: ReadonlyArray<string>;
   readonly manifest?: ComposedAgentManifestMetadata;
 }
 
@@ -47,10 +40,6 @@ const manifestModelBindings = (
 };
 
 const manifestMetadata = (resolved: ResolvedAgent): ComposedAgentManifestMetadata => ({
-  traits: resolved.traits.map((trait) => ({
-    id: trait.canonicalId,
-    ref: trait.ref,
-  })),
   modelBindings: manifestModelBindings(resolved.agent.model),
 });
 
@@ -91,25 +80,6 @@ const renderSkillsSection = (resolved: ResolvedAgent): string | undefined => {
   return lines.join("\n");
 };
 
-const renderTraitInstructionsSection = (resolved: ResolvedAgent): string | undefined => {
-  const instructionBlocks = resolved.traits
-    .map((trait) => ({
-      name: trait.trait.name,
-      instructions: trait.trait.instructions,
-    }))
-    .filter((trait) => trait.instructions.length > 0);
-
-  if (instructionBlocks.length === 0) return undefined;
-
-  const lines: string[] = ["## Trait Instructions"];
-  for (const trait of instructionBlocks) {
-    lines.push("", `### ${trait.name}`, "");
-    lines.push(...trait.instructions);
-  }
-
-  return lines.join("\n");
-};
-
 const splitTitleAndBody = (body: string): { title: string; rest: string } => {
   const lines = body.split("\n");
   if (lines.length === 0 || !lines[0]!.startsWith("# ")) {
@@ -136,9 +106,6 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
   const skills = renderSkillsSection(resolved);
   if (skills) sections.push(skills);
 
-  const traitInstructions = renderTraitInstructionsSection(resolved);
-  if (traitInstructions) sections.push(traitInstructions);
-
   const body = sections.filter((section) => section.length > 0).join("\n\n");
 
   return {
@@ -149,9 +116,6 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
     model: resolved.resolvedModel,
     targetOverride: (resolved.agent.targets as Record<string, unknown>) || {},
     skills: resolved.skills,
-    allowedSkills: resolved.allowedSkills,
-    toolBindings: resolved.toolBindings,
-    allowedTools: resolved.allowedTools,
     manifest: manifestMetadata(resolved),
   };
 };

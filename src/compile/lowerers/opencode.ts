@@ -4,17 +4,14 @@
  * Takes a set of ComposedAgents + orbits and produces:
  *
  *   1. Per-agent markdown at <opencode-root>/agents/<name>.md with
- *      {name, description, permission?} frontmatter and the composed body.
- *      When the agent has generated tool bindings, the frontmatter's
- *      `permission` block enables only those generated tools and denies every
- *      other generated tool in the current inventory.
+ *      {name, description} frontmatter and the composed body.
  *
  *   2. Idempotent patches to <opencode-root>/opencode.json:
  *        - agent.<name> block (compiler-owned keys only; hand-authored keys preserved)
  *        - plugin array entry for the source-plugin-owned generated plugin
  *          module (for example
- *          `plugins/prism-generated-review-core/dist/server.mjs`) when any
- *          agent has tool bindings
+ *          `plugins/prism-generated-review-core/dist/server.mjs`) when the
+ *          plugin owns canonical tools or hooks
  *
  *   3. Per-orbit skills at <opencode-root>/skills/<name>/SKILL.md.
  *      Orbits remain source-language constructs; the generated skill is
@@ -38,7 +35,8 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
-import type { CanonicalTool, Contract, Hook, Orbit, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Sop } from "../sources.js";
+import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
@@ -67,15 +65,13 @@ import {
   removeTempBuildRoot,
   writeTempBuildFile,
 } from "../temp-build-fs.js";
-import {
-  bindingFromToolSource,
-  bindingsFromCanonicalTools,
-} from "../tool-bindings.js";
+import { bindingsFromCanonicalTools } from "../tool-bindings.js";
 import {
   nativeHookEventName,
   pushDesiredFile,
   renderGeneratedOrbitSkill,
   renderGeneratedSopSkill,
+  serializeSimpleFrontmatter,
   type LowerOutput,
 } from "./shared.js";
 import {
@@ -99,9 +95,6 @@ const COMPILER_OWNED_KEYS = [
 ] as const;
 
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
-type PermissionAction = "allow" | "ask" | "deny";
-type PermissionValue = PermissionAction | Record<string, PermissionAction>;
-
 export interface OpenCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
@@ -162,115 +155,11 @@ const rewriteGeneratedOpenCodeRuntimeImportsForBundle = (source: string): string
 // Agent markdown
 // ---------------------------------------------------------------------------
 
-interface SyntheticToolInventory {
-  /** All generated/assigned tool names across every agent. */
-  readonly allToolNames: ReadonlyArray<string>;
-  /** Tool names owned by each agent. */
-  readonly byAgent: ReadonlyMap<string, ReadonlyArray<string>>;
-}
-
-/**
- * Synthetic tool names are `<source-plugin>_<contract>`.
- * Permission-only tool names are `<tool-owner-plugin>_<tool>`.
- *
- * The plugin namespace keeps independently generated OpenCode plugins from
- * colliding inside the harness-global tool registry. Synthetic contract names
- * are derived from filled slot schema symbols, so two agents that share one
- * schema share one harness-visible tool instead of duplicating an identical
- * surface.
- */
-const buildInventory = (
-  sourcePluginName: string,
-  agents: ReadonlyArray<ComposedAgent>,
-  extraToolNames: ReadonlyArray<string> = [],
-): SyntheticToolInventory => {
-  const byAgent = new Map<string, string[]>();
-  const all = new Set<string>(extraToolNames);
-  for (const agent of agents) {
-    const own: string[] = [];
-    for (const binding of agent.toolBindings) {
-      const toolName = runtimeToolName(sourcePluginName, binding);
-      own.push(toolName);
-      all.add(toolName);
-      if (binding.kind === "synthetic") {
-        all.add(ownerToolName(binding.toolPluginName, binding.toolName));
-      }
-    }
-    byAgent.set(agent.name, own);
-  }
-  return {
-    allToolNames: [...all].sort((left, right) => left.localeCompare(right)),
-    byAgent,
-  };
-};
-
-const serializeFrontmatter = (
-  fm: Record<string, string>,
-  permissions: Record<string, PermissionValue>
-): string => {
-  const formatKey = (key: string): string => {
-    if (key === "*" || key.includes(":") || key.includes("#") || key.includes('"')) {
-      return JSON.stringify(key);
-    }
-    return key;
-  };
-
-  const keys = Object.keys(fm);
-  const lines = ["---"];
-  for (const key of keys) {
-    const value = fm[key];
-    if (value === undefined) continue;
-    if (value.includes(":") || value.includes("#") || value.includes('"')) {
-      const escaped = value.replace(/"/g, '\\"');
-      lines.push(`${key}: "${escaped}"`);
-    } else {
-      lines.push(`${key}: ${value}`);
-    }
-  }
-  const permissionKeys = Object.keys(permissions).sort();
-  if (permissionKeys.length > 0) {
-    lines.push("permission:");
-    for (const key of permissionKeys) {
-      const value = permissions[key];
-      if (!value) continue;
-      if (typeof value === "string") {
-        lines.push(`  ${formatKey(key)}: ${value}`);
-        continue;
-      }
-      lines.push(`  ${formatKey(key)}:`);
-      for (const pattern of Object.keys(value).sort()) {
-        const action = value[pattern];
-        if (!action) continue;
-        lines.push(`    ${formatKey(pattern)}: ${action}`);
-      }
-    }
-  }
-  lines.push("---");
-  return lines.join("\n");
-};
-
-const renderAgentMarkdown = (
-  agent: ComposedAgent,
-  inventory: SyntheticToolInventory
-): string => {
-  const own = new Set([
-    ...(inventory.byAgent.get(agent.name) ?? []),
-    ...agent.allowedTools,
-  ]);
-  const permissions: Record<string, PermissionValue> = {};
-  for (const tool of new Set([...inventory.allToolNames, ...agent.allowedTools])) {
-    permissions[tool] = own.has(tool) ? "allow" : "deny";
-  }
-  permissions.skill = {
-    "*": "deny",
-    ...Object.fromEntries(agent.allowedSkills.map((skill) => [skill, "allow"] as const)),
-  };
-  const frontmatter = serializeFrontmatter(
-    { name: agent.name, description: agent.description },
-    permissions
-  );
-  return `${frontmatter}\n\n${agent.body}\n`;
-};
+const renderAgentMarkdown = (agent: ComposedAgent): string =>
+  `${serializeSimpleFrontmatter({
+    name: agent.name,
+    description: agent.description,
+  })}\n\n${agent.body}\n`;
 
 // ---------------------------------------------------------------------------
 // opencode.json regions
@@ -334,23 +223,11 @@ interface MirrorFile {
   readonly content?: string;
 }
 
-type AdapterSpec =
-  | {
-      readonly kind: "tool";
-      readonly pluginName: string;
-      readonly toolName: string;
-      readonly sourcePath: string;
-    }
-  | {
-      readonly kind: "synthetic";
-      readonly pluginName: string;
-      readonly contractName: string;
-      /**
-       * Path to the contract file relative to the generated plugin's
-       * src/plugins/<pluginName>/ mirror — i.e. always starts with "contracts/".
-       */
-      readonly contractRelativePath: string;
-    };
+interface AdapterSpec {
+  readonly pluginName: string;
+  readonly toolName: string;
+  readonly sourcePath: string;
+}
 
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
 
@@ -419,13 +296,11 @@ const collectTsFilesInSubdirs = async (
 
 interface PluginMirrorPlanningState {
   readonly rootsByPlugin: Map<string, { pluginRoot: string }>;
-  readonly generatedFilesByPlugin: Map<string, Map<string, string>>;
   readonly entryFilesByPlugin: Map<string, Map<string, MirrorFile>>;
 }
 
 const createPluginMirrorPlanningState = (): PluginMirrorPlanningState => ({
   rootsByPlugin: new Map(),
-  generatedFilesByPlugin: new Map(),
   entryFilesByPlugin: new Map(),
 });
 
@@ -440,32 +315,6 @@ const addMirrorEntryFile = (
   state.entryFilesByPlugin.set(pluginName, pluginFiles);
 };
 
-const addGeneratedMirrorFile = (
-  state: PluginMirrorPlanningState,
-  contract: Contract,
-  file: { readonly relativePath: string; readonly content: string },
-): void => {
-  const pluginFiles =
-    state.generatedFilesByPlugin.get(contract.pluginName) ?? new Map<string, string>();
-  const existing = pluginFiles.get(file.relativePath);
-  if (existing && existing !== file.content) {
-    throw new Error(
-      `generated contract name collision at ${contract.pluginName}:${file.relativePath}`,
-    );
-  }
-  pluginFiles.set(file.relativePath, file.content);
-  state.generatedFilesByPlugin.set(contract.pluginName, pluginFiles);
-};
-
-const contractPluginRoot = (
-  sourcePluginName: string,
-  contract: Contract,
-  sourcePluginRoot?: string,
-): string =>
-  contract.pluginName === sourcePluginName && sourcePluginRoot
-    ? sourcePluginRoot
-    : dirname(dirname(contract.sourcePath));
-
 const ensureMirrorPluginRoot = (
   state: PluginMirrorPlanningState,
   pluginName: string,
@@ -476,64 +325,11 @@ const ensureMirrorPluginRoot = (
   }
 };
 
-const registerContractMirrorInputs = (
+const registerBindingMirrorEntry = (
   state: PluginMirrorPlanningState,
   sourcePluginName: string,
-  contract: Contract,
-  sourcePluginRoot?: string,
+  binding: ResolvedContractBinding,
 ): void => {
-  for (const file of contract.generatedFiles ?? []) {
-    addGeneratedMirrorFile(state, contract, file);
-  }
-
-  // Prefer the host plugin's root when the contract is attributed to it.
-  // contract.sourcePath traces back to the trait file's location, which
-  // may live in a *different* plugin from the contract's owning plugin
-  // (e.g. cross-plugin trait + slot binding). Using contract.sourcePath
-  // unconditionally would map the host plugin to the trait plugin's root.
-  ensureMirrorPluginRoot(
-    state,
-    contract.pluginName,
-    contractPluginRoot(sourcePluginName, contract, sourcePluginRoot),
-  );
-};
-
-const registerContractsMirrorInputs = (
-  state: PluginMirrorPlanningState,
-  sourcePluginName: string,
-  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
-  sourcePluginRoot?: string,
-): void => {
-  const contracts = bindings
-    .map((binding) => binding.contract)
-    .filter((contract): contract is Contract => contract !== undefined);
-  for (const contract of contracts) {
-    registerContractMirrorInputs(state, sourcePluginName, contract, sourcePluginRoot);
-  }
-};
-
-const registerSyntheticBindingMirrorEntry = (
-  state: PluginMirrorPlanningState,
-  binding: ComposedAgent["toolBindings"][number],
-): void => {
-  if (binding.kind !== "synthetic") return;
-  if (!binding.contract) {
-    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
-  }
-  if (binding.toolPluginName !== binding.contract.pluginName) return;
-
-  addMirrorEntryFile(state, binding.contract.pluginName, {
-    relativePath: `tools/${binding.toolName}.tool.ts`,
-    sourcePath: binding.toolSourcePath,
-  });
-};
-
-const registerSourceBindingMirrorEntry = (
-  state: PluginMirrorPlanningState,
-  sourcePluginName: string,
-  binding: ComposedAgent["toolBindings"][number],
-): void => {
-  if (binding.kind === "synthetic") return;
   if (binding.toolPluginName !== sourcePluginName) return;
 
   const toolsDir = dirname(binding.toolSourcePath);
@@ -547,14 +343,10 @@ const registerSourceBindingMirrorEntry = (
 const registerBindingMirrorEntries = (
   state: PluginMirrorPlanningState,
   sourcePluginName: string,
-  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
 ): void => {
   for (const binding of bindings) {
-    if (binding.kind === "synthetic") {
-      registerSyntheticBindingMirrorEntry(state, binding);
-    } else {
-      registerSourceBindingMirrorEntry(state, sourcePluginName, binding);
-    }
+    registerBindingMirrorEntry(state, sourcePluginName, binding);
   }
 };
 
@@ -580,13 +372,7 @@ const registerHookMirrorEntries = (
 const mirrorFilesForPlugin = (
   state: PluginMirrorPlanningState,
   pluginName: string,
-): Map<string, MirrorFile> => {
-  const files = new Map(state.entryFilesByPlugin.get(pluginName) ?? []);
-  for (const [relativePath, content] of state.generatedFilesByPlugin.get(pluginName) ?? []) {
-    files.set(relativePath, { relativePath, content });
-  }
-  return files;
-};
+): Map<string, MirrorFile> => new Map(state.entryFilesByPlugin.get(pluginName) ?? []);
 
 const buildRuntimeClosureMirrors = async (
   state: PluginMirrorPlanningState,
@@ -605,78 +391,34 @@ const buildRuntimeClosureMirrors = async (
   return mirrors;
 };
 
-const buildGeneratedOnlyMirrors = (
-  state: PluginMirrorPlanningState,
-  runtimeMirrors: ReadonlyArray<PluginMirror>,
-): PluginMirror[] => {
-  const mirroredPlugins = new Set(runtimeMirrors.map((mirror) => mirror.pluginName));
-  const mirrors: PluginMirror[] = [];
-  for (const [pluginName, files] of state.generatedFilesByPlugin) {
-    if (mirroredPlugins.has(pluginName)) continue;
-    mirrors.push({
-      pluginName,
-      files: [...files.entries()].map(([relativePath, content]) => ({
-        relativePath,
-        content,
-      })),
-    });
-  }
-  return mirrors;
-};
-
-const buildPluginMirrors = async (
-  state: PluginMirrorPlanningState,
-): Promise<PluginMirror[]> => {
-  const runtimeMirrors = await buildRuntimeClosureMirrors(state);
-  return [
-    ...runtimeMirrors,
-    ...buildGeneratedOnlyMirrors(state, runtimeMirrors),
-  ];
-};
-
 const planPluginMirrors = async (
   sourcePluginName: string,
-  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
   hookRegistrations: ReadonlyArray<HookRegistration> = [],
   sourcePluginRoot?: string,
 ): Promise<PluginMirror[]> => {
   const state = createPluginMirrorPlanningState();
-  registerContractsMirrorInputs(state, sourcePluginName, bindings, sourcePluginRoot);
   registerBindingMirrorEntries(state, sourcePluginName, bindings);
   registerHookMirrorEntries(state, sourcePluginName, hookRegistrations, sourcePluginRoot);
-  return buildPluginMirrors(state);
+  return buildRuntimeClosureMirrors(state);
 };
 
 const planAdaptersForBindings = (
   sourcePluginName: string,
-  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
 ): AdapterSpec[] => {
   const seen = new Set<string>();
   const specs: AdapterSpec[] = [];
   for (const binding of bindings) {
-    if (binding.kind === "permission" && binding.toolPluginName !== sourcePluginName) {
-      continue;
-    }
-    const key = binding.kind === "permission"
-      ? `tool/${binding.toolPluginName}/${binding.toolName}`
-      : `synthetic/${binding.contract!.pluginName}/${binding.contract!.name}`;
+    if (binding.toolPluginName !== sourcePluginName) continue;
+    const key = `tool/${binding.toolPluginName}/${binding.toolName}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (binding.kind === "permission") {
-      specs.push({
-        kind: "tool",
-        pluginName: binding.toolPluginName,
-        toolName: binding.toolName,
-        sourcePath: binding.toolSourcePath,
-      });
-    } else {
-      specs.push({
-        kind: "synthetic",
-        pluginName: binding.contract!.pluginName,
-        contractName: binding.contract!.name,
-        contractRelativePath: `contracts/${binding.contract!.name}.contract`,
-      });
-    }
+    specs.push({
+      pluginName: binding.toolPluginName,
+      toolName: binding.toolName,
+      sourcePath: binding.toolSourcePath,
+    });
   }
   return specs;
 };
@@ -773,7 +515,7 @@ const rewriteHookAuthoringImports = (
   source: string,
   bridgeImport: string,
 ): string => {
-  const helperNames = new Set(["defineHook", "hookEvent", "hookTool", "hookMatcher", "toolRef"]);
+  const helperNames = new Set(["defineHook", "hookEvent", "hookTool", "hookMatcher"]);
   return source.replace(
     /^\s*import\s+\{([^}]+)\}\s+from\s+(["'][^"']+["']);\s*\n/gm,
     (match, specifiers: string, originalSource: string) => {
@@ -796,34 +538,22 @@ const rewriteHookAuthoringImports = (
   );
 };
 
-const GENERATED_HOOK_AUTHORING_BRIDGE = `// GENERATED by prism — do not edit.\nexport const defineHook = (hook) => hook;\nexport const hookEvent = {\n  toolBefore: "tool.before",\n  toolAfter: "tool.after",\n  promptSubmit: "prompt.submit",\n  permissionRequest: "permission.request",\n  sessionStart: "session.start",\n  sessionEnd: "session.end",\n};\nexport const toolRef = (first, second, third) => third === undefined\n  ? { kind: "tool-ref", toolspace: first, name: second }\n  : { kind: "tool-ref", plugin: first, toolspace: second, name: third };\nexport const hookTool = {\n  any: () => ({ kind: "hook-any-tool" }),\n  tool: (tool) => ({ kind: "hook-toolspace-tool", tool }),\n  group: (group) => ({ kind: "hook-toolspace-group", group }),\n  canonical: (ref) => ({ kind: "hook-canonical-tool", ref }),\n};\nexport const hookMatcher = { tool: hookTool };\n`;
+const GENERATED_HOOK_AUTHORING_BRIDGE = `// GENERATED by prism — do not edit.\nexport const defineHook = (hook) => hook;\nexport const hookEvent = {\n  toolBefore: "tool.before",\n  toolAfter: "tool.after",\n  promptSubmit: "prompt.submit",\n  permissionRequest: "permission.request",\n  sessionStart: "session.start",\n  sessionEnd: "session.end",\n};\nexport const hookTool = {\n  any: () => ({ kind: "hook-any-tool" }),\n  native: (name) => ({ kind: "hook-native-tool", name }),\n  canonical: (ref) => ({ kind: "hook-canonical-tool", ref }),\n};\nexport const hookMatcher = { tool: hookTool };\n`;
 
 const renderToolAdapter = (
   spec: AdapterSpec,
 ): string => {
   // adapter is at: src/adapters/<pluginName>/<name>.adapter.ts
-  // synthetic contract is at: src/plugins/<pluginName>/contracts/<name>.contract.ts
   // owner tool is at: src/plugins/<pluginName>/tools/<toolName>.tool.ts
   // bridge is at:   src/runtime/schema-bridge.ts
-  const surfaceImport =
-    spec.kind === "synthetic"
-      ? `../../plugins/${spec.pluginName}/${spec.contractRelativePath}`
-      : `../../plugins/${spec.pluginName}/tools/${spec.toolName}.tool`;
+  const surfaceImport = `../../plugins/${spec.pluginName}/tools/${spec.toolName}.tool`;
   const bridgeImport = `../../runtime/schema-bridge`;
   const lines: string[] = [];
   lines.push(`// GENERATED by prism — do not edit.`);
-  lines.push(
-    spec.kind === "synthetic"
-      ? `// Adapter for synthetic tool '${spec.pluginName}:${spec.contractName}'.`
-      : `// Adapter for tool '${spec.pluginName}:${spec.toolName}'.`,
-  );
+  lines.push(`// Adapter for tool '${spec.pluginName}:${spec.toolName}'.`);
   lines.push("");
   lines.push(`import { tool, type ToolContext } from "@opencode-ai/plugin";`);
-  if (spec.kind === "synthetic") {
-    lines.push(`import * as surface from "${surfaceImport}";`);
-  } else {
-    lines.push(`import surface from "${surfaceImport}";`);
-  }
+  lines.push(`import surface from "${surfaceImport}";`);
   lines.push(
     `import { toolArgsFromSchema, decodeInput, type ToolRuntimeContext } from "${bridgeImport}";`,
   );
@@ -1021,37 +751,26 @@ const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistratio
 };
 
 const renderGeneratedServerTsForBindings = (
-  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
-  sourcePluginName: string,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
   pluginId: string,
   adapters: ReadonlyArray<AdapterSpec>,
   hookRegistrations: ReadonlyArray<HookRegistration>,
 ): string => {
   const importEntries = adapters.map((a, idx) => {
-    const name = a.kind === "synthetic" ? a.contractName : a.toolName;
-    const ident = `adapter_${idx}_${a.pluginName.replace(/[^a-zA-Z0-9_]/g, "_")}_${name.replace(/[^a-zA-Z0-9_]/g, "_")}`;
-    const importPath = `./adapters/${a.pluginName}/${name}.adapter`;
+    const ident = `adapter_${idx}_${a.pluginName.replace(/[^a-zA-Z0-9_]/g, "_")}_${a.toolName.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    const importPath = `./adapters/${a.pluginName}/${a.toolName}.adapter`;
     return { ident, importPath, spec: a };
   });
 
   const toolEntries: string[] = [];
   const emittedToolNames = new Set<string>();
   for (const binding of bindings) {
-    const toolName = runtimeToolName(sourcePluginName, binding);
-    const entry = importEntries.find((e) => {
-      if (binding.kind === "permission") {
-        return (
-          e.spec.kind === "tool" &&
-          e.spec.pluginName === binding.toolPluginName &&
-          e.spec.toolName === binding.toolName
-        );
-      }
-      return (
-        e.spec.kind === "synthetic" &&
-        e.spec.pluginName === binding.contract!.pluginName &&
-        e.spec.contractName === binding.contract!.name
-      );
-    });
+    const toolName = runtimeToolName(binding);
+    const entry = importEntries.find(
+      (e) =>
+        e.spec.pluginName === binding.toolPluginName &&
+        e.spec.toolName === binding.toolName,
+    );
     if (!entry) continue;
     if (emittedToolNames.has(toolName)) continue;
     emittedToolNames.add(toolName);
@@ -1106,29 +825,17 @@ const getSchemaBridgeSource = async (): Promise<string> => {
 const pluginRootFromToolSource = (toolSourcePath: string): string =>
   dirname(dirname(toolSourcePath));
 
-const bindingsFromPluginToolFiles = async (
-  pluginName: string,
-  pluginRoot: string,
-): Promise<ReadonlyArray<ComposedAgent["toolBindings"][number]>> => {
-  const toolsRoot = join(pluginRoot, "tools");
-  const entries = await listDirRecursive(toolsRoot);
-  return entries
-    .filter((entry) => !entry.includes("/") && entry.endsWith(".tool.ts"))
-    .map((entry) => bindingFromToolSource(pluginName, join(toolsRoot, entry)))
-    .sort((left, right) => left.toolName.localeCompare(right.toolName));
-};
-
 const planRuntimePluginMirrors = async (
   pluginName: string,
   pluginRoot: string,
-  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
 ): Promise<PluginMirror> => {
   const entries = [
     ...bindings.map((binding): MirrorFile => ({
       sourcePath: binding.toolSourcePath,
       relativePath: `tools/${binding.toolName}.tool.ts`,
     })),
-    ...(await collectTsFilesInSubdirs(pluginRoot, ["contracts", "schemas"])),
+    ...(await collectTsFilesInSubdirs(pluginRoot, ["schemas"])),
   ];
   return {
     pluginName,
@@ -1212,11 +919,10 @@ const expandBundleMirrors = async (
 const writeTempGeneratedPluginSources = async (options: {
   readonly tempRoot: string;
   readonly pluginId: string;
-  readonly runtimeToolNamespace: string;
   readonly mirrors: ReadonlyArray<PluginMirror>;
   readonly importPluginRoots: ReadonlyMap<string, string>;
   readonly adapters: ReadonlyArray<AdapterSpec>;
-  readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
+  readonly serverBindings: ReadonlyArray<ResolvedContractBinding>;
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
 }): Promise<string> => {
     await writeTempBuildFile(
@@ -1258,10 +964,9 @@ const writeTempGeneratedPluginSources = async (options: {
   }
 
   for (const spec of options.adapters) {
-    const adapterName = spec.kind === "synthetic" ? spec.contractName : spec.toolName;
     await writeTempBuildFile(
       options.tempRoot,
-      `adapters/${spec.pluginName}/${adapterName}.adapter.ts`,
+      `adapters/${spec.pluginName}/${spec.toolName}.adapter.ts`,
       rewriteGeneratedOpenCodeRuntimeImportsForBundle(renderToolAdapter(spec)),
     );
   }
@@ -1272,7 +977,6 @@ const writeTempGeneratedPluginSources = async (options: {
     rewriteGeneratedOpenCodeRuntimeImportsForBundle(
       renderGeneratedServerTsForBindings(
         options.serverBindings,
-        options.runtimeToolNamespace,
         options.pluginId,
         options.adapters,
         options.hookRegistrations ?? [],
@@ -1300,11 +1004,10 @@ const normalizeBuiltOpenCodeGeneratedPluginBundle = stripBundlerPathComments;
 const buildGeneratedOpenCodePluginBundle = async (options: {
   readonly root: string;
   readonly pluginId: string;
-  readonly runtimeToolNamespace: string;
   readonly mirrors: ReadonlyArray<PluginMirror>;
   readonly importPluginRoots: ReadonlyMap<string, string>;
   readonly adapters: ReadonlyArray<AdapterSpec>;
-  readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
+  readonly serverBindings: ReadonlyArray<ResolvedContractBinding>;
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
 }): Promise<string> => {
   const tempRootPrefix = ["prism", "opencode", "plugin", ""].join("-");
@@ -1314,7 +1017,6 @@ const buildGeneratedOpenCodePluginBundle = async (options: {
     const entryPath = await writeTempGeneratedPluginSources({
       tempRoot,
       pluginId: options.pluginId,
-      runtimeToolNamespace: options.runtimeToolNamespace,
       mirrors,
       importPluginRoots: options.importPluginRoots,
       adapters: options.adapters,
@@ -1350,11 +1052,10 @@ const buildGeneratedOpenCodePluginBundle = async (options: {
 const planGeneratedPluginFiles = async (options: {
   readonly root: string;
   readonly pluginId: string;
-  readonly runtimeToolNamespace: string;
   readonly mirrors: ReadonlyArray<PluginMirror>;
   readonly importPluginRoots: ReadonlyMap<string, string>;
   readonly adapters: ReadonlyArray<AdapterSpec>;
-  readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
+  readonly serverBindings: ReadonlyArray<ResolvedContractBinding>;
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
   readonly plugin: string;
 }): Promise<DesiredFile[]> => [
@@ -1405,21 +1106,11 @@ const planOpenCodeHookRegistrations = async (
   return registrations;
 };
 
-type ToolBinding = ComposedAgent["toolBindings"][number];
-
-interface OwnerRuntimePlugin {
-  readonly pluginRoot: string;
-  readonly bindings: ReadonlyArray<ToolBinding>;
-}
-
 interface OpenCodeRuntimeContext {
   readonly hookRegistrations: ReadonlyArray<HookRegistration>;
   readonly hasAnyHook: boolean;
-  readonly referencedBindings: ReadonlyArray<ToolBinding>;
+  readonly bindings: ReadonlyArray<ResolvedContractBinding>;
   readonly hasAnyTool: boolean;
-  readonly sourceCanonicalToolBindings: ReadonlyArray<ToolBinding>;
-  readonly ownerPlugins: ReadonlyMap<string, OwnerRuntimePlugin>;
-  readonly inventory: SyntheticToolInventory;
   readonly ownedGeneratedPluginId: string;
 }
 
@@ -1428,77 +1119,32 @@ interface GeneratedRuntimePluginState {
   readonly desiredGeneratedPluginNames: Set<string>;
 }
 
-const collectOwnerRuntimePlugins = async (
-  input: LowerInput,
-  referencedBindings: ReadonlyArray<ToolBinding>,
-): Promise<ReadonlyMap<string, OwnerRuntimePlugin>> => {
-  const ownerPluginRoots = new Map<string, string>();
-  for (const binding of referencedBindings) {
-    if (binding.toolPluginName === input.target.sourcePluginName) continue;
-    ownerPluginRoots.set(
-      binding.toolPluginName,
-      pluginRootFromToolSource(binding.toolSourcePath),
-    );
-  }
-
-  const ownerPlugins = new Map<string, OwnerRuntimePlugin>();
-  for (const [pluginName, pluginRoot] of [...ownerPluginRoots.entries()].sort(
-    ([left], [right]) => left.localeCompare(right),
-  )) {
-    ownerPlugins.set(pluginName, {
-      pluginRoot,
-      bindings: await bindingsFromPluginToolFiles(pluginName, pluginRoot),
-    });
-  }
-  return ownerPlugins;
-};
-
 const collectOpenCodeRuntimeContext = async (
   input: LowerInput,
 ): Promise<OpenCodeRuntimeContext> => {
   const hookRegistrations = await planOpenCodeHookRegistrations(input.hooks ?? [], input.registry);
-  const referencedBindings = input.agents.flatMap((agent) => agent.toolBindings);
-  const sourceCanonicalToolBindings = bindingsFromCanonicalTools(
+  const bindings = bindingsFromCanonicalTools(
     input.target.sourcePluginName,
     input.tools,
   );
-  const ownerPlugins = await collectOwnerRuntimePlugins(input, referencedBindings);
-  const generatedOwnerToolNames = [
-    ...sourceCanonicalToolBindings.map((binding) =>
-      ownerToolName(binding.toolPluginName, binding.toolName),
-    ),
-    ...[...ownerPlugins.values()].flatMap((owner) =>
-      owner.bindings.map((binding) =>
-        ownerToolName(binding.toolPluginName, binding.toolName),
-      ),
-    ),
-  ];
 
   return {
     hookRegistrations,
     hasAnyHook: hookRegistrations.length > 0,
-    referencedBindings,
-    hasAnyTool: referencedBindings.length > 0,
-    sourceCanonicalToolBindings,
-    ownerPlugins,
-    inventory: buildInventory(
-      input.target.sourcePluginName,
-      input.agents,
-      generatedOwnerToolNames,
-    ),
+    bindings,
+    hasAnyTool: bindings.length > 0,
     ownedGeneratedPluginId: generatedPluginId(input.target),
   };
 };
 
 const planAgentMarkdownWrites = (
   input: LowerInput,
-  inventory: SyntheticToolInventory,
   files: DesiredFile[],
 ): void => {
   for (const agent of input.agents) {
     pushDesiredFile(files, {
       targetPath: agentMdPath(input.target, agent.name),
-      content: renderAgentMarkdown(agent, inventory),
+      content: renderAgentMarkdown(agent),
       plugin: input.target.sourcePluginName,
     });
   }
@@ -1538,7 +1184,7 @@ const planOrbitSkillWrites = (
         orbit,
         registry: input.registry,
         trailingNewline: false,
-        renderFrontmatter: (values) => serializeFrontmatter(values, {}),
+        renderFrontmatter: (values) => serializeSimpleFrontmatter(values),
       }),
       plugin: input.target.sourcePluginName,
     });
@@ -1566,7 +1212,7 @@ const planSopSkillWrites = (
       content: renderGeneratedSopSkill({
         sop,
         trailingNewline: false,
-        renderFrontmatter: (values) => serializeFrontmatter(values, {}),
+        renderFrontmatter: (values) => serializeSimpleFrontmatter(values),
       }),
       plugin: input.target.sourcePluginName,
     });
@@ -1597,7 +1243,6 @@ const rememberDesiredGeneratedPlugin = (
 
 const collectGeneratedPluginImportRoots = (
   input: LowerInput,
-  runtime: OpenCodeRuntimeContext,
   mirrors: ReadonlyArray<PluginMirror>,
   sourceCanonicalMirror?: PluginMirror,
 ): Map<string, string> => {
@@ -1606,9 +1251,6 @@ const collectGeneratedPluginImportRoots = (
     ? mergePluginMirrors([...mirrors, sourceCanonicalMirror])
     : mirrors) {
     if (mirror.pluginRoot) importPluginRoots.set(mirror.pluginName, mirror.pluginRoot);
-  }
-  for (const [pluginName, owner] of runtime.ownerPlugins) {
-    importPluginRoots.set(pluginName, owner.pluginRoot);
   }
   for (const [pluginName, pluginRoot] of collectRegistryDependencyPluginRoots(input.registry)) {
     if (!importPluginRoots.has(pluginName)) importPluginRoots.set(pluginName, pluginRoot);
@@ -1624,7 +1266,7 @@ const planSourceGeneratedRuntimePlugin = async (
     readonly mirrors: ReadonlyArray<PluginMirror>;
     readonly sourceCanonicalMirror?: PluginMirror;
     readonly importPluginRoots: ReadonlyMap<string, string>;
-    readonly sourceRuntimeBindings: ReadonlyArray<ToolBinding>;
+    readonly sourceRuntimeBindings: ReadonlyArray<ResolvedContractBinding>;
   },
 ): Promise<DesiredFile[]> => {
   if (options.sourceRuntimeBindings.length > 0 || runtime.hasAnyHook) {
@@ -1632,7 +1274,6 @@ const planSourceGeneratedRuntimePlugin = async (
     return planGeneratedPluginFiles({
       root: generatedPluginRoot(input.target),
       pluginId: runtime.ownedGeneratedPluginId,
-      runtimeToolNamespace: input.target.sourcePluginName,
       mirrors: options.sourceCanonicalMirror
         ? mergePluginMirrors([...options.mirrors, options.sourceCanonicalMirror])
         : options.mirrors,
@@ -1650,98 +1291,40 @@ const planSourceGeneratedRuntimePlugin = async (
   return [];
 };
 
-/**
- * Under the per-plugin one-writer scheme, a consumer that only *references*
- * a foreign owner's canonical tool must never re-materialize that owner's
- * OpenCode bundle file itself — this is the same "consumer emits no server"
- * law the claude-code, kimi-code, and antigravity-cli lowerers already
- * enforce (see e.g. kimi-code.ts's `planMcpServer`: "a consumer ... gets NO
- * server entry here: the foreign owner's own compile carries its own
- * server"). The owner's own compile (whenever it targets OpenCode) is the
- * sole producer of `prism-generated-<owner>/dist/server.mjs`.
- *
- * A prior version of this function (PQ-162) had every consumer independently
- * re-bundle that same owner file, on the theory that the projection is a
- * pure, deterministic function of the owner's own `tools/` directory and so
- * every consumer (and the owner's own compile) converges on identical bytes
- * at the identical path. That theory holds only within a single, static
- * dependency snapshot: any environment drift between the moment one
- * consumer's compile ran and the moment another plugin's compile (or the
- * owner's own) ran — e.g. a bumped `effect` version baked into the bundle —
- * produces byte-different content attributed to the same path, which
- * `assertNoForeignOwnerConflicts` (src/sync/plan.ts) correctly refuses to
- * silently last-writer-wins. A real multi-consumer, multi-day corpus
- * (prism-plugins) hit exactly this: N consumers of the same owner each
- * re-emitted a "converged" bundle that, in practice, drifted, wedging every
- * subsequent refresh behind a PathConflictError. Emitting nothing here
- * removes the redundant producer instead of trying to keep it convergent.
- *
- * The consumer still needs its own `plugin.<id>` array entry and
- * `permission."<ns>_*"` deny key (`planGeneratedPluginConfigRegions`) so its
- * own agents can allowlist the owner's wire-name tools — that bookkeeping is
- * preserved via `rememberDesiredGeneratedPlugin`. Only the file is dropped.
- */
-const rememberOwnerGeneratedRuntimePlugins = (
-  runtime: OpenCodeRuntimeContext,
-  state: GeneratedRuntimePluginState,
-): void => {
-  for (const pluginName of runtime.ownerPlugins.keys()) {
-    rememberDesiredGeneratedPlugin(state, pluginName);
-  }
-};
-
 const planGeneratedRuntimePlugins = async (
   input: LowerInput,
   runtime: OpenCodeRuntimeContext,
   state: GeneratedRuntimePluginState,
 ): Promise<DesiredFile[]> => {
-  if (
-    !runtime.hasAnyTool &&
-    runtime.sourceCanonicalToolBindings.length === 0 &&
-    !runtime.hasAnyHook
-  ) {
+  if (!runtime.hasAnyTool && !runtime.hasAnyHook) {
     return [];
   }
 
   const mirrors = await planPluginMirrors(
     input.target.sourcePluginName,
-    runtime.referencedBindings,
+    runtime.bindings,
     runtime.hookRegistrations,
     input.registry?.pluginPath,
   );
-  const ownedRuntimeBindings = runtime.referencedBindings.filter(
-    (binding) =>
-      binding.kind === "synthetic" ||
-      binding.toolPluginName === input.target.sourcePluginName,
-  );
-  const sourceRuntimeBindings = [
-    ...runtime.sourceCanonicalToolBindings,
-    ...ownedRuntimeBindings,
-  ];
   const sourceCanonicalMirror =
-    runtime.sourceCanonicalToolBindings.length > 0
+    runtime.bindings.length > 0
       ? await planRuntimePluginMirrors(
           input.target.sourcePluginName,
-          pluginRootFromToolSource(
-            runtime.sourceCanonicalToolBindings[0]!.toolSourcePath,
-          ),
-          runtime.sourceCanonicalToolBindings,
+          pluginRootFromToolSource(runtime.bindings[0]!.toolSourcePath),
+          runtime.bindings,
         )
       : undefined;
   const importPluginRoots = collectGeneratedPluginImportRoots(
     input,
-    runtime,
     mirrors,
     sourceCanonicalMirror,
   );
-
-  rememberOwnerGeneratedRuntimePlugins(runtime, state);
 
   return planSourceGeneratedRuntimePlugin(input, runtime, state, {
     mirrors,
     sourceCanonicalMirror,
     importPluginRoots,
-    sourceRuntimeBindings,
+    sourceRuntimeBindings: runtime.bindings,
   });
 };
 
@@ -1761,14 +1344,6 @@ const planGeneratedPluginConfigRegions = (
         value: generatedPluginEntryForName(input.target, pluginName),
         plugin: input.target.sourcePluginName,
       },
-      {
-        kind: "json-key",
-        targetPath: jsonTarget,
-        regionKey: `permission.${generatedPluginIdForName(pluginName)}`,
-        jsonPath: ["permission", generatedToolDenyPatternForName(pluginName)],
-        value: "deny",
-        plugin: input.target.sourcePluginName,
-      },
     ]);
 
 export const planLowering = async (
@@ -1779,7 +1354,7 @@ export const planLowering = async (
   const generatedRuntimeState = createGeneratedRuntimePluginState();
   const files: DesiredFile[] = [];
 
-  planAgentMarkdownWrites(input, runtime.inventory, files);
+  planAgentMarkdownWrites(input, files);
   planOrbitSkillWrites(input, files);
   planSopSkillWrites(input, files);
   files.push(...(await planGeneratedRuntimePlugins(input, runtime, generatedRuntimeState)));

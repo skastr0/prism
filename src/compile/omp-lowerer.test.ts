@@ -3,8 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import matter from "gray-matter";
+import { Schema } from "effect";
 import { planLowering } from "./lowerers/omp.js";
 import type { ComposedAgent } from "./compose.js";
+import { CanonicalTool } from "./sources.js";
 
 const tempRoots: string[] = [];
 
@@ -63,23 +65,25 @@ test("OMP lowerer emits native agents, skills, and extension without Pi surfaces
       },
     },
     skills: ["grounded"],
-    allowedSkills: ["grounded"],
-    allowedTools: ["read"],
-    toolBindings: [
-      {
-        kind: "permission",
-        logicalName: "owned",
-        toolPluginName: "omp-plugin",
-        toolName: "owned",
-        toolSourcePath: ownedToolPath,
-      },
-    ],
   };
+
+  const ownedTool = new CanonicalTool({
+    name: "owned",
+    sourcePath: ownedToolPath,
+    description: "Owned tool for OMP.",
+    input: Schema.Struct({}),
+    output: Schema.Struct({}),
+    slots: {},
+    async handle() {
+      return {};
+    },
+  });
 
   const lowered = await planLowering({
     agents: [agent],
     orbits: [],
     sops: [],
+    tools: [ownedTool],
     skills: [{ name: "grounded", sourcePath: skillPath }],
     hooks: [],
     registry: undefined,
@@ -101,7 +105,6 @@ test("OMP lowerer emits native agents, skills, and extension without Pi surfaces
     name: "builder",
     model: ["gpt-5.6-luna", "synthetic/hf:moonshotai/Kimi-K2.6"],
     thinkingLevel: "high",
-    tools: ["omp_plugin_owned", "read"],
     spawns: ["reviewer"],
     autoloadSkills: ["grounded"],
     readSummarize: true,

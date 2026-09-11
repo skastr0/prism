@@ -79,8 +79,6 @@ import {
   buildWorkflowCatalog,
   lookupCatalogRef,
   lookupSop,
-  pickDefaultAgent,
-  pickDefaultWorkers,
   projectCompactIndex,
   renderCatalogHuman,
   renderCompactIndexHuman,
@@ -88,7 +86,6 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
-  scaffoldPluginFreeWorkflowSource,
   scaffoldWorkflowSource,
   searchCatalog,
   WORKFLOW_WORKERS,
@@ -550,7 +547,7 @@ workflow
 
 workflow
   .command("scaffold <name>")
-  .description("Write a validating starter workflow (compiled agent ref when present, otherwise plugin-free)")
+  .description("Write a validating starter workflow (harness workers with a prompt and typed IO)")
   .option("--print", "Print to stdout instead of writing a file")
   .option(
     "--out <path>",
@@ -559,22 +556,9 @@ workflow
   .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
     try {
       const prismHome = resolvePrismHome();
-      const result = await buildWorkflowCatalog();
-      const pluginFreePins = pickPluginFreeScaffoldPins(loadHarnessTypesSnapshot(prismHome));
-      const source =
-        result.catalog === null
-          ? scaffoldPluginFreeWorkflowSource(name, pluginFreePins)
-          : scaffoldWorkflowSource(
-            name,
-            pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer",
-            pickDefaultWorkers(result.catalog, pickDefaultAgent(result.catalog)),
-          );
-      const agentRef = result.catalog === null
-        ? "anonymousWorkflowAgent"
-        : pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer";
-      const workers = result.catalog === null
-        ? pluginFreePins.map((pin) => pin.worker)
-        : pickDefaultWorkers(result.catalog, pickDefaultAgent(result.catalog));
+      const pins = pickPluginFreeScaffoldPins(loadHarnessTypesSnapshot(prismHome));
+      const source = scaffoldWorkflowSource(name, pins);
+      const workers = pins.map((pin) => pin.worker);
       if (options.print === true) {
         await writeStdout(source);
         return;
@@ -584,7 +568,7 @@ workflow
       await ensureDir(dirname(outPath));
       await writeFile(outPath, source, "utf8");
       await writeStdout(
-        `Wrote ${outPath} (agent: ${agentRef}; workers: ${workers.join(", ")}).\nSkill: ${skill.path}\nNext: prism workflow validate ${outPath}\n`,
+        `Wrote ${outPath} (workers: ${workers.join(", ")}).\nSkill: ${skill.path}\nNext: prism workflow validate ${outPath}\n`,
       );
     } catch (error) {
       printCliError(error, "Workflow scaffold failed");
@@ -892,7 +876,6 @@ const formatWorkflowRunCompactSummary = (summary: WorkflowRunCompactSummary, run
       `source ${formatWorkflowEvidenceSource(task.evidenceSource)}`,
       `adapter ${formatWorkflowSummaryValue(task.workerAdapter)}`,
       `model ${formatWorkflowSummaryValue(task.model)}`,
-      `native agent ${formatWorkflowSummaryValue(task.nativeAgent)}`,
       `repairs ${task.repairCount}`,
       `duration ${formatWorkflowDuration(task.durationMs)}`,
     ];

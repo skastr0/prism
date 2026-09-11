@@ -9,7 +9,7 @@ import { typescriptBundleImportPath } from "./compile/runtime-deps.js";
 import { resolvePrismHome } from "./prism-home.js";
 import {
   deriveProjectKey,
-  projectGeneratedAgentsPath,
+  projectGeneratedSopsPath,
   projectGeneratedRefsDir,
 } from "./project-key.js";
 import { harnessModelsModulePath, harnessTypesExist } from "./harness-types.js";
@@ -61,13 +61,13 @@ interface TsconfigJson {
 
 const workflowRefsFilePath = (prismHome: string): string => {
   const { key } = deriveProjectKey();
-  return projectGeneratedAgentsPath(prismHome, key);
+  return projectGeneratedSopsPath(prismHome, key);
 };
 
 const workflowRefsDirectory = (prismHome: string): string | undefined => {
   const { key } = deriveProjectKey();
-  const agentsPath = projectGeneratedAgentsPath(prismHome, key);
-  return existsSync(agentsPath) ? projectGeneratedRefsDir(prismHome, key) : undefined;
+  const sopsPath = projectGeneratedSopsPath(prismHome, key);
+  return existsSync(sopsPath) ? projectGeneratedRefsDir(prismHome, key) : undefined;
 };
 
 const MANIFEST_HASH_RE = /\*\s+Source:\s+compile manifest\s+([a-f0-9]+)/;

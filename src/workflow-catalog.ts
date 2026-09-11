@@ -1,9 +1,9 @@
 /**
  * Workflow catalog — project the machine-global generated surface
- * (~/.prism/state/projects/<key>/generated/{agents,sops,models}.ts) into a
+ * (~/.prism/state/projects/<key>/generated/{sops,models}.ts) into a
  * compact, author-facing catalog for workflow authoring.
  *
- * The generated object keys ARE the refs an author types (`agents.forge.builder`),
+ * The generated object keys ARE the refs an author types (`sops.forge.beacon.phases.build`),
  * so the catalog is imported directly from that surface and cannot drift from
  * what `prism/refs` actually resolves.
  *
@@ -16,7 +16,7 @@ import { workflowWorkerHarnessIds, type WorkflowWorkerHarnessId } from "./lowere
 import {
   deriveProjectKey,
   projectCompileManifestPath,
-  projectGeneratedAgentsPath,
+  projectGeneratedSopsPath,
   projectGeneratedRefsDir,
 } from "./project-key.js";
 import { resolvePrismHome } from "./prism-home.js";
@@ -38,17 +38,6 @@ void workflowWorkerCapabilityCoverageIsExhaustive;
 /** The harness workers a workflow task may target — derived from the `workflowWorker` capability bit in lowerer-capabilities.ts. That table is the single source; do not hand-list harness ids here. */
 export const WORKFLOW_WORKERS: readonly WorkflowWorkerId[] = workflowWorkerHarnessIds();
 
-interface RawModelTarget {
-  readonly model?: string;
-  readonly models?: ReadonlyArray<{ readonly model?: string }>;
-}
-interface RawAgent {
-  readonly plugin: string;
-  readonly name: string;
-  readonly description: string;
-  readonly installs?: ReadonlyArray<string>;
-  readonly model?: { readonly targets?: Readonly<Record<string, RawModelTarget>> };
-}
 interface RawSopPhase {
   readonly name: string;
   readonly sop?: string;
@@ -70,18 +59,8 @@ interface RawSop {
 type RawGroup<T> = Readonly<Record<string, Readonly<Record<string, T>>>>;
 
 export interface GeneratedSurface {
-  readonly agents: RawGroup<RawAgent>;
   readonly sops: RawGroup<RawSop>;
   readonly models: Readonly<Record<string, Record<string, Record<string, unknown>>>>;
-}
-
-export interface CatalogAgent {
-  readonly ref: string;
-  readonly plugin: string;
-  readonly name: string;
-  readonly description: string;
-  readonly installs: ReadonlyArray<string>;
-  readonly modelByHarness: Readonly<Record<string, string>>;
 }
 export interface CatalogSop {
   readonly ref: string;
@@ -106,7 +85,6 @@ export interface CatalogSopDetail extends CatalogSop {
 export interface CatalogNamespace {
   readonly namespace: string;
   readonly sops: ReadonlyArray<CatalogSopDetail>;
-  readonly agents: ReadonlyArray<CatalogAgent>;
 }
 export interface CatalogModelProfile {
   readonly ref: string;
@@ -119,19 +97,6 @@ export interface WorkflowCatalog {
   readonly workers: ReadonlyArray<string>;
   readonly modelProfiles: ReadonlyArray<CatalogModelProfile>;
 }
-
-const modelByHarness = (agent: RawAgent): Record<string, string> => {
-  const out: Record<string, string> = {};
-  for (const [harness, target] of Object.entries(agent.model?.targets ?? {})) {
-    if (target.model) {
-      out[harness] = target.model;
-    } else if (target.models && target.models.length > 0 && target.models[0]?.model) {
-      const first = target.models[0].model;
-      out[harness] = target.models.length > 1 ? `${first} (+${target.models.length - 1})` : first;
-    }
-  }
-  return out;
-};
 
 const projectSopPhaseDetail = (
   namespace: string,
@@ -174,25 +139,12 @@ const projectSopDetails = (
 
 /** Pure projection: generated surface objects -> author-facing catalog. */
 export const projectCatalog = (surface: GeneratedSurface): WorkflowCatalog => {
-  const namespaces: CatalogNamespace[] = Object.keys(surface.agents)
+  const namespaces: CatalogNamespace[] = Object.keys(surface.sops)
     .sort()
-    .map((namespace) => {
-      const agents: CatalogAgent[] = Object.entries(surface.agents[namespace] ?? {})
-        .map(([key, agent]) => ({
-          ref: `agents.${namespace}.${key}`,
-          plugin: agent.plugin,
-          name: agent.name,
-          description: agent.description,
-          installs: agent.installs ?? [],
-          modelByHarness: modelByHarness(agent),
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-      return {
-        namespace,
-        sops: projectSopDetails(surface.sops, namespace),
-        agents,
-      };
-    });
+    .map((namespace) => ({
+      namespace,
+      sops: projectSopDetails(surface.sops, namespace),
+    }));
 
   const modelProfiles: CatalogModelProfile[] = [];
   for (const [plugin, spaces] of Object.entries(surface.models ?? {})) {
@@ -208,18 +160,16 @@ export const projectCatalog = (surface: GeneratedSurface): WorkflowCatalog => {
 
 /** I/O: import the generated surface from a project's generated dir. Null when absent. */
 export const loadGeneratedSurface = async (dir: string): Promise<GeneratedSurface | null> => {
-  if (!existsSync(join(dir, "agents.ts"))) return null;
+  if (!existsSync(join(dir, "sops.ts"))) return null;
   const load = async (file: string): Promise<Record<string, unknown>> => {
     const path = join(dir, file);
     return existsSync(path) ? ((await import(path)) as Record<string, unknown>) : {};
   };
-  const [agentsMod, sopsMod, modelsMod] = await Promise.all([
-    load("agents.ts"),
+  const [sopsMod, modelsMod] = await Promise.all([
     load("sops.ts"),
     load("models.ts"),
   ]);
   return {
-    agents: (agentsMod.agents ?? {}) as GeneratedSurface["agents"],
     sops: (sopsMod.sops ?? {}) as GeneratedSurface["sops"],
     models: (modelsMod.models ?? {}) as GeneratedSurface["models"],
   };
@@ -252,7 +202,7 @@ const renderMissingSurfaceHuman = (surfaceDir: string): string =>
     `Refresh the snapshot:     \`prism workflow refresh-harness-types\``,
     `Scaffold a starter:       \`prism workflow scaffold hello\``,
     ``,
-    `Plugin refs (agents.*) are optional. Compile a plugin only if you want them.`,
+    `Plugin refs (sops.*) are optional. Compile a plugin only if you want them.`,
   ].join("\n");
 
 /** Human-readable full-detail catalog rendering (used by `--full`). */
@@ -262,7 +212,7 @@ export const renderCatalogHuman = (result: BuildCatalogResult): string => {
   }
   const lines: string[] = [`Workflow surface (import refs from \`prism/refs\`):`, `  ${result.surfaceDir}`, ``];
   for (const ns of result.catalog.namespaces) {
-    if (ns.agents.length === 0 && ns.sops.length === 0) continue;
+    if (ns.sops.length === 0) continue;
     lines.push(`${ns.namespace}`);
     for (const sop of ns.sops) {
       lines.push(`  sop ref: ${sop.ref}`);
@@ -274,11 +224,6 @@ export const renderCatalogHuman = (result: BuildCatalogResult): string => {
         lines.push(`      ref: ${phase.ref}`);
       }
       lines.push(``);
-    }
-    for (const agent of ns.agents) {
-      const model = agent.modelByHarness["claude-code"] ?? Object.values(agent.modelByHarness)[0] ?? "?";
-      lines.push(`  ${agent.ref}  [claude-code: ${model}]`);
-      lines.push(`      ${agent.description}`);
     }
     lines.push(``);
   }
@@ -298,7 +243,6 @@ export const renderCatalogHuman = (result: BuildCatalogResult): string => {
 export interface CompactNamespaceEntry {
   readonly namespace: string;
   readonly sopRefs: ReadonlyArray<string>;
-  readonly agentCount: number;
 }
 
 export interface CompactCatalogIndex {
@@ -309,16 +253,15 @@ export interface CompactCatalogIndex {
   readonly modelProfileCount: number;
 }
 
-/** Pure projection: one line per namespace, no per-agent detail — the default `catalog` view. */
+/** Pure projection: one line per namespace, no per-phase detail — the default `catalog` view. */
 export const projectCompactIndex = (catalog: WorkflowCatalog, surfaceDir: string): CompactCatalogIndex => ({
   surfaceDir,
   present: true,
   namespaces: catalog.namespaces
-    .filter((ns) => ns.agents.length > 0 || ns.sops.length > 0)
+    .filter((ns) => ns.sops.length > 0)
     .map((ns) => ({
       namespace: ns.namespace,
       sopRefs: ns.sops.map((sop) => sop.ref),
-      agentCount: ns.agents.length,
     })),
   workers: catalog.workers,
   modelProfileCount: catalog.modelProfiles.length,
@@ -327,12 +270,7 @@ export const projectCompactIndex = (catalog: WorkflowCatalog, surfaceDir: string
 export const renderCompactIndexHuman = (index: CompactCatalogIndex): string => {
   const lines: string[] = [`Workflow surface (compact index — import refs from \`prism/refs\`):`, `  ${index.surfaceDir}`, ``];
   for (const ns of index.namespaces) {
-    const agentCount = `${ns.agentCount} agent${ns.agentCount === 1 ? "" : "s"}`;
-    const details = [
-      agentCount,
-      ns.sopRefs.length > 0 ? `sop refs: ${ns.sopRefs.join(", ")}` : null,
-    ].filter((part): part is string => part !== null);
-    lines.push(`${ns.namespace}  (${details.join(", ")})`);
+    lines.push(`${ns.namespace}  (${ns.sopRefs.join(", ")})`);
   }
   lines.push(``);
   lines.push(`workers: ${index.workers.join(", ")}`);
@@ -386,7 +324,6 @@ export const lookupSop = (catalog: WorkflowCatalog, query: string): SopLookupRes
 
 /** A single catalog entity resolved by ref, tagged with its kind so `--ref` output stays a discriminated union. */
 export type CatalogEntity =
-  | ({ readonly kind: "agent" } & CatalogAgent)
   | ({ readonly kind: "sop" } & CatalogSopDetail)
   | ({ readonly kind: "sop-phase" } & CatalogSopPhaseDetail)
   | ({ readonly kind: "model" } & CatalogModelProfile);
@@ -405,7 +342,6 @@ const catalogEntities = (catalog: WorkflowCatalog): ReadonlyArray<CatalogEntity>
       entities.push({ kind: "sop", ...sop });
       for (const phase of sop.phases) entities.push({ kind: "sop-phase", ...phase });
     }
-    for (const agent of ns.agents) entities.push({ kind: "agent", ...agent });
   }
   for (const profile of catalog.modelProfiles) entities.push({ kind: "model", ...profile });
   return entities;
@@ -434,18 +370,6 @@ export const renderRefNotFoundMessage = (ref: string, suggestions: ReadonlyArray
     : `no entity with ref "${ref}". No close matches — try \`prism workflow catalog --query <text>\` to search.`;
 
 export const renderRefDetailHuman = (entity: CatalogEntity): string => {
-  if (entity.kind === "agent") {
-    const modelLines = Object.entries(entity.modelByHarness).map(([harness, model]) => `  ${harness}: ${model}`);
-    return [
-      `${entity.ref}`,
-      `  plugin: ${entity.plugin}`,
-      `  name: ${entity.name}`,
-      `  description: ${entity.description}`,
-      `  installs: ${entity.installs.length > 0 ? entity.installs.join(", ") : "(none recorded)"}`,
-      `  model by harness:`,
-      ...(modelLines.length > 0 ? modelLines : [`    (none recorded)`]),
-    ].join("\n");
-  }
   if (entity.kind === "sop") {
     const lines = [`${entity.ref}`, `  plugin: ${entity.plugin}`, `  name: ${entity.name}`];
     if (entity.phases.length > 0) {
@@ -501,11 +425,6 @@ export const searchCatalog = (catalog: WorkflowCatalog, query: string): Readonly
         }
       }
     }
-    for (const agent of ns.agents) {
-      if (matches(agent.ref, agent.name, agent.description)) {
-        hits.push({ ref: agent.ref, name: agent.name, descriptionExcerpt: excerpt(agent.description) });
-      }
-    }
   }
   for (const profile of catalog.modelProfiles) {
     if (matches(profile.ref, profile.profile)) {
@@ -544,11 +463,11 @@ export const workflowRefsStatus = (
   const prismHome = options.prismHome ?? resolvePrismHome();
   const { key } = deriveProjectKey(options.cwd);
   const surfaceDir = projectGeneratedRefsDir(prismHome, key);
-  const agentsPath = projectGeneratedAgentsPath(prismHome, key);
-  if (!existsSync(agentsPath)) {
+  const sopsPath = projectGeneratedSopsPath(prismHome, key);
+  if (!existsSync(sopsPath)) {
     return { surfaceDir, present: false, refsManifestHash: null, compileManifestHash: null, freshness: "missing" };
   }
-  const header = readFileSync(agentsPath, "utf8").slice(0, 512);
+  const header = readFileSync(sopsPath, "utf8").slice(0, 512);
   const refsManifestHash = /Source: compile manifest ([0-9a-f]+)/u.exec(header)?.[1] ?? null;
   const manifestPath = projectCompileManifestPath(prismHome, key);
   let compileManifestHash: string | null = null;
@@ -575,7 +494,7 @@ export const renderRefsStatus = (status: RefsStatus): string => {
       `refs:      ${status.surfaceDir}`,
       `freshness: missing — no compiled plugin refs (optional)`,
       `  List slugs:  \`prism workflow models\``,
-      `  Compile refs only if you want agents.*: \`prism refresh <plugin-path>\``,
+      `  Compile refs only if you want sops.*: \`prism refresh <plugin-path>\``,
     ].join("\n");
   }
   const detail =
@@ -587,52 +506,7 @@ export const renderRefsStatus = (status: RefsStatus): string => {
 
 // --- scaffold -----------------------------------------------------------------
 
-/**
- * Pick a sensible default agent for a starter workflow: the generic Forge
- * explorer if present, then any explorer, then any orchestrator, then anything.
- */
-export const pickDefaultAgent = (catalog: WorkflowCatalog): CatalogAgent | undefined => {
-  const all = catalog.namespaces.flatMap((ns) => ns.agents);
-  return (
-    all.find((agent) => agent.ref === "agents.forge.explorer") ??
-    all.find((agent) => agent.name === "explorer") ??
-    all.find((agent) => agent.name.includes("orchestrator")) ??
-    all[0]
-  );
-};
-
-/** Same pick as {@link pickDefaultAgent}, projected to its ref string. */
-export const pickDefaultAgentRef = (catalog: WorkflowCatalog): string =>
-  pickDefaultAgent(catalog)?.ref ?? "agents.forge.explorer";
-
-/**
- * Pick 1-2 workers for the scaffold's example tasks, restricted to harnesses
- * the chosen agent is actually compiled for (`agent.installs`) that also have
- * a Prism workflow-worker module (`catalog.workers`) — never a harness the
- * generated workflow can't run against out of the box (PQ-176 footgun #2).
- * Two workers reproduce the illustrative cross-harness fan-out; one worker
- * degrades to a single task when the agent is installed on only one workflow
- * harness. Falls back to "claude-code" alone when the agent has no recorded
- * installs (e.g. an empty/minimal catalog) since it's the most commonly
- * available workflow worker.
- */
-export const pickDefaultWorkers = (
-  catalog: WorkflowCatalog,
-  agent: CatalogAgent | undefined,
-): readonly [string] | readonly [string, string] => {
-  const workerSet = new Set(catalog.workers);
-  const runnable = (agent?.installs ?? []).filter((harness) => workerSet.has(harness));
-  if (runnable.length === 0) return ["claude-code"];
-  // Prefer claude-code first when it's installed — the most broadly
-  // authenticated default harness — so fan-out order reads predictably
-  // instead of drifting with the (alphabetical) installs list.
-  const ordered = runnable.includes("claude-code")
-    ? ["claude-code", ...runnable.filter((harness) => harness !== "claude-code")]
-    : runnable;
-  return ordered.length >= 2 ? [ordered[0]!, ordered[1]!] : [ordered[0]!];
-};
-
-const scaffoldWorkflowHeader = (name: string, pluginFree: boolean): string => `/**
+const scaffoldWorkflowHeader = (name: string): string => `/**
  * ${name} — scaffolded by \`prism workflow scaffold\`.
  * Lives at ~/.prism/workflows/${name}.workflow.ts by convention — never inside
  * (or git-added to) the project repo it drives; tasks reference their target
@@ -644,7 +518,7 @@ const scaffoldWorkflowHeader = (name: string, pluginFree: boolean): string => `/
  * Discover harness models: prism workflow models --worker cursor --query opus
  * Refresh slugs:           prism workflow refresh-harness-types
  * Authoring skill:         prism workflow skill
-${pluginFree ? " * Plugin-free — using anonymousWorkflowAgent. Plugins are optional.\n" : " * Plugin refs: prism workflow catalog --ref <ref>\n"} */`;
+ */`;
 
 const renderScaffoldWorker = (pin: { readonly worker: string; readonly model?: string }): string =>
   pin.model === undefined
@@ -655,10 +529,8 @@ const renderScaffoldTask = (
   name: string,
   id: string,
   pin: { readonly worker: string; readonly model?: string },
-  agentExpr: string,
 ): string => `      const ${id} = defineTask({
         id: ${JSON.stringify(id)},
-        agent: ${agentExpr},
         prompt: ${JSON.stringify(`Run under the ${pin.worker} harness and return a one-line summary in "summary". Set worker="${pin.worker}".`)},
         output: Result,
         cacheKey: ${JSON.stringify(`${name}-${pin.worker}-v1`)},
@@ -668,10 +540,9 @@ const renderScaffoldTask = (
 const renderScaffoldRun = (
   name: string,
   pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>],
-  agentExpr: string,
 ): string => {
   const ids = pins.map((_, index) => (index === 0 ? "a" : "b"));
-  const tasks = pins.map((pin, index) => renderScaffoldTask(name, ids[index]!, pin, agentExpr)).join("\n");
+  const tasks = pins.map((pin, index) => renderScaffoldTask(name, ids[index]!, pin)).join("\n");
   if (pins.length === 1) {
     return `export const workflow = defineWorkflow({
   name: "${name}",
@@ -696,78 +567,21 @@ ${tasks}
 `;
 };
 
-/** Plugin-free starter when no compiled refs surface exists. */
-export const scaffoldPluginFreeWorkflowSource = (
+/** A complete, validating starter workflow: harness workers with a prompt and typed IO. */
+export const scaffoldWorkflowSource = (
   name: string,
   pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>] = [
     { worker: "claude-code" },
   ],
 ): string => {
-  const header = `${scaffoldWorkflowHeader(name, true)}
-import { Effect, Schema } from "effect";
-import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
-
-const Result = Schema.Struct({
-  worker: Schema.String,
-  summary: Schema.String,
-});
-`;
-  return `${header}\n${renderScaffoldRun(name, pins, "anonymousWorkflowAgent")}`;
-};
-
-/** A complete, validating starter workflow source that uses a real discovered agent ref and installed workers. */
-export const scaffoldWorkflowSource = (
-  name: string,
-  agentRef: string,
-  workers: readonly [string] | readonly [string, string],
-): string => {
-  const header = `${scaffoldWorkflowHeader(name, false)}
+  const header = `${scaffoldWorkflowHeader(name)}
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
-import { agents } from "prism/refs";
 
 const Result = Schema.Struct({
   worker: Schema.String,
   summary: Schema.String,
 });
 `;
-
-  const workerUnion = workers.map((worker) => JSON.stringify(worker)).join(" | ");
-  const probe = `const probe = (id: string, worker: ${workerUnion}) =>
-  defineTask({
-    id,
-    agent: ${agentRef},
-    prompt: \`Run under the \${worker} harness and return a one-line summary in "summary". Set worker="\${worker}".\`,
-    output: Result,
-    cacheKey: \`${name}-\${worker}-v1\`,
-    worker: { worker },
-  });
-`;
-
-  const run =
-    workers.length === 2
-      ? `export const workflow = defineWorkflow({
-  name: "${name}",
-  run: (wf) =>
-    Effect.gen(function* () {
-      const results = yield* Effect.all(
-        [wf.runTask(probe("a", ${JSON.stringify(workers[0])})), wf.runTask(probe("b", ${JSON.stringify(workers[1])}))],
-        { concurrency: "unbounded" },
-      );
-      return { results };
-    }),
-});
-`
-      : `export const workflow = defineWorkflow({
-  name: "${name}",
-  run: (wf) =>
-    Effect.gen(function* () {
-      const result = yield* wf.runTask(probe("a", ${JSON.stringify(workers[0])}));
-      return { results: [result] };
-    }),
-});
-`;
-
-  return `${header}\n${probe}\n${run}`;
+  return `${header}\n${renderScaffoldRun(name, pins)}`;
 };
-

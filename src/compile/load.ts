@@ -54,7 +54,7 @@ import { PluginManifestError } from "../errors.js";
 import { validateSkillName } from "../manifest.js";
 import { harnessModelsModulePath } from "../harness-types.js";
 import { resolvePrismHome } from "../prism-home.js";
-import { deriveProjectKey, projectGeneratedAgentsPath, projectGeneratedRefsDir } from "../project-key.js";
+import { deriveProjectKey, projectGeneratedSopsPath, projectGeneratedRefsDir } from "../project-key.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { effectBundleImportPath, typescriptBundleImportPath } from "./runtime-deps.js";
@@ -152,8 +152,8 @@ export default effect;
 
 /**
  * The workflow DSL runtime. Off-repo workflow files import { defineTask,
- * defineWorkflow, anonymousWorkflowAgent } from "prism"; this module supplies
- * those builders with behavior identical to src/workflows.ts. Schema is read
+ * defineWorkflow } from "prism"; this module supplies those builders with
+ * behavior identical to src/workflows.ts. Schema is read
  * from the binary's embedded Effect (globalThis.__prism_effect) so
  * Schema.isSchema and decodeTaskOutput operate on the binary's Effect instance.
  */
@@ -163,16 +163,6 @@ if (!effect) {
   throw new Error("prism Effect runtime bridge was not initialized");
 }
 const Schema = effect.Schema;
-
-export const anonymousWorkflowAgent = {
-  kind: "agent-ref",
-  plugin: "prism",
-  name: "anonymous",
-  description: "Plugin-free workflow worker (no compiled Prism agent).",
-  sourceHash: "${"0".repeat(64)}",
-  manifestHash: "${"0".repeat(64)}",
-  installs: [],
-};
 
 export const defineTask = (definition) => ({
   kind: "workflow-task",
@@ -581,21 +571,21 @@ const copyTransformedPluginTree = async (options: {
 /**
  * The on-disk generated workflow refs file that `prism/refs` resolves to.
  * Machine-global, project-keyed: ~/.prism/state/projects/<key>/generated/
- * agents.ts, where the key is the project identity (toolchain & distribution
+ * sops.ts, where the key is the project identity (toolchain & distribution
  * §4): git repository root of the process cwd, else realpath(cwd). An off-repo
  * workflow file run from inside a repo resolves to that repo's generated refs.
  */
 const workflowRefsTargetPath = (): string => {
   const prismHome = resolvePrismHome();
   const { key } = deriveProjectKey();
-  return projectGeneratedAgentsPath(prismHome, key);
+  return projectGeneratedSopsPath(prismHome, key);
 };
 
 const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> => {
   const prismHome = resolvePrismHome();
   const { key } = deriveProjectKey();
   const refsDir = projectGeneratedRefsDir(prismHome, key);
-  const modules = ["agents", "models", "skills", "sops", "tools"] as const;
+  const modules = ["models", "sops"] as const;
   return Object.fromEntries(
     modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
   );

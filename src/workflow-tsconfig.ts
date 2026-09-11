@@ -5,7 +5,7 @@
  * uses to their shipped type declarations:
  *
  *   "prism"           → <platform-package>/types/index.d.ts  (the emitted prism.d.ts)
- *   "prism/refs"      → ~/.prism/state/projects/<key>/generated/agents.ts  (per-project refs)
+ *   "prism/refs"      → ~/.prism/state/projects/<key>/generated/sops.ts  (per-project refs)
  *   "prism/harnesses" → ~/.prism/state/harness-types/harness-models.ts  (global, not project-keyed)
  *   "effect"          → <platform-package>/node_modules/effect/dist/dts/index.d.ts
  *
@@ -279,24 +279,21 @@ export const resolveWorkflowTypeDirs = (): WorkflowTypeDirs => ({
 
 /** Generated workflow ref modules under ~/.prism/state/projects/<key>/generated/. */
 export const WORKFLOW_REFS_MODULES = [
-  "agents",
   "models",
-  "skills",
   "sops",
-  "tools",
 ] as const;
 
 export type WorkflowRefsModule = (typeof WORKFLOW_REFS_MODULES)[number];
 
 /**
  * Build path mappings for every generated `prism/refs` module. `prism/refs`
- * itself resolves to `agents.ts` because that is the primary import surface.
+ * itself resolves to `sops.ts` because that is the primary import surface.
  */
 export const buildWorkflowRefsPaths = (
   refsDir: string,
 ): Record<string, string[]> => {
   const paths: Record<string, string[]> = {
-    "prism/refs": [join(refsDir, "agents.ts")],
+    "prism/refs": [join(refsDir, "sops.ts")],
   };
   for (const module of WORKFLOW_REFS_MODULES) {
     paths[`prism/refs/${module}`] = [join(refsDir, `${module}.ts`)];

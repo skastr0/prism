@@ -16,7 +16,7 @@ description: Author and run Prism workflows — typed task graphs over real harn
 
 # Prism workflows
 
-Workflows are the flagship. A \`.workflow.ts\` file dispatches real harness CLIs (\`cursor\`, \`amp-code\`, \`claude-code\`, …). A Prism plugin is an optional add-on for compiled \`agents.*\` refs.
+Workflows are the flagship. A \`.workflow.ts\` file dispatches real harness CLIs (\`cursor\`, \`amp-code\`, \`claude-code\`, …). A Prism plugin is an optional add-on for compiled \`sops.*\` phase bindings.
 
 Live runs spend real tokens. Rehearse with \`typecheck\`, \`validate\`, and \`--mock-output\`.
 
@@ -37,13 +37,12 @@ Print this skill anytime: \`prism workflow skill\`.
 
 \`\`\`ts
 import { Schema } from "effect";
-import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+import { defineTask, defineWorkflow } from "prism";
 
 export const workflow = defineWorkflow({
   name: "hello",
   tasks: [defineTask({
     id: "cursor",
-    agent: anonymousWorkflowAgent,
     prompt: "Reply with summary: hello",
     output: Schema.Struct({ summary: Schema.String }),
     worker: { worker: "cursor", model: "composer-2.5-fast" },
@@ -51,7 +50,6 @@ export const workflow = defineWorkflow({
 });
 \`\`\`
 
-- \`anonymousWorkflowAgent\` — plugin-free. Use \`agents.*\` from \`prism/refs\` only after \`prism refresh <plugin>\`.
 - \`worker.model\` is harness-bound. There is no shared model type.
 - Cursor slugs are effort-suffixed. \`gemini-3.8-flash\` is not a slug; use \`gemini-3.8-flash-low|medium|high\`.
 - OMP pins are \`provider/id\` selectors from \`omp models --json\` (e.g. \`ollama-cloud/glm-5.3-flash\`). Bare ids such as \`gpt-5.6-luna\` are not selectors. \`opencode-go/*\` is Console Go and 400s in workflow \`--print\` (\`MissingSessionID\`). Thinking stays on \`--thinking\` / a \`:high\` config suffix, not \`worker.effort\`.

@@ -513,7 +513,7 @@ const scaffoldWorkflowHeader = (name: string): string => `/**
  * repo by absolute path, so the file's own location doesn't matter to it.
  * Edit the tasks, then:
  *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
- *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts --max-concurrent-tasks 2
+ *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts
  *
  * Discover harness models: prism workflow models --worker cursor --query opus
  * Refresh slugs:           prism workflow refresh-harness-types

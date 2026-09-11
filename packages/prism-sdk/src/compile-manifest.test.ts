@@ -76,10 +76,6 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
     "core:create_commit": { plugin: "core", name: "create_commit" },
     "agent-core:inspect": { plugin: "agent-core", name: "inspect" },
   },
-  orbits: {
-    "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] },
-    "core:experiment": { plugin: "core", name: "experiment", phases: [] },
-  },
   sops: {
     "forge:beacon": {
       plugin: "forge",
@@ -162,10 +158,6 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
       "agent-core:inspect": manifest.tools["agent-core:inspect"]!,
       "forge:run_shell": manifest.tools["forge:run_shell"]!,
     },
-    orbits: {
-      "core:experiment": manifest.orbits["core:experiment"]!,
-      "forge:delivery-contract": manifest.orbits["forge:delivery-contract"]!,
-    },
     sops: {
       "forge:beacon": manifest.sops["forge:beacon"]!,
     },
@@ -223,46 +215,10 @@ test("empty compile manifest carries a self-consistent hash", () => {
   expect(manifest.tools).toEqual({});
 });
 
-test("orbit phase order is preserved during manifest encoding", () => {
-  const manifest = withManifestHash({
-    ...emptyCompileManifest(),
-    orbits: {
-      "forge:delivery-contract": {
-        plugin: "forge",
-        name: "delivery-contract",
-        phases: [
-          {
-            name: "Zebra phase",
-            agents: [{ plugin: "forge", name: "builder" }],
-            criteria: [],
-            io: { inputs: [], outputs: [] },
-            framing: {},
-          },
-          {
-            name: "Alpha phase",
-            agents: [{ plugin: "forge", name: "reviewer" }],
-            criteria: [],
-            io: { inputs: [], outputs: [] },
-            framing: {},
-          },
-        ],
-      },
-    },
-  });
-
-  const encoded = encodeCompileManifest(manifest);
-  const decoded = decodeCompileManifest(encoded);
-
-  expect(decoded._tag).toBe("Right");
-  if (decoded._tag !== "Right") throw new Error("manifest did not decode");
-  const phases = decoded.right.orbits["forge:delivery-contract"]?.phases;
-  expect(phases?.map((phase) => phase.name)).toEqual(["Zebra phase", "Alpha phase"]);
-});
-
-test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless of insertion order", () => {
+test("manifest hash is byte-stable for non-ASCII sop and tool names regardless of insertion order", () => {
   // Non-ASCII names: café (NFC) and naïve (NFC precomposed) — locale sort vs code-point sort differ on some platforms
-  const makeManifest = (orbitOrder: "ab" | "ba", toolOrder: "ab" | "ba"): CompileManifest => {
-    const orbits = {
+  const makeManifest = (sopOrder: "ab" | "ba", toolOrder: "ab" | "ba"): CompileManifest => {
+    const sops = {
       ab: {
         "forge:café": { plugin: "forge", name: "café", phases: [] },
         "forge:naïve": { plugin: "forge", name: "naïve", phases: [] },
@@ -271,7 +227,7 @@ test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless
         "forge:naïve": { plugin: "forge", name: "naïve", phases: [] },
         "forge:café": { plugin: "forge", name: "café", phases: [] },
       },
-    }[orbitOrder] as CompileManifest["orbits"];
+    }[sopOrder] as CompileManifest["sops"];
     const tools = {
       ab: {
         "forge:résumé": { plugin: "forge", name: "résumé" },
@@ -290,8 +246,7 @@ test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless
       modelspaces: {},
       skills: {},
       tools,
-      orbits,
-      sops: {},
+      sops,
     };
     const withEmpty = { ...base, manifestHash: "" };
     return { ...withEmpty, manifestHash: computeCompileManifestHash(withEmpty) };

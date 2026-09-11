@@ -152,7 +152,6 @@ export default {
 
   const { files: operations } = await planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     skills: [],
     hooks: [promptHook, permHook, stopHook],
@@ -321,7 +320,6 @@ export default {
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const { files } = await planLowering({
     agents: [],
-    orbits: [],
     sops: [...registry.sops.values()],
     skills: [],
     hooks: [],

@@ -51,7 +51,6 @@ test("Cursor lowerer emits plugin subagents and command hooks", async () => {
   const root = "/tmp/cursor-root";
   const output = await planLowering({
     agents: [agent("reviewer")],
-    orbits: [],
     sops: [],
     hooks: [await writeSessionHook()],
     target: {
@@ -111,7 +110,6 @@ export default {
 test("Cursor tool.before wrapper emits permission deny and exit 2", async () => {
   const output = await planLowering({
     agents: [agent("reviewer")],
-    orbits: [],
     sops: [],
     hooks: [await writeToolBeforeHook()],
     target: {
@@ -130,7 +128,6 @@ test("Cursor tool.before wrapper emits permission deny and exit 2", async () => 
 test("tools-only Cursor compile plants no plugin bundle", async () => {
   const output = await planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     tools: [],
     target: {

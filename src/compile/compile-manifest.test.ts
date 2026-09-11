@@ -15,12 +15,10 @@ import {
 } from "./compile-manifest.js";
 import type { ComposedAgent } from "./compose.js";
 import { emptyRegistry } from "./registry.js";
-import { projectOrbitsForCompileManifest, validateOrbit } from "./resolve.js";
 import { Modelspace } from "./sources.js";
 import {
   addToRegistry,
   makeAgent,
-  makeOrbit,
   makeRegistry,
   makeTool,
 } from "./test-support.js";
@@ -136,36 +134,6 @@ describe("compile manifest writer", () => {
       modelspace: "models",
       profiles: ["builder"],
     });
-    // orbits support: explicit pass on build populates minimal source-free entries for the plugin
-    const withOrbits = buildCompileManifestForTarget({
-      base: emptyCompileManifest(),
-      registry: registry(),
-      target: "opencode",
-      scope: "project",
-      composed: [agent("builder", "a".repeat(64))],
-      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
-      orbits: [
-        { name: "delivery-contract", phases: [] },
-        { name: "experiment-template", phases: [] },
-      ],
-    });
-    expect(Object.keys(withOrbits.orbits).sort()).toEqual(["forge:delivery-contract", "forge:experiment-template"]);
-    expect(withOrbits.orbits["forge:delivery-contract"]).toEqual({
-      plugin: "forge",
-      name: "delivery-contract",
-      phases: [],
-    });
-    expect(withOrbits.orbits["forge:experiment-template"]).toEqual({
-      plugin: "forge",
-      name: "experiment-template",
-      phases: [],
-    });
-    // no sourcePath etc in manifest orbit entries
-    expect(JSON.stringify(withOrbits.orbits)).not.toContain("sourcePath");
-    expect(verifyCompileManifestHash(withOrbits)).toBe(true);
-    // tools also populated (from the loaded plugin's canonical tools)
-    expect(Object.keys(withOrbits.tools || {}).length).toBeGreaterThan(0);
-    expect(JSON.stringify(withOrbits.tools)).not.toContain("sourcePath");
   });
 
   test("sop projection always replaces the plugin's sop entries, including with the empty set", () => {
@@ -368,150 +336,4 @@ describe("compile manifest writer", () => {
     expect(verifyCompileManifestHash(readB.manifest)).toBe(true);
   });
 
-  test("projects multi-phase orbits with resolved agents into manifest phase entries", async () => {
-    const reg = makeRegistry({ pluginName: "forge" });
-    addToRegistry(reg, {
-      agents: [
-        makeAgent({ name: "builder" }),
-        makeAgent({ name: "reviewer" }),
-      ],
-      orbits: [
-        makeOrbit({
-          name: "delivery-contract",
-          phases: [
-            {
-              name: "Implement change",
-              agents: ["builder"],
-              workflow: {
-                inputs: ["Work item is ready"],
-                outputs: ["Implementation is ready"],
-                finish_criteria: ["Tests pass"],
-                when: "glyph is claimed",
-                coordination: "single owner",
-                escalation: "orchestrator",
-              },
-              telos: "Ship the change",
-              notes: { Done: "Implementation is ready" },
-            },
-            {
-              name: "Review change",
-              agents: ["reviewer"],
-              workflow: {
-                finish_criteria: ["Findings recorded"],
-              },
-            },
-          ],
-        }),
-      ],
-    });
-
-    const orbit = reg.orbits.get("delivery-contract")!;
-    await Effect.runPromise(validateOrbit(orbit, reg));
-    const projections = await Effect.runPromise(projectOrbitsForCompileManifest([orbit], reg));
-    const manifest = buildCompileManifestForTarget({
-      base: emptyCompileManifest(),
-      registry: reg,
-      target: "opencode",
-      scope: "project",
-      composed: [agent("builder", "a".repeat(64))],
-      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
-      orbits: projections,
-    });
-
-    const entry = manifest.orbits["forge:delivery-contract"];
-    expect(entry?.phases).toHaveLength(2);
-    expect(entry?.phases[0]).toEqual({
-      name: "Implement change",
-      agents: [{ plugin: "forge", name: "builder" }],
-      criteria: ["Tests pass"],
-      io: { inputs: ["Work item is ready"], outputs: ["Implementation is ready"] },
-      framing: {
-        telos: "Ship the change",
-        when: "glyph is claimed",
-        coordination: "single owner",
-        escalation: "orchestrator",
-      },
-      notes: { Done: "Implementation is ready" },
-    });
-    expect(entry?.phases[1]?.agents).toEqual([{ plugin: "forge", name: "reviewer" }]);
-    expect(JSON.stringify(manifest.orbits)).not.toContain("sourcePath");
-    expect(JSON.stringify(manifest.orbits)).not.toContain("body");
-    expect(verifyCompileManifestHash(manifest)).toBe(true);
-  });
-
-  test("resolves cross-plugin phase agents into manifest projections", async () => {
-    const core = makeRegistry({ pluginName: "agent-core" });
-    addToRegistry(core, {
-      agents: [makeAgent({ name: "reviewer" })],
-    });
-    const reg = makeRegistry({
-      pluginName: "forge",
-      dependencyPaths: { "agent-core": core.pluginPath },
-    });
-    reg.deps.set("agent-core", core);
-    addToRegistry(reg, {
-      agents: [makeAgent({ name: "builder" })],
-      orbits: [
-        makeOrbit({
-          name: "delivery-contract",
-          phases: [
-            { name: "Implement change", agents: ["builder"] },
-            { name: "Review change", agents: ["agent-core:reviewer"] },
-          ],
-        }),
-      ],
-    });
-
-    const orbit = reg.orbits.get("delivery-contract")!;
-    const projections = await Effect.runPromise(projectOrbitsForCompileManifest([orbit], reg));
-    expect(projections[0]?.phases[1]?.agents).toEqual([
-      { plugin: "agent-core", name: "reviewer" },
-    ]);
-  });
-
-  test("serializes supported phase contract schemas into manifest JSON Schema", async () => {
-    const outputSchema = Schema.Struct({
-      summary: Schema.String,
-      ok: Schema.Boolean,
-    });
-    const reg = makeRegistry({ pluginName: "forge" });
-    addToRegistry(reg, {
-      agents: [makeAgent({ name: "builder" })],
-      orbits: [
-        makeOrbit({
-          name: "delivery-contract",
-          phases: [
-            {
-              name: "Explore",
-              agents: ["builder"],
-              contract: { output: outputSchema },
-            },
-          ],
-        }),
-      ],
-    });
-
-    const orbit = reg.orbits.get("delivery-contract")!;
-    const projections = await Effect.runPromise(projectOrbitsForCompileManifest([orbit], reg));
-    const manifest = buildCompileManifestForTarget({
-      base: emptyCompileManifest(),
-      registry: reg,
-      target: "opencode",
-      scope: "project",
-      composed: [agent("builder", "a".repeat(64))],
-      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
-      orbits: projections,
-    });
-
-    const contract = manifest.orbits["forge:delivery-contract"]?.phases[0]?.contract;
-    expect(contract?.output).toEqual({
-      type: "object",
-      properties: {
-        summary: { type: "string" },
-        ok: { type: "boolean" },
-      },
-      required: ["summary", "ok"],
-      additionalProperties: false,
-    });
-  });
 });

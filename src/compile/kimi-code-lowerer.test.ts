@@ -10,9 +10,7 @@ import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/kimi-code.js";
 import { cliToolNameForBinding } from "./tool-runtime-bundle.js";
 import {
-  instantiateOrbit,
   resolveAgent,
-  validateOrbit,
   type ResolvedContractBinding,
 } from "./resolve.js";
 import type { DesiredFile, DesiredRegion } from "../sync/desired.js";
@@ -71,21 +69,9 @@ const prepareRegistryForLowering = async (pluginRoot: string) => {
     ),
   );
 
-  const orbits = await Effect.runPromise(
-    Effect.all(
-      [...registry.orbits.values()].map((orbit) =>
-        Effect.gen(function* () {
-          yield* validateOrbit(orbit, registry);
-          return yield* instantiateOrbit(orbit);
-        }),
-      ),
-    ),
-  );
-
   return {
     registry,
     agents,
-    orbits,
     sops: [...registry.sops.values()],
     tools: [...registry.tools.values()],
     skills: [...registry.skills.values()],
@@ -98,12 +84,11 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   const outputRoot = join(root, ".kimi-code");
   const pluginRoot = join(process.cwd(), "examples", "prism-harness-qa");
 
-  const { registry, agents, orbits, sops, tools, skills, hooks } =
+  const { registry, agents, sops, tools, skills, hooks } =
     await prepareRegistryForLowering(pluginRoot);
 
   const { files, regions } = await planLowering({
     agents,
-    orbits,
     sops,
     tools,
     skills,
@@ -151,9 +136,9 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   expect(commandSkill?.content).toMatch(/type:\s*"?flow"?/);
   expect(commandSkill?.content).toContain("QA Report");
 
-  const orbitSkill = findContentOperation(files, "skills/qa-orbit/SKILL.md");
-  expect(orbitSkill?.content).toContain("qa-orbit");
-  expect(orbitSkill?.content).toContain("Verify harness load");
+  const sopSkill = findContentOperation(files, "skills/qa-sop/SKILL.md");
+  expect(sopSkill?.content).toContain("qa-sop");
+  expect(sopSkill?.content).toContain("Verify harness load");
 
   const bundledSkill = findContentOperation(files, "skills/qa-helper/SKILL.md");
   expect(bundledSkill?.content).toContain("qa-helper");

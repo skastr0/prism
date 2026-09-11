@@ -14,11 +14,9 @@ import {
   CanonicalTool,
   Identity,
   Modelspace,
-  Orbit,
   Personality,
   Skill,
   Skillspace,
-  type NormalizedOrbitPhase,
   type ToolAuthority,
 } from "./sources.js";
 
@@ -164,44 +162,6 @@ export const makeAgent = (options: AgentOptions = {}): Agent =>
     targets: options.targets ?? {},
   });
 
-export interface OrbitOptions {
-  readonly name?: string;
-  readonly sourcePath?: string;
-  readonly description?: string;
-  readonly produces?: string;
-  readonly parameters?: ReadonlyArray<{ name: string; description?: string; required?: boolean }>;
-  readonly phases?: ReadonlyArray<Partial<NormalizedOrbitPhase> & Pick<NormalizedOrbitPhase, "name">>;
-  readonly body?: string;
-  readonly evolution?: string;
-}
-
-export const makeOrbit = (options: OrbitOptions = {}): Orbit =>
-  new Orbit({
-    name: options.name ?? "delivery",
-    sourcePath: options.sourcePath ?? "/test/plugin/orbits/delivery.orbit.ts",
-    description: options.description ?? "Delivery orbit.",
-    produces: options.produces,
-    parameters: options.parameters ?? [],
-    phases: options.phases?.map((phase) => ({
-      name: phase.name,
-      orbit: phase.orbit,
-      orbit_binding: phase.orbit_binding,
-      agent: phase.agent,
-      agents: phase.agents ?? [],
-      notes: phase.notes,
-      telos: phase.telos,
-      real_world_change: phase.real_world_change,
-      cold_pickup_test: phase.cold_pickup_test,
-      workflow: phase.workflow,
-      contract: phase.contract,
-      body: phase.body,
-    })) ?? [],
-    orchestrator: undefined,
-    pulsar_checkpoints: [],
-    evolution: options.evolution,
-    body: options.body ?? "",
-  });
-
 export interface ResolvedAgentOptions {
   readonly agent?: Agent;
   readonly identity?: Identity;
@@ -226,7 +186,6 @@ export const addToRegistry = (registry: PluginRegistry, entities: {
   readonly skillspaces?: ReadonlyArray<Skillspace>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly agents?: ReadonlyArray<Agent>;
-  readonly orbits?: ReadonlyArray<Orbit>;
   readonly deps?: ReadonlyArray<PluginRegistry>;
 }): PluginRegistry => {
   for (const identity of entities.identities ?? []) {
@@ -249,9 +208,6 @@ export const addToRegistry = (registry: PluginRegistry, entities: {
   }
   for (const agent of entities.agents ?? []) {
     registry.agents.set(agent.name, agent);
-  }
-  for (const orbit of entities.orbits ?? []) {
-    registry.orbits.set(orbit.name, orbit);
   }
   for (const dep of entities.deps ?? []) {
     registry.deps.set(dep.pluginName, dep);

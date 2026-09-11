@@ -64,7 +64,6 @@ const writeFixtureManifests = async (
 ): Promise<void> => {
   const pluginTargets: Record<string, string[]> = {
     agents: [...targetHarnesses],
-    orbits: [...targetHarnesses],
     tools: [...targetHarnesses],
     modelspaces: [...targetHarnesses],
     skillspaces: [...targetHarnesses],
@@ -436,51 +435,6 @@ const writeFixtureAgents = async (paths: CanonicalFixturePaths): Promise<void> =
   await writeSecurityReviewerAgent(paths);
 };
 
-const deliveryOrbitSource = (): string => `import { agentRef, type OrbitSource } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "delivery-contract",
-  description: "Validate that work moves through the right agents",
-  phases: [
-    {
-      name: "Implement change",
-      agents: [agentRef("builder")],
-      notes: {
-        "Input": "Work item is ready to build",
-        "Done": "Implementation is ready for review",
-      },
-    },
-    {
-      name: "Review change",
-      agents: [agentRef("reviewer")],
-      notes: {
-        "Input": "Implementation is ready for review",
-        "Done": "Review findings are recorded",
-      },
-    },
-    {
-      name: "Hand off work",
-      agents: [agentRef("builder"), agentRef("reviewer")],
-      notes: {
-        "Input": "Build and review are complete",
-        "Done": "Work has been handed off cleanly",
-      },
-    },
-  ],
-  orchestrator: {
-    agent: agentRef("builder"),
-  },
-  body: "Use this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.",
-} satisfies OrbitSource;
-`;
-
-const writeDeliveryOrbit = async (paths: CanonicalFixturePaths): Promise<void> => {
-  await writeText(
-    join(paths.pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    deliveryOrbitSource(),
-  );
-};
-
 export const createCanonicalCompileFixture = async (
   options: CanonicalCompileFixtureOptions,
 ): Promise<{ pluginRoot: string; projectRoot: string }> => {
@@ -492,7 +446,6 @@ export const createCanonicalCompileFixture = async (
   await writeFixtureIdentities(paths);
   await writeFixtureTools(paths);
   await writeFixtureAgents(paths);
-  await writeDeliveryOrbit(paths);
 
   return { pluginRoot: paths.pluginRoot, projectRoot: paths.projectRoot };
 };
@@ -543,7 +496,6 @@ export const createGoldenCompileFixture = async (options: {
   await writeFixtureIdentities(paths);
   await writeFixtureTools(paths);
   await writeFixtureAgents(paths);
-  await writeDeliveryOrbit(paths);
   await writeGoldenHook(paths);
   await writeGoldenSkill(paths);
 

@@ -9,7 +9,6 @@ describe("devin lowerer", () => {
     await expect(
       planLowering({
         agents: [{ name: "x" } as never],
-        orbits: [],
         sops: [],
         tools: [],
         target: {
@@ -33,7 +32,6 @@ describe("devin lowerer", () => {
 
     const output = await planLowering({
       agents: [],
-      orbits: [],
       sops: [],
       tools: [],
       registry: {

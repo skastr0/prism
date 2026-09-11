@@ -287,7 +287,6 @@ export default {
         skills: [],
       },
     ],
-    orbits: [],
     sops: [],
     tools: [echoTool],
     skills: [...registry.skills.values()],
@@ -435,7 +434,7 @@ test("grok project lowerer emits agents and skills directly without a shadow plu
     JSON.stringify({
       name: "grok-project-fixture",
       version: "0.1.0",
-      targets: { skills: ["grok"], orbits: ["grok"] },
+      targets: { skills: ["grok"], sops: ["grok"] },
     }, null, 2) + "\n",
   );
   await writeText(
@@ -443,8 +442,8 @@ test("grok project lowerer emits agents and skills directly without a shadow plu
     "---\nname: testing\ndescription: Project testing guidance\n---\n\n# Testing\n",
   );
   await writeText(
-    join(pluginRoot, "orbits", "delivery.orbit.ts"),
-    "export default { name: 'delivery', description: 'Project delivery orbit', phases: [{ name: 'Build' }] };\n",
+    join(pluginRoot, "sops", "delivery.sop.ts"),
+    "export default { name: 'delivery', description: 'Project delivery sop', phases: [{ name: 'Build', purpose: 'Ship it.', body: 'Do the work.' }] };\n",
   );
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
@@ -458,8 +457,7 @@ test("grok project lowerer emits agents and skills directly without a shadow plu
       targetOverride: {},
       skills: [],
     }],
-    orbits: [...registry.orbits.values()],
-    sops: [],
+    sops: [...registry.sops.values()],
     skills: [...registry.skills.values()],
     hooks: [],
     registry,
@@ -475,6 +473,7 @@ test("grok project lowerer emits agents and skills directly without a shadow plu
   expect(files.map((file) => file.targetPath).sort()).toEqual([
     join(outputRoot, "agents", "worker.md"),
     join(outputRoot, "skills", "delivery", "SKILL.md"),
+    join(outputRoot, "skills", "delivery", "references", "Build.md"),
     join(outputRoot, "skills", "testing", "SKILL.md"),
   ].sort());
   expect(files.some((file) => file.targetPath.includes(`${join(outputRoot, "plugins")}/`))).toBe(false);
@@ -495,7 +494,6 @@ test("grok global lowerer omits an empty hooks map", async () => {
       targetOverride: {},
       skills: [],
     }],
-    orbits: [],
     sops: [],
     skills: [],
     hooks: [],
@@ -538,7 +536,6 @@ test("grok project lowerer rejects non-empty hooks with an actionable exactly-on
 
   await expect(planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     skills: [],
     hooks: [hook],
@@ -555,7 +552,6 @@ test("grok project lowerer rejects non-empty hooks with an actionable exactly-on
   );
   await expect(planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     skills: [],
     hooks: [hook],
@@ -605,7 +601,6 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
         skills: ["direct-skill"],
       },
     ],
-    orbits: [],
     sops: [],
     skills: [],
     hooks: [],
@@ -674,7 +669,6 @@ test("grok lowerer reproduces the reported typefully-cli overflow and keeps it c
         skills: [],
       },
     ],
-    orbits: [],
     sops: [],
     skills: [],
     hooks: [],
@@ -723,7 +717,6 @@ test("grok lowerer no longer emits generated tool wire names in agent frontmatte
         skills: [],
       },
     ],
-    orbits: [],
     sops: [],
     skills: [],
     hooks: [],

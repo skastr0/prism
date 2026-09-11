@@ -75,7 +75,6 @@ const planRulesRegions = async (options: {
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const lowered = await planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     tools: [],
     skills: [],
@@ -236,7 +235,6 @@ export default {
         skills: [],
       },
     ],
-    orbits: [],
     sops: [],
     tools: [],
     skills: [...registry.skills.values()],
@@ -547,7 +545,6 @@ export default {
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const lowered = await planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     tools: [],
     skills: [],
@@ -628,7 +625,6 @@ test("codex-cli lowerer fails closed for unsupported model config keys", async (
           skills: [],
         },
       ],
-      orbits: [],
       sops: [],
       tools: [],
       skills: [],
@@ -742,7 +738,6 @@ export default {
 
   const lowered = await planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     tools: [],
     skills: [],

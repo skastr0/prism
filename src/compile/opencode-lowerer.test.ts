@@ -57,7 +57,6 @@ test("opencode planLowering is pure desired state: agent files plus per-key conf
         color: "green",
       }),
     ],
-    orbits: [],
     sops: [],
     tools: [],
     target: {
@@ -109,7 +108,6 @@ test("opencode config regions preserve hand-authored opencode.json content", asy
 
   const lowered = await planLowering({
     agents: [createComposedAgent({ model: { model: "anthropic/claude" } })],
-    orbits: [],
     sops: [],
     tools: [],
     target: {
@@ -154,7 +152,6 @@ test("opencode orphaned regions are removed without touching neighbors", async (
   const lower = (agents: ComposedAgent[]) =>
     planLowering({
       agents,
-      orbits: [],
       sops: [],
       tools: [],
       target: {
@@ -227,7 +224,6 @@ test("opencode generated plugin registration is a plugin-array membership region
 
   const lowered = await planLowering({
     agents: [createComposedAgent()],
-    orbits: [],
     sops: [],
     tools: [tool],
     target: {
@@ -295,7 +291,6 @@ test("opencode lowerer emits sop SKILL.md and per-phase reference downloads", as
 
   const lowered = await planLowering({
     agents: [],
-    orbits: [],
     sops: [beacon],
     tools: [],
     target: {

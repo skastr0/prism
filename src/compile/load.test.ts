@@ -81,7 +81,6 @@ const writeManifest = (pluginRoot: string): Promise<void> =>
         version: "0.1.0",
         targets: {
           agents: ["opencode"],
-          orbits: ["opencode"],
           tools: ["opencode"],
           modelspaces: ["opencode"],
           skillspaces: ["opencode"],
@@ -139,18 +138,6 @@ export default {
 `,
   );
   await writeText(
-    join(pluginRoot, "orbits", "delivery.orbit.ts"),
-    `export default {
-  name: "delivery",
-  description: "Delivery orbit.",
-  phases: [{
-    name: "Build",
-    agents: [{ kind: "agent-ref", name: "builder" }],
-  }],
-};
-`,
-  );
-  await writeText(
     join(pluginRoot, "hooks", "session-start.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
 
@@ -177,7 +164,6 @@ const sourceFamilySnapshot = (registry: PluginRegistry) => {
   const hook = registry.hooks.get("session-start");
   const modelspace = registry.modelspaces.get("models");
   const skillspace = registry.skillspaces.get("global");
-  const orbit = registry.orbits.get("delivery");
   return {
     tool: tool === undefined
       ? undefined
@@ -200,13 +186,6 @@ const sourceFamilySnapshot = (registry: PluginRegistry) => {
         name: skillspace.name,
         description: skillspace.description,
         skills: skillspace.skills,
-      },
-    orbit: orbit === undefined
-      ? undefined
-      : {
-        name: orbit.name,
-        description: orbit.description,
-        phases: orbit.phases,
       },
     hook: hook === undefined
       ? undefined
@@ -243,7 +222,6 @@ export default {
   expect(registry.tools.has("submit_review")).toBe(true);
   expect(registry.modelspaces.has("models")).toBe(true);
   expect(registry.skillspaces.has("global")).toBe(true);
-  expect(registry.orbits.get("delivery")?.phases[0]?.agents).toEqual(["builder"]);
   expect(registry.hooks.get("session-start")?.event).toBe("session.start");
 });
 
@@ -401,20 +379,6 @@ export default {
       targets: { opencode: { name: "testing" } },
     },
   },
-};
-`,
-  );
-  await writeText(
-    join(helperRoot, "orbits", "delivery.orbit.ts"),
-    `import { agentRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "delivery",
-  description: "Delivery orbit.",
-  phases: [{
-    name: "Build",
-    agents: [agentRef("builder")],
-  }],
 };
 `,
   );

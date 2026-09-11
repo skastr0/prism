@@ -82,7 +82,6 @@ test("pi lowerer extension registers only the source plugin's canonical tools", 
 
   const { files: operations } = await planLowering({
     agents: [consumerAgent],
-    orbits: [],
     sops: [],
     tools: [ownedTool],
     skills: [],
@@ -135,7 +134,6 @@ test("two plugins compiling a same-named agent to Pi's direct agent surface fail
       // mirror (see the content-gate comment on assertNoForeignOwnerConflicts
       // in src/sync/plan.ts). This is the realistic shape the law targets.
       agents: [agentNamed("builder", sourcePluginName)],
-      orbits: [],
       sops: [],
       skills: [],
       hooks: [],

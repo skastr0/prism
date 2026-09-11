@@ -197,7 +197,6 @@ export default {
 
   const { files: operations } = await planLowering({
     agents: [],
-    orbits: [],
     sops: [],
     tools: [],
     hooks: [hook, afterHook, startHook, stopHook, turnStopHook],

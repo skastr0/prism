@@ -20,11 +20,6 @@ describe("buildIntrospection", () => {
       description: "Second agent",
     } as never);
 
-    registry.orbits.set("orbit-x", {
-      name: "orbit-x",
-      description: "Test orbit",
-    } as never);
-
     registry.sops.set("sop-y", {
       name: "sop-y",
       description: "Test sop",
@@ -40,8 +35,8 @@ describe("buildIntrospection", () => {
     const result = buildIntrospection(registry);
 
     expect(result.pluginName).toBe("test-plugin");
-    expect(result.derivedSkillCount).toBe(2); // 1 orbit + 1 sop
-    expect(result.groups).toHaveLength(4); // agents, orbits, sops, tools (skipping empty ones)
+    expect(result.derivedSkillCount).toBe(1); // 1 sop
+    expect(result.groups).toHaveLength(3); // agents, sops, tools (skipping empty ones)
 
     // Check agents group
     const agentGroup = result.groups.find((g) => g.noun === "agent");
@@ -53,13 +48,6 @@ describe("buildIntrospection", () => {
     expect(agentGroup!.entries[0]!.summary).toBe("First agent");
     expect(agentGroup!.entries[1]!.name).toBe("agent-b");
     expect(agentGroup!.entries[1]!.summary).toBe("Second agent");
-
-    // Check orbits group
-    const orbitGroup = result.groups.find((g) => g.noun === "orbit");
-    expect(orbitGroup).toBeDefined();
-    expect(orbitGroup!.count).toBe(1);
-    expect(orbitGroup!.entries[0]!.name).toBe("orbit-x");
-    expect(orbitGroup!.entries[0]!.summary).toBe("Test orbit");
 
     // Check sops group
     const sopGroup = result.groups.find((g) => g.noun === "sop");

@@ -10,15 +10,12 @@ import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
-import { resolveAgent, validateOrbit } from "./resolve.js";
+import { resolveAgent } from "./resolve.js";
 import {
   Agent,
   Identity,
-  Orbit,
   Personality,
   Skill,
-  type NormalizedOrbitPhase,
-  type OrbitParameter,
 } from "./sources.js";
 import {
   formatManifestTargets,
@@ -223,102 +220,6 @@ const createResolveAgentRegistry = (): PluginRegistry => {
   return registry;
 };
 
-const createValidationOrbit = (options: {
-  readonly name?: string;
-  readonly parameters?: ReadonlyArray<OrbitParameter>;
-  readonly phase?: Partial<NormalizedOrbitPhase>;
-}): Orbit =>
-  new Orbit({
-    name: options.name ?? "parent",
-    sourcePath: `/tmp/${options.name ?? "parent"}.orbit.ts`,
-    description: `${options.name ?? "parent"} orbit`,
-    parameters: options.parameters ?? [],
-    phases: [
-      {
-        name: "Validate phase",
-        agents: [],
-        ...options.phase,
-      },
-    ],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-const createOrbitValidationRegistry = (): PluginRegistry => {
-  const registry = emptyRegistry("/tmp/orbit-validation", "orbit-validation", "0.1.0");
-  registry.agents.set("builder", createValidationAgent("builder"));
-  registry.agents.set("reviewer", createValidationAgent("reviewer"));
-  const depRegistry = emptyRegistry("/tmp/orbit-validation-dep", "orbit-validation-dep", "0.1.0");
-  depRegistry.agents.set(
-    "builder",
-    createValidationAgent(
-      "builder",
-      registry.agents.get("builder")!.sourcePath,
-    ),
-  );
-  registry.deps.set("alias", depRegistry);
-  registry.orbits.set("concrete", createValidationOrbit({ name: "concrete" }));
-  registry.orbits.set(
-    "template",
-    createValidationOrbit({
-      name: "template",
-      parameters: [
-        { name: "required" },
-        { name: "optional", required: false },
-      ],
-    }),
-  );
-  return registry;
-};
-
-const expectOrbitValidationFailure = async (
-  orbit: Orbit,
-  registry: PluginRegistry,
-): Promise<Extract<CompileError, { readonly _tag: "OrbitValidationError" }>> => {
-  const exit = await Effect.runPromiseExit(validateOrbit(orbit, registry));
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("OrbitValidationError");
-  if (failure._tag !== "OrbitValidationError") {
-    throw new Error("Expected OrbitValidationError");
-  }
-  return failure;
-};
-
-const createOrbitLoadFixture = async (orbitSource: string): Promise<string> => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "orbit-normalization-demo");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "orbit-normalization-demo",
-        version: "0.1.0",
-        targets: {
-          orbits: ["opencode"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "orbits", "phase-normalization.orbit.ts"),
-    orbitSource,
-  );
-
-  return pluginRoot;
-};
-
-const orbitSourceWithPhase = (phaseSource: string): string => `export default {
-  name: "phase-normalization",
-  description: "Phase normalization parser fixture",
-  phases: [
-    ${phaseSource},
-  ],
-};
-`;
-
 const createAgentLoadFixture = async (agentSource: string): Promise<{
   readonly pluginRoot: string;
   readonly sourcePath: string;
@@ -355,22 +256,6 @@ description: Worker identity
   return { pluginRoot, sourcePath };
 };
 
-const expectOrbitSourceParseFailure = async (
-  orbitSource: string,
-): Promise<{
-  readonly failure: Extract<CompileError, { readonly _tag: "SourceParseError" }>;
-  readonly sourcePath: string;
-}> => {
-  const pluginRoot = await createOrbitLoadFixture(orbitSource);
-  const sourcePath = join(pluginRoot, "orbits", "phase-normalization.orbit.ts");
-  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("SourceParseError");
-  if (failure._tag !== "SourceParseError") {
-    throw new Error("Expected SourceParseError");
-  }
-  return { failure, sourcePath };
-};
 
 const canonicalFixtureModelBlock = (harness: string): string => {
   if (harness === "opencode") {
@@ -406,18 +291,15 @@ const canonicalFixtureReviewerModelBlock = (harness: string): string => {
  * Self-contained canonical compile fixture (migrated to the no-grants
  * contract): shared agent-core modelspace/skillspace deps, canonical
  * protocol-core tools, local canonical tools, three agents, and a
- * delivery-contract orbit.
+ * delivery-contract sop.
  */
-const createCanonicalLanguageFixture = async (options?: {
-  withCanonicalToolBindings?: boolean;
-}): Promise<{ pluginRoot: string; projectRoot: string }> => {
+const createCanonicalLanguageFixture = async (): Promise<{ pluginRoot: string; projectRoot: string }> => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");
   const projectRoot = join(root, "project");
   const coreRoot = join(pluginRoot, "deps", "agent-core");
   const protocolRoot = join(pluginRoot, "deps", "protocol-core");
   const targetHarnesses = ["opencode", "claude-code"] as const;
-  const withOrchestrator = options?.withCanonicalToolBindings !== false;
 
   await mkdir(projectRoot, { recursive: true });
 
@@ -433,7 +315,7 @@ const createCanonicalLanguageFixture = async (options?: {
         },
         targets: {
           agents: [...targetHarnesses],
-          orbits: [...targetHarnesses],
+          sops: [...targetHarnesses],
           tools: [...targetHarnesses],
           modelspaces: [...targetHarnesses],
           skillspaces: [...targetHarnesses],
@@ -680,15 +562,9 @@ export default {
 `,
   );
 
-  const orchestratorBlock = withOrchestrator
-    ? `
-  orchestrator: {
-    agent: agentRef("builder"),
-  },`
-    : "";
   await writeText(
-    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, type OrbitSource } from ${JSON.stringify(prismImportPath)};
+    join(pluginRoot, "sops", "delivery-contract.sop.ts"),
+    `import type { SopSource } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery-contract",
@@ -696,31 +572,25 @@ export default {
   phases: [
     {
       name: "Implement change",
-      agents: [agentRef("builder")],
-      notes: {
-        "Input": "Work item is ready to build",
-        "Done": "Implementation is ready for review",
-      },
+      purpose: "Turn a ready work item into a reviewable implementation.",
+      acceptance_criteria: ["Implementation is ready for review"],
+      body: "Input: work item is ready to build. Done: implementation is ready for review.",
     },
     {
       name: "Review change",
-      agents: [agentRef("reviewer")],
-      notes: {
-        "Input": "Implementation is ready for review",
-        "Done": "Review findings are recorded",
-      },
+      purpose: "Record review findings on the implementation.",
+      acceptance_criteria: ["Review findings are recorded"],
+      body: "Input: implementation is ready for review. Done: review findings are recorded.",
     },
     {
       name: "Hand off work",
-      agents: [agentRef("builder"), agentRef("reviewer")],
-      notes: {
-        "Input": "Build and review are complete",
-        "Done": "Work has been handed off cleanly",
-      },
+      purpose: "Hand the reviewed work off cleanly.",
+      acceptance_criteria: ["Work has been handed off cleanly"],
+      body: "Input: build and review are complete. Done: work has been handed off cleanly.",
     },
-  ],${orchestratorBlock}
-  body: "Use this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.",
-} satisfies OrbitSource;
+  ],
+  body: "Use this sop when you want a typed delivery procedure with explicit acceptance criteria.",
+} satisfies SopSource;
 `,
   );
 
@@ -747,7 +617,7 @@ const createAntigravityPluginFixture = async (): Promise<{
           rules: ["antigravity-cli"],
           skills: ["antigravity-cli"],
           agents: ["antigravity-cli"],
-          orbits: ["antigravity-cli"],
+          sops: ["antigravity-cli"],
           tools: ["antigravity-cli"],
           hooks: ["antigravity-cli"],
         },
@@ -784,13 +654,13 @@ export default {
   },
 };
 `);
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "sops", "delivery.sop.ts"), `import type { SopSource } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery",
   description: "Deliver work through Antigravity",
-  phases: [{ name: "Build", agents: [agentRef("worker")] }],
-};
+  phases: [{ name: "Build", purpose: "Ship the change.", body: "Do the work." }],
+} satisfies SopSource;
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
 import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
@@ -1099,7 +969,7 @@ test("readManifest accepts canonical compile target keys", async () => {
   expect(manifest.name).toBe("canonical-compile-fixture");
   expect(manifest.targets).toEqual({
     agents: ["opencode", "claude-code"],
-    orbits: ["opencode", "claude-code"],
+    sops: ["opencode", "claude-code"],
     tools: ["opencode", "claude-code"],
     modelspaces: ["opencode", "claude-code"],
     skillspaces: ["opencode", "claude-code"],
@@ -1659,269 +1529,6 @@ test("compilePluginForTarget collects per-op failures instead of aborting the ba
   }
 });
 
-test("loadPlugin normalizes orbit phase references and metadata", async () => {
-  const pluginRoot = await createOrbitLoadFixture(
-    `import { agentRef, orbitRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "phase-normalization",
-  description: "Phase normalization parser fixture",
-  phases: [
-    {
-      name: "Singular agent",
-      agent: agentRef("builder"),
-      notes: { Input: "scope", Done: "handoff" },
-      telos: "Build the change",
-      real_world_change: "User can finish the workflow",
-      cold_pickup_test: "A fresh agent sees the next step",
-      workflow: {
-        when: "Use when phase routing is repeatable.",
-        inputs: ["glyph"],
-        outputs: ["handoff"],
-        sequence: ["run builder", "verify handoff"],
-        coordination: "Keep one agent accountable for the phase output.",
-        finish_criteria: ["handoff is reviewable"],
-        escalation: "Stop when the handoff cannot be verified.",
-      },
-      body: "Long phase body",
-    },
-    {
-      name: "Bound template",
-      orbit_binding: {
-        orbit: orbitRef("template"),
-        bindings: { required: "value" },
-      },
-    },
-    {
-      name: "Empty plural alias",
-      agents: [],
-      agent: agentRef("reviewer"),
-    },
-  ],
-};
-`,
-  );
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const orbit = registry.orbits.get("phase-normalization");
-
-  expect(orbit).toBeDefined();
-  const [singularAgent, boundTemplate, emptyPluralAlias] = orbit?.phases ?? [];
-
-  expect(singularAgent).toEqual({
-    name: "Singular agent",
-    agent: "builder",
-    agents: ["builder"],
-    notes: { Input: "scope", Done: "handoff" },
-    telos: "Build the change",
-    real_world_change: "User can finish the workflow",
-    cold_pickup_test: "A fresh agent sees the next step",
-    workflow: {
-      when: "Use when phase routing is repeatable.",
-      inputs: ["glyph"],
-      outputs: ["handoff"],
-      sequence: ["run builder", "verify handoff"],
-      coordination: "Keep one agent accountable for the phase output.",
-      finish_criteria: ["handoff is reviewable"],
-      escalation: "Stop when the handoff cannot be verified.",
-    },
-    body: "Long phase body",
-  });
-  expect(boundTemplate).toEqual({
-    name: "Bound template",
-    orbit_binding: { orbit: "template", bindings: { required: "value" } },
-    agents: [],
-    notes: undefined,
-  });
-  expect(Object.hasOwn(boundTemplate ?? {}, "notes")).toBe(true);
-  expect(Object.hasOwn(boundTemplate?.orbit_binding ?? {}, "bindings")).toBe(true);
-  expect(Object.keys(singularAgent?.notes ?? {})).toEqual(["Input", "Done"]);
-  expect(emptyPluralAlias).toEqual({
-    name: "Empty plural alias",
-    agent: "reviewer",
-    agents: [],
-    notes: undefined,
-  });
-});
-
-test("loadPlugin reports SourceParseError paths for invalid orbit phase refs", async () => {
-  const cases: Array<{
-    readonly phase: string;
-    readonly message: string;
-  }> = [
-    {
-      phase: `{ name: "Invalid orbit", orbit: { kind: "orbit-ref", name: "" } }`,
-      message:
-        "phases[0].orbit: reference object must include a non-empty 'name'",
-    },
-    {
-      phase: `{ name: "Invalid binding", orbit_binding: { orbit: { kind: "orbit-ref", name: "" } } }`,
-      message:
-        "phases[0].orbit_binding.orbit: reference object must include a non-empty 'name'",
-    },
-    {
-      phase: `{ name: "Duplicate aliases", agent: "builder", agents: ["reviewer"] }`,
-      message:
-        "phase 1 ('Duplicate aliases') declares multiple agent assignment aliases (agents, agent); use only one of agent or agents",
-    },
-    {
-      phase: `{ name: "Invalid plural", agents: [{ kind: "agent-ref", name: "" }] }`,
-      message:
-        "phases[0].agents[0]: reference object must include a non-empty 'name'",
-    },
-    {
-      phase: `{ name: "Invalid singular through raw agents", agent: { kind: "agent-ref", name: "" } }`,
-      message:
-        "phases[0].agents[0]: reference object must include a non-empty 'name'",
-    },
-    {
-      phase: `{ name: "Invalid singular field", agents: [], agent: { kind: "agent-ref", name: "" } }`,
-      message:
-        "phases[0].agent: reference object must include a non-empty 'name'",
-    },
-  ];
-
-  for (const current of cases) {
-    const { failure, sourcePath } = await expectOrbitSourceParseFailure(
-      orbitSourceWithPhase(current.phase),
-    );
-
-    expect(failure.kind).toBe("orbit");
-    expect(failure.sourcePath).toBe(sourcePath);
-    expect(failure.message).toBe(current.message);
-  }
-});
-
-test("validateOrbit rejects direct parameterized orbit references", async () => {
-  const registry = createOrbitValidationRegistry();
-  const orbit = createValidationOrbit({
-    phase: { orbit: "template" },
-  });
-
-  const failure = await expectOrbitValidationFailure(orbit, registry);
-
-  expect(failure.field).toBe("phases[0].orbit");
-  expect(failure.message).toContain("references parameterized orbit 'template'");
-  expect(failure.message).toContain("use orbit_binding instead");
-});
-
-test("validateOrbit accepts direct concrete orbit references", async () => {
-  const registry = createOrbitValidationRegistry();
-  const orbit = createValidationOrbit({
-    phase: { orbit: "concrete" },
-  });
-
-  await Effect.runPromise(validateOrbit(orbit, registry));
-});
-
-test("validateOrbit validates orbit_binding target and parameter contracts", async () => {
-  const cases: Array<{
-    readonly phase: Partial<NormalizedOrbitPhase>;
-    readonly field: string;
-    readonly message: string;
-  }> = [
-    {
-      phase: { orbit_binding: { orbit: "builder", bindings: { required: "x" } } },
-      field: "phases[0].orbit_binding",
-      message: "resolves to an agent",
-    },
-    {
-      phase: { orbit_binding: { orbit: "missing", bindings: { required: "x" } } },
-      field: "phases[0].orbit_binding",
-      message: "references unknown orbit 'missing'",
-    },
-    {
-      phase: { orbit_binding: { orbit: "template", bindings: { extra: "x" } } },
-      field: "phases[0].orbit_binding.bindings",
-      message: "passes unknown binding(s) to 'template': extra",
-    },
-    {
-      phase: { orbit_binding: { orbit: "template", bindings: {} } },
-      field: "phases[0].orbit_binding.bindings",
-      message: "is missing required binding(s) for 'template': required",
-    },
-  ];
-
-  for (const current of cases) {
-    const registry = createOrbitValidationRegistry();
-    const orbit = createValidationOrbit({ phase: current.phase });
-
-    const failure = await expectOrbitValidationFailure(orbit, registry);
-
-    expect(failure.field).toBe(current.field);
-    expect(failure.message).toContain(current.message);
-  }
-});
-
-test("validateOrbit preserves phase reference failure ordering", async () => {
-  const cases: Array<{
-    readonly phase: Partial<NormalizedOrbitPhase>;
-    readonly field: string;
-    readonly message: string;
-  }> = [
-    {
-      phase: { orbit: "concrete", agents: ["builder"] },
-      field: "phases[0]",
-      message: "declares multiple references",
-    },
-    {
-      phase: { agents: ["missing"] },
-      field: "phases[0].agents[0]",
-      message: "references unknown agent 'missing'",
-    },
-    {
-      phase: { agents: ["builder", "builder"] },
-      field: "phases[0].agents[1]",
-      message: "assigns duplicate agent 'builder'",
-    },
-  ];
-
-  for (const current of cases) {
-    const registry = createOrbitValidationRegistry();
-    const orbit = createValidationOrbit({ phase: current.phase });
-
-    const failure = await expectOrbitValidationFailure(orbit, registry);
-
-    expect(failure.field).toBe(current.field);
-    expect(failure.message).toContain(current.message);
-  }
-});
-
-test("validateOrbit rejects template placeholders inside references before resolution", async () => {
-  const registry = createOrbitValidationRegistry();
-  const orbit = createValidationOrbit({
-    parameters: [{ name: "Agent" }],
-    phase: { agents: ["${Agent}"] },
-  });
-
-  const failure = await expectOrbitValidationFailure(orbit, registry);
-
-  expect(failure.field).toBe("phases[0].agents[0]");
-  expect(failure.message).toBe("reference names cannot contain template placeholders");
-});
-
-test("orbit skill renders the orchestrator section", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-  expect(skill).toContain("## Orchestrator");
-  expect(skill).toContain("`builder`");
-});
-
 test("loadPlugin preserves agent normalization failure order", async () => {
   const cases: ReadonlyArray<{
     readonly agentSource: string;
@@ -2068,10 +1675,10 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   expect(parsedAgent.content).toContain("# Worker");
 
   expect(await readFile(join(outputPluginRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
-  const orbitSkill = await readFile(join(outputPluginRoot, "skills", "delivery", "SKILL.md"), "utf8");
-  expect(orbitSkill).not.toContain("<!-- prism:");
-  expect(orbitSkill).toContain("# delivery");
-  expect(orbitSkill).toContain("### 1. Build — agent `worker`");
+  const sopSkill = await readFile(join(outputPluginRoot, "skills", "delivery", "SKILL.md"), "utf8");
+  expect(sopSkill).not.toContain("<!-- prism:");
+  expect(sopSkill).toContain("# delivery");
+  expect(sopSkill).toContain("Ship the change.");
 
   expect(await pathExists(join(testPrismHome(), "runtime", "mcp", "antigravity_plugin.demo", "server.mjs"))).toBe(false);
 
@@ -2437,7 +2044,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   ).toBe(true);
   expect(
     await pathExists(
-      join(projectRoot, ".opencode", "orbits", "delivery-contract.md"),
+      join(projectRoot, ".opencode", "sops", "delivery-contract.md"),
     ),
   ).toBe(false);
 });
@@ -3643,7 +3250,7 @@ test("compilePluginForTarget lowers Factory Droid plugin-bundle surfaces", async
         targets: {
           agents: ["factory-droid"],
           skills: ["factory-droid"],
-          orbits: ["factory-droid"],
+          sops: ["factory-droid"],
           tools: ["factory-droid"],
           hooks: ["factory-droid"],
         },
@@ -3704,13 +3311,13 @@ export default {
 };
 `,
   );
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "sops", "delivery.sop.ts"), `import type { SopSource } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery",
   description: "Deliver work through Factory Droid",
-  phases: [{ name: "Build", agents: [agentRef("worker")] }],
-};
+  phases: [{ name: "Build", purpose: "Ship the change.", body: "Do the work." }],
+} satisfies SopSource;
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
 import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
@@ -3880,7 +3487,7 @@ test("compilePluginForTarget lowers Pi package and extension surfaces", async ()
           commands: ["pi"],
           agents: ["pi"],
           skills: ["pi"],
-          orbits: ["pi"],
+          sops: ["pi"],
           tools: ["pi"],
           hooks: ["pi"],
         },
@@ -3938,13 +3545,13 @@ export default {
   },
 };
 `);
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "sops", "delivery.sop.ts"), `import type { SopSource } from ${JSON.stringify(prismImportPath)};
 
 export default {
   name: "delivery",
   description: "Deliver work through Pi",
-  phases: [{ name: "Build", agents: [agentRef("worker")] }],
-};
+  phases: [{ name: "Build", purpose: "Ship the change.", body: "Do the work." }],
+} satisfies SopSource;
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
 import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
@@ -4368,143 +3975,8 @@ test("compilePluginForTarget rejects Kimi Code project scope", async () => {
   });
 });
 
-test("compilePluginForTarget prunes stale Factory plugin bundle for template-only orbit targets", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "factory-source-only");
-  const projectRoot = join(root, "project");
-  const generatedRoot = join(
-    projectRoot,
-    ".factory",
-    "plugins",
-    "prism-generated-factory-source-only",
-  );
-  await mkdir(projectRoot, { recursive: true });
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({
-      name: "factory-source-only",
-      version: "0.1.0",
-      targets: {
-        skills: ["factory-droid"],
-        orbits: ["factory-droid"],
-      },
-    })}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "skills", "testing", "SKILL.md"),
-    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
-  );
-  await writeText(
-    join(pluginRoot, "orbits", "template.orbit.ts"),
-    `
-export default {
-  name: "template",
-  description: "Template-only Factory orbit.",
-  parameters: [{ name: "topic" }],
-  phases: [{ name: "Work on \${topic}" }],
-};
-`,
-  );
-  const staleTarget = join(generatedRoot, "droids", "stale.md");
-  const staleContent = "---\nname: stale\n---\n";
-  await writeText(staleTarget, staleContent);
-  await commitSnapshot({
-    prismHome: testPrismHome(),
-    manifest: {
-      version: 1,
-      harness: "factory-droid",
-      root: join(projectRoot, ".factory"),
-      entries: [{
-        targetPath: staleTarget,
-        contentHash: computeContentHash(staleContent),
-        mode: "owned",
-        plugin: "factory-source-only",
-      }],
-    },
-  });
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "factory-droid",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(result.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune",
-      targetPath: staleTarget,
-    }),
-  );
-  expect(await directoryExists(generatedRoot)).toBe(false);
-  const factorySnapshot = await readSnapshot({
-    prismHome: testPrismHome(),
-    harness: "factory-droid",
-    root: join(projectRoot, ".factory"),
-  });
-  expect(factorySnapshot.manifest.entries).toHaveLength(0);
-});
-
-test("compilePluginForTarget keeps plugin skills out of Factory orbit-only bundles", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "factory-orbit-only");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({
-      name: "factory-orbit-only",
-      version: "0.1.0",
-      targets: {
-        skills: ["factory-droid"],
-        orbits: ["factory-droid"],
-      },
-    })}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "skills", "testing", "SKILL.md"),
-    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
-  );
-  await writeText(
-    join(pluginRoot, "orbits", "delivery.orbit.ts"),
-    `
-export default {
-  name: "delivery",
-  description: "Concrete Factory orbit.",
-  phases: [{ name: "Deliver" }],
-};
-`,
-  );
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "factory-droid",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const generatedRoot = join(
-    projectRoot,
-    ".factory",
-    "plugins",
-    "prism-generated-factory-orbit-only",
-  );
-  expect(await pathExists(join(generatedRoot, "skills", "delivery", "SKILL.md"))).toBe(true);
-  expect(await pathExists(join(generatedRoot, "skills", "testing", "SKILL.md"))).toBe(false);
-});
-
 test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canonical tool runtime is required", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    withCanonicalToolBindings: false,
-  });
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   const claude = await Effect.runPromise(
     compilePluginForTarget({
@@ -4546,15 +4018,15 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
       join(pluginRootPath, "skills", "delivery-contract", "SKILL.md"),
     ),
   ).toBe(true);
-  const deliveryOrbitSkill = await readFile(
+  const deliverySopSkill = await readFile(
     join(pluginRootPath, "skills", "delivery-contract", "SKILL.md"),
     "utf8",
   );
-  expect(deliveryOrbitSkill).not.toContain("## Orchestrator");
-  expect(deliveryOrbitSkill).not.toContain("create_glyph");
+  expect(deliverySopSkill).not.toContain("## Orchestrator");
+  expect(deliverySopSkill).not.toContain("create_glyph");
   expect(
     await pathExists(
-      join(pluginRootPath, "orbits", "delivery-contract.md"),
+      join(pluginRootPath, "sops", "delivery-contract.md"),
     ),
   ).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
@@ -4594,875 +4066,6 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
     );
 
     expect(result.composed).toHaveLength(0);
-    expect(result.orbits).toHaveLength(0);
     expect(result.operations).toHaveLength(0);
   }
-});
-
-test("derived orbit skill helper renders parametric stub when invoked on a template", async () => {
-  // Direct unit-level invocation of renderDerivedOrbitSkillBody to
-  // exercise the parametric branch. We synthesize a minimal Orbit and
-  // empty registry so the helper has to fall back gracefully.
-  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
-  const { Orbit } = await import("./sources.js");
-  const { emptyRegistry } = await import("./registry.js");
-
-  const orbit = new Orbit({
-    name: "demo-template",
-    sourcePath: "/tmp/demo-template.orbit.ts",
-    description: "A parametric template",
-    parameters: [{ name: "audience", required: true }],
-    phases: [],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-  const registry = emptyRegistry("/tmp", "demo", "0.0.0");
-
-  const body = renderDerivedOrbitSkillBody(orbit, registry);
-  expect(body).toContain("# demo-template");
-  expect(body).toContain("This orbit is parameterized");
-});
-
-test("derived orbit skill renders orbit definitions", async () => {
-  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
-  const { Orbit } = await import("./sources.js");
-  const { emptyRegistry } = await import("./registry.js");
-
-  const orbit = new Orbit({
-    name: "artifact-demo",
-    sourcePath: "/tmp/artifact-demo.orbit.ts",
-    description: "A demo orbit",
-    definitions: {
-      glyphs: {
-        purpose: "Glyphs carry the moving work contract.",
-        contains: ["Intent, scope, acceptance criteria, and durable notes."],
-        boundaries: ["Glyph IDs are routing metadata, not domain vocabulary."],
-        avoid: ["Do not turn glyph IDs into source code names."],
-      },
-      dispatches: {
-        purpose: "Dispatches preserve phase outputs and evidence snapshots.",
-      },
-      chatter: {
-        purpose: "Chatter is transient conversation until promoted into a durable artifact.",
-      },
-      signals: {
-        purpose: "Signals are standalone orbit-bound inputs.",
-        boundaries: ["Do not use signals as phase handoff packets."],
-      },
-    },
-    parameters: [],
-    phases: [],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-  const registry = emptyRegistry("/tmp", "demo", "0.0.0");
-
-  const body = renderDerivedOrbitSkillBody(orbit, registry);
-  expect(body).toContain("## Definitions");
-  expect(body).toContain("### Glyphs");
-  expect(body).toContain("Glyph IDs are routing metadata, not domain vocabulary.");
-  expect(body).toContain("### Dispatches");
-  expect(body).toContain("### Chatter");
-  expect(body).toContain("### Signals");
-});
-
-test("orbit definitions participate in template instantiation", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const orbit = new Orbit({
-    name: "artifact-template",
-    sourcePath: "/tmp/artifact-template.orbit.ts",
-    description: "A ${domain} template",
-    definitions: {
-      glyphs: {
-        purpose: "${domain} glyphs carry the active work contract.",
-        contains: ["${domain} intent and acceptance criteria."],
-      },
-    },
-    parameters: [{ name: "domain", required: true }],
-    phases: [],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const instantiated = await Effect.runPromise(
-    instantiateOrbit(orbit, { domain: "Forge" }),
-  );
-
-  expect(instantiated.description).toBe("A Forge template");
-  expect(instantiated.definitions?.glyphs?.purpose).toBe(
-    "Forge glyphs carry the active work contract.",
-  );
-  expect(instantiated.definitions?.glyphs?.contains).toEqual([
-    "Forge intent and acceptance criteria.",
-  ]);
-});
-
-test("orbit instantiation reports top-level binding failures before templating", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const orbit = new Orbit({
-    name: "binding-template",
-    sourcePath: "/tmp/binding-template.orbit.ts",
-    description: "${required} template",
-    parameters: [
-      { name: "required", required: true },
-      { name: "second", required: true },
-    ],
-    phases: [],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const unknownFailure = getFailure(
-    await Effect.runPromiseExit(instantiateOrbit(orbit, { extra: "value" })),
-  );
-  expect(unknownFailure._tag).toBe("OrbitValidationError");
-  if (unknownFailure._tag === "OrbitValidationError") {
-    expect(unknownFailure.field).toBe("bindings");
-    expect(unknownFailure.message).toBe("received unknown binding(s): extra");
-  }
-
-  const missingFailure = getFailure(await Effect.runPromiseExit(instantiateOrbit(orbit, {})));
-  expect(missingFailure._tag).toBe("OrbitValidationError");
-  if (missingFailure._tag === "OrbitValidationError") {
-    expect(missingFailure.field).toBe("bindings");
-    expect(missingFailure.message).toBe("missing required binding(s): required, second");
-  }
-});
-
-test("orbit instantiation builds complete concrete orbit shape", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const orbit = new Orbit({
-    name: "full-template",
-    sourcePath: "/tmp/full-template.orbit.ts",
-    description: "A ${domain} orbit",
-    produces: "${domain} artifact",
-    definitions: {
-      glyphs: { purpose: "${domain} glyphs preserve the work contract." },
-    },
-    parameters: [{ name: "domain", required: true }],
-    phases: [
-      {
-        name: "${domain} build",
-        agents: ["builder"],
-        notes: { Done: "${domain} complete" },
-        telos: "Build ${domain}.",
-      },
-    ],
-    orchestrator: {
-      agent: "builder",
-    },
-    pulsar_checkpoints: [
-      {
-        after: "${domain} build",
-        before: "${domain} review",
-        note: "${domain} checkpoint",
-      },
-    ],
-    evolution: "${domain} backlog",
-    body: "# ${domain}\n",
-  });
-
-  const instantiated = await Effect.runPromise(
-    instantiateOrbit(orbit, { domain: "Forge" }),
-  );
-
-  expect(instantiated.name).toBe("full-template");
-  expect(instantiated.sourcePath).toBe("/tmp/full-template.orbit.ts");
-  expect(instantiated.description).toBe("A Forge orbit");
-  expect(instantiated.produces).toBe("Forge artifact");
-  expect(instantiated.definitions?.glyphs?.purpose).toBe(
-    "Forge glyphs preserve the work contract.",
-  );
-  expect(instantiated.parameters).toEqual([]);
-  expect(instantiated.phases).toEqual([
-    {
-      name: "Forge build",
-      agents: ["builder"],
-      notes: { Done: "Forge complete" },
-      telos: "Build Forge.",
-    },
-  ]);
-  expect(instantiated.orchestrator).toEqual(orbit.orchestrator);
-  expect(instantiated.orchestrator).not.toBe(orbit.orchestrator);
-  expect(instantiated.pulsar_checkpoints).toEqual([
-    { after: "Forge build", before: "Forge review", note: "Forge checkpoint" },
-  ]);
-  expect(instantiated.evolution).toBe("Forge backlog");
-  expect(instantiated.body).toBe("# Forge\n");
-});
-
-test("orbit instantiation preserves top-level failure ordering", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const cases: Array<{
-    readonly orbit: Orbit;
-    readonly field: string;
-  }> = [
-    {
-      orbit: new Orbit({
-        name: "description-missing-template",
-        sourcePath: "/tmp/description-missing-template.orbit.ts",
-        description: "${missingDescription}",
-        parameters: [{ name: "missingDescription", required: false }],
-        phases: [],
-        pulsar_checkpoints: [],
-        body: "",
-      }),
-      field: "description",
-    },
-    {
-      orbit: new Orbit({
-        name: "produces-missing-template",
-        sourcePath: "/tmp/produces-missing-template.orbit.ts",
-        description: "Produces template",
-        produces: "${missingProduces}",
-        parameters: [{ name: "missingProduces", required: false }],
-        phases: [],
-        pulsar_checkpoints: [],
-        body: "",
-      }),
-      field: "produces",
-    },
-    {
-      orbit: new Orbit({
-        name: "definitions-missing-template",
-        sourcePath: "/tmp/definitions-missing-template.orbit.ts",
-        description: "Definitions template",
-        definitions: {
-          glyphs: { purpose: "${missingDefinition}" },
-        },
-        parameters: [{ name: "missingDefinition", required: false }],
-        phases: [],
-        pulsar_checkpoints: [],
-        body: "",
-      }),
-      field: "definitions.glyphs.purpose",
-    },
-    {
-      orbit: new Orbit({
-        name: "checkpoint-missing-template",
-        sourcePath: "/tmp/checkpoint-missing-template.orbit.ts",
-        description: "Checkpoint template",
-        parameters: [{ name: "missingCheckpoint", required: false }],
-        phases: [],
-        pulsar_checkpoints: [{ after: "${missingCheckpoint}" }],
-        body: "",
-      }),
-      field: "pulsar_checkpoints[0].after",
-    },
-    {
-      orbit: new Orbit({
-        name: "evolution-missing-template",
-        sourcePath: "/tmp/evolution-missing-template.orbit.ts",
-        description: "Evolution template",
-        parameters: [{ name: "missingEvolution", required: false }],
-        phases: [],
-        pulsar_checkpoints: [],
-        evolution: "${missingEvolution}",
-        body: "",
-      }),
-      field: "evolution",
-    },
-    {
-      orbit: new Orbit({
-        name: "body-missing-template",
-        sourcePath: "/tmp/body-missing-template.orbit.ts",
-        description: "Body template",
-        parameters: [{ name: "missingBody", required: false }],
-        phases: [],
-        pulsar_checkpoints: [],
-        body: "${missingBody}",
-      }),
-      field: "body",
-    },
-  ];
-
-  for (const current of cases) {
-    const failure = getFailure(await Effect.runPromiseExit(instantiateOrbit(current.orbit, {})));
-
-    expect(failure._tag).toBe("OrbitValidationError");
-    if (failure._tag === "OrbitValidationError") {
-      expect(failure.field).toBe(current.field);
-      expect(failure.message).toContain("missing binding");
-    }
-  }
-});
-
-test("derived orbit skill renders per-phase telos, real-world change, and cold-pickup test", async () => {
-  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
-  const { Orbit } = await import("./sources.js");
-  const { emptyRegistry } = await import("./registry.js");
-
-  const orbit = new Orbit({
-    name: "phase-rich",
-    sourcePath: "/tmp/phase-rich.orbit.ts",
-    description: "Phase-rich orbit demo",
-    parameters: [],
-    phases: [
-      {
-        name: "build",
-        agents: [],
-        notes: { Input: "One committed glyph.", Done: "Validation clean." },
-        telos: "Bring working software into existence inside the bounds of the glyph.",
-        real_world_change:
-          "Code, tests, and product behavior are durably different and re-verifiable.",
-        cold_pickup_test:
-          "Could a reviewer judge satisfaction from only the diff and the glyph?",
-        workflow: {
-          when: "Use a workflow when build work can be decomposed into deterministic agent tasks.",
-          inputs: ["Committed work contract", "Current repository state"],
-          outputs: ["Atomic commit", "Validation evidence"],
-          sequence: ["Implement", "Validate", "Commit", "Review commit range"],
-          coordination: "Builders commit the work unit before review starts.",
-          finish_criteria: ["Focused validation passed", "Working tree is clean"],
-          escalation: "Escalate if the task needs human taste or authority.",
-        },
-        body: "## Procrastination shapes\n\n- Moving the glyph forward without changing the codebase.\n",
-      },
-    ],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-  const registry = emptyRegistry("/tmp", "phase-rich", "0.0.0");
-
-  const skill = renderDerivedOrbitSkillBody(orbit, registry);
-  expect(skill).toContain("- **Telos**: Bring working software into existence");
-  expect(skill).toContain("- **Real-world change**: Code, tests, and product behavior");
-  expect(skill).toContain("- **Cold-pickup test**: Could a reviewer judge satisfaction");
-  expect(skill).toContain("- **Workflow trigger**: Use a workflow when build work");
-  expect(skill).toContain("- **Workflow sequence**: Implement; Validate; Commit; Review commit range");
-  expect(skill).toContain("- **Workflow finish criteria**: Focused validation passed; Working tree is clean");
-  expect(skill).toContain("- **Input**: One committed glyph.");
-  expect(skill).toContain("- **Reference**: see `references/build.md`");
-});
-
-test("derived orbit phase references render when body or workflow is present", async () => {
-  const { renderDerivedOrbitPhaseReferences } = await import(
-    "./derived-orbit-skill.js"
-  );
-  const { Orbit } = await import("./sources.js");
-
-  const orbit = new Orbit({
-    name: "phase-refs",
-    sourcePath: "/tmp/phase-refs.orbit.ts",
-    description: "Phase reference demo",
-    parameters: [],
-    phases: [
-      {
-        name: "explore",
-        agents: [],
-        telos: "Reduce ambiguity and recommend a direction.",
-        real_world_change:
-          "An option space exists with the alternatives considered and the rationale for the pick.",
-        cold_pickup_test:
-          "Could another agent pick up the recommendation cold and act?",
-        body: "## What good explore produces\n\nA sharper problem statement and a recommendation.\n",
-      },
-      {
-        name: "build",
-        agents: [],
-        workflow: {
-          when: "The phase needs repeatable agent execution.",
-          inputs: ["Prepared task"],
-          outputs: ["Reviewed outcome"],
-          sequence: ["Run builder", "Run reviewer"],
-          coordination: "Reviewers inspect explicit output, not ambient state.",
-          finish_criteria: ["Output schema decodes"],
-          escalation: "Stop if the workflow cannot observe the result.",
-        },
-      },
-      {
-        name: "commit",
-        agents: [],
-        // No body or workflow — should produce no reference file.
-      },
-    ],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const refs = renderDerivedOrbitPhaseReferences(orbit);
-  expect(refs).toHaveLength(2);
-  expect(refs[0]?.filename).toBe("explore.md");
-  expect(refs[0]?.content).toContain("# phase-refs:explore");
-  expect(refs[0]?.content).toContain("## Telos");
-  expect(refs[0]?.content).toContain("Reduce ambiguity");
-  expect(refs[0]?.content).toContain("## Real-world change");
-  expect(refs[0]?.content).toContain("## Cold-pickup test");
-  expect(refs[0]?.content).toContain("## What good explore produces");
-  expect(refs[1]?.filename).toBe("build.md");
-  expect(refs[1]?.content).toContain("# phase-refs:build");
-  expect(refs[1]?.content).toContain("## Workflow");
-  expect(refs[1]?.content).toContain("### Sequence");
-  expect(refs[1]?.content).toContain("- Run builder");
-  expect(refs[1]?.content).toContain("### Finish criteria");
-  expect(refs[1]?.content).toContain("- Output schema decodes");
-  expect(refs[1]?.content).not.toContain("# phase-refs:commit");
-});
-
-test("orbit body declared in TS source flows into the generated orbit skill", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  const declaredBody = "## The Orbit Principle\n\nForge is a routing utility, not the work.\n";
-
-  await writeText(
-    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "delivery-contract",
-  description: "Orbit body propagation check",
-  phases: [
-    {
-      name: "Implement change",
-      agents: [agentRef("builder")],
-    },
-  ],
-  body: ${JSON.stringify(declaredBody)},
-};
-`,
-  );
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-
-  expect(skill).toContain("## The Orbit Principle");
-  expect(skill).toContain("Forge is a routing utility, not the work.");
-});
-
-test("orbit phase fields participate in template instantiation", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const orbit = new Orbit({
-    name: "phase-template",
-    sourcePath: "/tmp/phase-template.orbit.ts",
-    description: "${domain} phase template",
-    parameters: [{ name: "domain", required: true }],
-    phases: [
-      {
-        name: "build",
-        agents: [],
-        telos: "Bring ${domain} change into existence.",
-        real_world_change: "${domain} reality is different and re-verifiable.",
-        cold_pickup_test: "Could a ${domain} reviewer pick up the change cold?",
-        workflow: {
-          when: "Use when ${domain} can run as a workflow.",
-          inputs: ["${domain} request"],
-          outputs: ["${domain} result"],
-          sequence: ["Plan ${domain}", "Build ${domain}", "Review ${domain}"],
-          coordination: "Keep ${domain} boundaries explicit.",
-          finish_criteria: ["${domain} validation passes"],
-          escalation: "Escalate unclear ${domain} authority.",
-        },
-        body: "## ${domain} build notes\n\nKeep scope inside the glyph.\n",
-      },
-    ],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const instantiated = await Effect.runPromise(
-    instantiateOrbit(orbit, { domain: "Forge" }),
-  );
-
-  expect(instantiated.phases[0]?.telos).toBe(
-    "Bring Forge change into existence.",
-  );
-  expect(instantiated.phases[0]?.real_world_change).toBe(
-    "Forge reality is different and re-verifiable.",
-  );
-  expect(instantiated.phases[0]?.cold_pickup_test).toBe(
-    "Could a Forge reviewer pick up the change cold?",
-  );
-  expect(instantiated.phases[0]?.workflow?.when).toBe(
-    "Use when Forge can run as a workflow.",
-  );
-  expect(instantiated.phases[0]?.workflow?.sequence).toEqual([
-    "Plan Forge",
-    "Build Forge",
-    "Review Forge",
-  ]);
-  expect(instantiated.phases[0]?.workflow?.finish_criteria).toEqual([
-    "Forge validation passes",
-  ]);
-  expect(instantiated.phases[0]?.body).toBe(
-    "## Forge build notes\n\nKeep scope inside the glyph.\n",
-  );
-});
-
-test("orbit phase template instantiation preserves references bindings and notes", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const orbit = new Orbit({
-    name: "phase-shape-template",
-    sourcePath: "/tmp/phase-shape-template.orbit.ts",
-    description: "Phase shape template",
-    parameters: [{ name: "domain", required: true }],
-    phases: [
-      {
-        name: "${domain} build",
-        orbit_binding: {
-          orbit: "template",
-          bindings: { required: "${domain}" },
-        },
-        agent: "builder",
-        agents: ["builder"],
-        notes: { Input: "${domain} input", Done: "${domain} complete" },
-        telos: "Build ${domain}.",
-      },
-      {
-        name: "empty shape",
-        orbit_binding: { orbit: "template", bindings: {} },
-        agents: [],
-        notes: {},
-      },
-    ],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const instantiated = await Effect.runPromise(
-    instantiateOrbit(orbit, { domain: "Forge" }),
-  );
-
-  expect(instantiated.phases[0]).toEqual({
-    name: "Forge build",
-    orbit_binding: { orbit: "template", bindings: { required: "Forge" } },
-    agent: "builder",
-    agents: ["builder"],
-    notes: { Input: "Forge input", Done: "Forge complete" },
-    telos: "Build Forge.",
-  });
-  expect(instantiated.phases[1]).toEqual({
-    name: "empty shape",
-    orbit_binding: { orbit: "template" },
-    agents: [],
-  });
-  expect(Object.hasOwn(instantiated.phases[1] ?? {}, "notes")).toBe(false);
-});
-
-test("orbit phase template instantiation reports missing phase binding field", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const orbit = new Orbit({
-    name: "phase-missing-binding-template",
-    sourcePath: "/tmp/phase-missing-binding-template.orbit.ts",
-    description: "Phase missing binding template",
-    parameters: [{ name: "domain", required: false }],
-    phases: [
-      {
-        name: "plain phase",
-        agents: [],
-        notes: { Input: "${domain} input" },
-      },
-    ],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const exit = await Effect.runPromiseExit(instantiateOrbit(orbit, {}));
-  const failure = getFailure(exit);
-
-  expect(failure._tag).toBe("OrbitValidationError");
-  if (failure._tag === "OrbitValidationError") {
-    expect(failure.field).toBe("phases[0].notes.Input");
-    expect(failure.message).toBe(
-      "missing binding 'domain' required by template string",
-    );
-  }
-});
-
-test("orbit phase template instantiation preserves missing binding order", async () => {
-  const { instantiateOrbit } = await import("./resolve.js");
-  const { Orbit } = await import("./sources.js");
-
-  const cases: Array<{
-    readonly phase: NormalizedOrbitPhase;
-    readonly field: string;
-  }> = [
-    {
-      phase: {
-        name: "${missingName}",
-        orbit: "${missingOrbit}",
-        orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
-        agents: [],
-        notes: { Input: "${missingNote}" },
-        telos: "${missingTelos}",
-      },
-      field: "phases[0].name",
-    },
-    {
-      phase: {
-        name: "plain",
-        orbit: "${missingOrbit}",
-        orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
-        agents: [],
-        notes: { Input: "${missingNote}" },
-      },
-      field: "phases[0].orbit",
-    },
-    {
-      phase: {
-        name: "plain",
-        orbit: "target",
-        orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
-        agents: [],
-        notes: { Input: "${missingNote}" },
-      },
-      field: "phases[0].orbit_binding.bindings.required",
-    },
-    {
-      phase: {
-        name: "plain",
-        orbit_binding: { orbit: "template", bindings: { required: "value" } },
-        agents: [],
-        notes: { Input: "${missingNote}" },
-        telos: "${missingTelos}",
-      },
-      field: "phases[0].notes.Input",
-    },
-    {
-      phase: {
-        name: "plain",
-        agents: [],
-        telos: "${missingTelos}",
-        real_world_change: "${missingChange}",
-      },
-      field: "phases[0].telos",
-    },
-    {
-      phase: {
-        name: "plain",
-        agents: [],
-        telos: "value",
-        real_world_change: "${missingChange}",
-        cold_pickup_test: "${missingPickup}",
-      },
-      field: "phases[0].real_world_change",
-    },
-    {
-      phase: {
-        name: "plain",
-        agents: [],
-        real_world_change: "value",
-        cold_pickup_test: "${missingPickup}",
-        body: "${missingBody}",
-      },
-      field: "phases[0].cold_pickup_test",
-    },
-    {
-      phase: {
-        name: "plain",
-        agents: [],
-        cold_pickup_test: "value",
-        body: "${missingBody}",
-      },
-      field: "phases[0].body",
-    },
-  ];
-
-  for (const current of cases) {
-    const orbit = new Orbit({
-      name: "phase-order-template",
-      sourcePath: "/tmp/phase-order-template.orbit.ts",
-      description: "Phase order template",
-      parameters: [
-        { name: "missingName", required: false },
-        { name: "missingOrbit", required: false },
-        { name: "missingBinding", required: false },
-        { name: "missingNote", required: false },
-        { name: "missingTelos", required: false },
-        { name: "missingChange", required: false },
-        { name: "missingPickup", required: false },
-        { name: "missingBody", required: false },
-      ],
-      phases: [current.phase],
-      pulsar_checkpoints: [],
-      body: "",
-    });
-
-    const failure = getFailure(await Effect.runPromiseExit(instantiateOrbit(orbit, {})));
-
-    expect(failure._tag).toBe("OrbitValidationError");
-    if (failure._tag === "OrbitValidationError") {
-      expect(failure.field).toBe(current.field);
-      expect(failure.message).toContain("missing binding");
-    }
-  }
-});
-
-test("derived orbit skill renders parametric stub for parameterized orbit templates", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await writeText(
-    join(pluginRoot, "orbits", "parametric-template.orbit.ts"),
-    `import { agentRef } from ${JSON.stringify(prismImportPath)};
-
-export default {
-  name: "parametric-template",
-  description: "A parametric orbit template; remains uninstantiated.",
-  parameters: [{ name: "audience" }],
-  phases: [
-    {
-      name: "Implement change",
-      agents: [agentRef("builder")],
-    },
-  ],
-};
-`,
-  );
-
-  // Parameterized orbits do not lower; only their templates exist. The
-  // helper still gracefully describes them when invoked. Build a quick
-  // unit-style invocation by compiling and asserting the skill is NOT emitted.
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(
-    await pathExists(
-      join(projectRoot, ".opencode", "skills", "parametric-template", "SKILL.md"),
-    ),
-  ).toBe(false);
-});
-
-test("derived orbit skill drops the closure-discipline section", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-
-  expect(skill).not.toContain("## Closure discipline");
-});
-
-test("derived orbit skill agent sub-sections do not render a duplicated **Identity** line", async () => {
-  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
-
-  await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const skill = await readFile(
-    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
-    "utf8",
-  );
-
-  expect(skill).not.toMatch(/^\*\*Identity\*\*:/m);
-});
-
-test("derived orbit skill personality block renders only archetype + gloss", async () => {
-  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
-  const { Orbit, Personality, Agent, Identity } = await import("./sources.js");
-  const { emptyRegistry } = await import("./registry.js");
-
-  const registry = emptyRegistry("/tmp/persona", "persona", "0.0.0");
-  registry.identities.set(
-    "worker",
-    new Identity({
-      name: "worker",
-      sourcePath: "/tmp/worker.identity.md",
-      description: "Worker identity description",
-      body: "",
-    }),
-  );
-  registry.personalities.set(
-    "passionate-screenwriter",
-    new Personality({
-      name: "passionate-screenwriter",
-      sourcePath: "/tmp/passionate-screenwriter.personality.md",
-      description: "Forward-projecting orchestration that drives momentum across phases without losing rigor.",
-      temperament: "Passionate (`E-A-S`) — emotional, active, secondary",
-      orientation: "affirms outward",
-      virtues: "primary **Prudence**, secondary **Temperance**, ambition **magnanimous**",
-      body: "",
-    }),
-  );
-  const agent = new Agent({
-    name: "worker",
-    sourcePath: "/tmp/worker.agent.ts",
-    description: "Agent paragraph description",
-    identity: "worker",
-    personality: "passionate-screenwriter",
-    skills: [],
-    targets: {},
-  });
-  registry.agents.set("worker", agent);
-
-  const orbit = new Orbit({
-    name: "persona-demo",
-    sourcePath: "/tmp/persona-demo.orbit.ts",
-    description: "demo",
-    parameters: [],
-    phases: [
-      {
-        name: "Do work",
-        agents: ["worker"],
-      },
-    ],
-    pulsar_checkpoints: [],
-    body: "",
-  });
-
-  const body = renderDerivedOrbitSkillBody(orbit, registry);
-
-  // Trimmed personality form.
-  expect(body).toContain(
-    "**Personality**: `passionate-screenwriter` — Forward-projecting orchestration that drives momentum across phases without losing rigor.",
-  );
-  // Temperament / orientation / virtues clauses are no longer rendered.
-  expect(body).not.toContain("temperament Passionate");
-  expect(body).not.toContain("orientation affirms outward");
-  expect(body).not.toContain("virtues primary **Prudence**");
-  // No double trailing period.
-  expect(body).not.toContain("rigor..");
 });

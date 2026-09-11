@@ -4,7 +4,7 @@
  *
  * The emitted declarations are the canonical types for the "prism" virtual
  * specifier. They cover the DSL surface from src/index.ts and src/workflows.ts —
- * defineWorkflow, defineTask, WorkflowAgentRef, WorkflowWorkerId, and the
+ * defineWorkflow, defineTask, WorkflowWorkerId, and the
  * harness-programming ref/builder types.
  *
  * Output: dist/dts-tmp/  (index.d.ts + per-module .d.ts files)

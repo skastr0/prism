@@ -214,16 +214,6 @@ const createWorkflowFixture = async (dir: string): Promise<{ readonly workflowPa
     `import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const smokeAgent = {
-  kind: "agent-ref",
-  plugin: "smoke",
-  name: "echo",
-  description: "Smoke workflow agent.",
-  sourceHash: "${"0".repeat(64)}",
-  manifestHash: "${"0".repeat(64)}",
-  installs: ["grok"],
-} as const;
-
 const Out = Schema.Struct({ ok: Schema.Boolean, note: Schema.String });
 
 export default defineWorkflow({
@@ -232,7 +222,6 @@ export default defineWorkflow({
     Effect.gen(function* () {
       return yield* wf.runTask(defineTask({
         id: "probe",
-        agent: smokeAgent,
         worker: { worker: "grok" },
         output: Out,
         prompt: "probe",

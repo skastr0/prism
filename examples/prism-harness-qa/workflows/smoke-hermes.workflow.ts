@@ -5,19 +5,8 @@ import { challengeFinish, challengeOutput, challengePrompt } from "./challenge-p
 const challenge = "hermes-2026-06-20-001";
 const hermesProfile = process.env.PRISM_E2E_HERMES_PROFILE;
 
-const hermesQaAgent = {
-  kind: "agent-ref",
-  plugin: "prism-harness-qa",
-  name: "qa-tester",
-  description: "Prompted Hermès QA contract for generated-tool workflow smoke tests.",
-  sourceHash: "hermes-workflow-inline-contract",
-  manifestHash: "hermes-workflow-inline-contract",
-  installs: [],
-} as const;
-
 const verifyChallenge = defineTask({
   id: "verify-challenge",
-  agent: hermesQaAgent,
   prompt: challengePrompt(challenge),
   output: challengeOutput,
   finish: challengeFinish(challenge),

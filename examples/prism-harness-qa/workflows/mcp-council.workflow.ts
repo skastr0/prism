@@ -37,7 +37,6 @@ import {
   type WorkflowRuntimeError,
   type WorkflowTaskWorkerOptions,
 } from "prism";
-import { agents } from "prism/refs";
 import { models } from "prism/refs/models";
 import { challengeProof } from "../tools/proof";
 
@@ -194,21 +193,9 @@ const councilFinish = (harness: Harness): WorkflowFinishOptions<CouncilReport> =
 
 const hermesProfile = process.env.PRISM_E2E_HERMES_PROFILE;
 
-/** `agents.prismHarnessQa.qaTester` installs every harness except hermes (plugin.json's `targets.agents` omits it); hermes gets an inline contract, same as smoke-hermes.workflow.ts. */
-const hermesQaAgent = {
-  kind: "agent-ref",
-  plugin: "prism-harness-qa",
-  name: "qa-tester",
-  description: "Prompted Hermès QA contract for generated-tool workflow smoke tests.",
-  sourceHash: "hermes-workflow-inline-contract",
-  manifestHash: "hermes-workflow-inline-contract",
-  installs: [],
-} as const;
-
-const councilTask = (harness: Harness, agent: typeof agents.prismHarnessQa.qaTester | typeof hermesQaAgent, worker: WorkflowTaskWorkerOptions) =>
+const councilTask = (harness: Harness, worker: WorkflowTaskWorkerOptions) =>
   defineTask({
     id: `verify-${harness}`,
-    agent,
     prompt: councilPrompt(harness),
     output: councilReportSchema,
     finish: councilFinish(harness),
@@ -216,26 +203,26 @@ const councilTask = (harness: Harness, agent: typeof agents.prismHarnessQa.qaTes
     worker,
   });
 
-/** One call per harness — literal `worker`/`agent` per call site (never a runtime ternary inside one shared function body), the same shape smoke-*.workflow.ts and the other councils in this repo use. */
+/** One call per harness — literal `worker` per call site (never a runtime ternary inside one shared function body), the same shape smoke-*.workflow.ts and the other councils in this repo use. */
 const councilTasks: Record<Harness, ReturnType<typeof councilTask>> = {
-  opencode: councilTask("opencode", agents.prismHarnessQa.qaTester, { worker: "opencode" }),
-  "claude-code": councilTask("claude-code", agents.prismHarnessQa.qaTester, { worker: "claude-code" }),
+  opencode: councilTask("opencode", { worker: "opencode" }),
+  "claude-code": councilTask("claude-code", { worker: "claude-code" }),
   // codex-cli used to die here on Prism's old 360000ms default while doing real
   // work; there is no process timeout any more, so the task simply runs to
   // completion. The lightened SERVER_NAME_UNDISCOVERABLE_HARNESSES prompt above
   // also removes the crawl that made it slow.
-  "codex-cli": councilTask("codex-cli", agents.prismHarnessQa.qaTester, { worker: "codex-cli" }),
-  // Not "grok-build": that model fails config validation against a custom
-  // --agent file with a restricted tools: list (PQ-176). grok-composer-2.5-fast
-  // is grok's own CLI default, verified working against this agent shape.
-  grok: councilTask("grok", agents.prismHarnessQa.qaTester, { worker: "grok", model: "grok-composer-2.5-fast" }),
-  hermes: councilTask("hermes", hermesQaAgent, {
+  "codex-cli": councilTask("codex-cli", { worker: "codex-cli" }),
+  // Not "grok-build": that model fails config validation against Prism's
+  // generated Grok layout (PQ-176). grok-composer-2.5-fast is grok's own CLI
+  // default and is verified working.
+  grok: councilTask("grok", { worker: "grok", model: "grok-composer-2.5-fast" }),
+  hermes: councilTask("hermes", {
     worker: "hermes",
     model: models.prismHarnessQa.qaModels.smoke,
     ...(hermesProfile !== undefined && hermesProfile.length > 0 ? { profile: hermesProfile } : {}),
   }),
-  "kimi-code": councilTask("kimi-code", agents.prismHarnessQa.qaTester, { worker: "kimi-code" }),
-  "amp-code": councilTask("amp-code", agents.prismHarnessQa.qaTester, { worker: "amp-code", model: "high" }),
+  "kimi-code": councilTask("kimi-code", { worker: "kimi-code" }),
+  "amp-code": councilTask("amp-code", { worker: "amp-code", model: "high" }),
 };
 
 // ---------------------------------------------------------------------------

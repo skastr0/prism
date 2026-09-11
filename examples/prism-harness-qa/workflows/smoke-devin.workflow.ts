@@ -24,7 +24,6 @@
  */
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
-import { agents } from "prism/refs";
 
 const ReviewOutput = Schema.Struct({
   slice: Schema.String,
@@ -48,7 +47,6 @@ const DEVIN_WORKER = {
 
 const reviewLowerer = defineTask({
   id: "review-devin-lowerer",
-  agent: agents.prismHarnessQa.qaTester,
   prompt:
     'Review ONLY src/compile/lowerers/devin.ts. Return ONLY JSON: {"slice":"lowerer-hooks","summary":"technical paragraph about the lowerer ownership and hooks","findings":[{"severity":"med","loc":"src/compile/lowerers/devin.ts","issue":"note"}],"verdict":"ship","evidence":["src/compile/lowerers/devin.ts"]}. Stop after JSON.',
   output: ReviewOutput,
@@ -57,7 +55,6 @@ const reviewLowerer = defineTask({
 
 const reviewWorker = defineTask({
   id: "review-devin-worker",
-  agent: agents.prismHarnessQa.qaTester,
   prompt:
     'Review ONLY src/workflow-devin-worker.ts. Return ONLY JSON: {"slice":"workflow-worker","summary":"technical paragraph about -p permissions ATIF resume","findings":[{"severity":"med","loc":"src/workflow-devin-worker.ts","issue":"note"}],"verdict":"ship","evidence":["src/workflow-devin-worker.ts"]}. Stop after JSON.',
   output: ReviewOutput,

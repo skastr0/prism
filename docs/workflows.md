@@ -7,7 +7,6 @@ For the product tour, start at the [root README](../README.md#workflows-typed-ta
 - [The mental model](#the-mental-model)
 - [The generated environment](#the-generated-environment)
 - [defineTask](#definetask)
-- [Agent refs](#agent-refs)
 - [Workers and permissions](#workers-and-permissions)
 - [Model resolution](#model-resolution)
 - [Output schemas and decode repairs](#output-schemas-and-decode-repairs)
@@ -20,24 +19,24 @@ For the product tour, start at the [root README](../README.md#workflows-typed-ta
 
 ## The mental model
 
-A **task** binds five things: an *agent* (a compiled Prism agent ref, or `anonymousWorkflowAgent` when you have no plugin), a *worker* (which harness CLI executes it), a *prompt*, an *output schema* (Effect Schema the worker's final answer must decode into), and *finish criteria* (checks the decoded output must pass). A **workflow** composes tasks — statically as a list, or dynamically as an Effect program with full control flow. Every run persists to a SQLite ledger; every completed task result is cached content-addressed.
+A **task** binds four things: a *worker* (which harness CLI executes it), a *prompt*, an *output schema* (Effect Schema the worker's final answer must decode into), and *finish criteria* (checks the decoded output must pass). There is no agent field — agents are a standalone compile primitive (`agents/*.agent.ts` → harness agent files) that workflows do not reference. A **workflow** composes tasks — statically as a list, or dynamically as an Effect program with full control flow. Every run persists to a SQLite ledger; every completed task result is cached content-addressed.
 
 The worker is a real harness process — `claude-code`, `codex-cli`, `grok`, `kimi-code`, `opencode`, … — launched with a pinned model and permission mode, using that harness's own local installation and auth. **A live run spends real tokens on your accounts.** Validate, typecheck, and mock first; pin budgets when you dispatch.
 
 ## The generated environment
 
-Workflows import from `prism` (the DSL). Compiled plugins add `prism/refs` (typed agents, modelspaces, skills, sops, and tools). Installed harnesses add `prism/harnesses` (live model slugs):
+Workflows import from `prism` (the DSL). Compiled plugins add `prism/refs` (typed sops and modelspaces). Installed harnesses add `prism/harnesses` (live model slugs):
 
 ```ts
-import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+import { defineTask, defineWorkflow } from "prism";
 import { ampCodeModelSlugs } from "prism/harnesses";
 ```
 
 These imports resolve through a **generated tsconfig**, not your project's own module resolution:
 
 - `prism workflow refresh-harness-types` discovers models from local harness caches/CLIs and writes a **global** cache at `~/.prism/state/harness-types/` (not project-keyed). That file path-maps `prism/harnesses` and augments `worker.model` so plugin-free workflows typecheck against what is actually installed.
-- `prism refresh <plugin-path>` is optional. When you have a plugin it writes the refs surface (`generated/{agents,models,skills,sops,tools}.ts`) and path-maps `prism/refs`.
-- `prism workflow scaffold <name>` writes a validating starter into `~/.prism/workflows/` (never inside the repo it drives). With no compiled refs it uses `anonymousWorkflowAgent`.
+- `prism refresh <plugin-path>` is optional. When you have a plugin it writes the refs surface (`generated/{models,sops}.ts`) and path-maps `prism/refs`.
+- `prism workflow scaffold <name>` writes a validating starter into `~/.prism/workflows/` (never inside the repo it drives): harness workers with a prompt and typed IO.
 - `prism workflow typecheck <file>` and `prism workflow validate <file>` use that generated environment automatically.
 
 Workflow **store and refs** are project-scoped. Harness model types are not — they follow the machine. From a directory that was never compiled, `prism/refs` will not resolve. That is fine — workflows are the flagship and plugins are optional. Discover what is available with:
@@ -56,7 +55,6 @@ prism workflow refs                    # optional plugin refs location + freshne
 ```ts
 const task = defineTask({
   id: "adversarial-review",              // unique within the workflow
-  agent: agents.forge.securityReviewer,  // WorkflowAgentRef (see below)
   prompt: "Attack the diff on this branch. Default to refuted.",
   output: Review,                        // Effect Schema — the typed contract
   phase: "forge:review",                 // optional grouping label (set for you inside phase())
@@ -79,7 +77,6 @@ Every field:
 | Field | Type | Semantics |
 |---|---|---|
 | `id` | `string` | Task identity inside the workflow; part of the cache key fold |
-| `agent` | `WorkflowAgentRef` | Which compiled Prism agent persona executes the prompt |
 | `prompt` | `string` | The task brief; `phase()` may prepend contract framing |
 | `output` | Effect `Schema` | The worker's final answer must decode into this — validated, not hoped |
 | `phase` | `string?` | Grouping label for monitor/trace; `phase()` sets `<sop>:<name>` |
@@ -88,29 +85,6 @@ Every field:
 | `finish` | `WorkflowFinishOptions?` | Acceptance criteria and repair budgets |
 
 `defineTask` returns the definition tagged `kind: "workflow-task"`. The output type flows through: `wf.runTask(task)` yields `Schema.Schema.Type<typeof Review>` — no casting, no JSON scraping.
-
-## Agent refs
-
-A `WorkflowAgentRef` pins the exact compiled agent the task runs as:
-
-```ts
-interface WorkflowAgentRef {
-  kind: "agent-ref";
-  plugin: string;          // e.g. "scribe"
-  name: string;            // e.g. "linkedin-writer"
-  description: string;
-  sourceHash: string;      // content hash of the agent source
-  manifestHash: string;    // hash of the compiled manifest it came from
-  installs: readonly string[];  // harnesses this agent is installed for
-  model?: WorkflowModelRef;     // optional agent-level modelspace ref (see Model resolution)
-}
-```
-
-With a compiled plugin, import it from `prism/refs` (`agents.<plugin>.<agentName>`, camel-cased), or copy the literal that `prism workflow catalog --ref <ref>` prints. The hashes make provenance checkable: a workflow run records exactly which compiled agent version produced each output.
-
-With no plugin, use `anonymousWorkflowAgent` from `prism`. It is a stub ref so a task can still pin a worker and a live harness model.
-
-Agents may also carry an agent-level modelspace ref (`agent.model`), which participates in model resolution below.
 
 ## Workers and permissions
 
@@ -124,7 +98,6 @@ type WorkflowWorkerId =
 worker: {
   worker?: WorkflowWorkerId;         // which harness CLI executes this task
   model?: string | live harness slug | WorkflowModelProfileRef;
-  modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   profile?: string;
   permission?: WorkflowPermissionMode;
   sessionPersistence?: "persistent" | "ephemeral"; // claude-code | codex-cli | omp
@@ -155,9 +128,7 @@ Tasks without a `worker` fall back to the CLI: `prism workflow run --worker <id>
 
 1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`. After `prism workflow refresh-harness-types`, that string is checked against the installed harness's discovered slugs. OMP pins are `provider/id` selectors from `omp models --json` (example: `ollama-cloud/glm-5.3-flash`); unpinned OMP tasks prefer `~/.omp/agent/config.yml` `modelRoles.default` with the `:thinking` suffix stripped. `opencode-go/*` is Console Go and 400s in workflow `--print` (`MissingSessionID`). Amp inventories three surfaces: the `--mode` dial (`low | medium | high | ultra`), plugin mode keys (both valid `worker.model` / `--mode` values), and the curated `provider/model` catalog from `amp plugins show-agent-options --json`. Catalog slugs are `worker.catalogModel` (`AmpCodeCatalogSlug`); reasoning effort is `worker.effort` (`AmpCodeEffort`). Amp has no `--model` flag, so Prism pins catalog/effort through a one-shot project plugin mode when no existing plugin mode already binds that slug. Run metadata reports `model` as the catalog slug (or dial), plus `ampMode`, `catalogModel`, and `effort` — never the transport key `prism-pin`. A dial in `worker.model` can `extends` that pin; a plugin mode key cannot combine with `catalogModel` / `effort`. `prism workflow validate` fail-closes when the snapshot lists the catalog row and `worker.effort` is not on that row. Modelspaces stay optional policy, not the inventory.
 2. **Task modelspace profile ref** — `worker.model: { kind: "model-profile-ref", plugin, modelspace, profile }` resolves the profile's target for the task's worker; the first concrete `{ model, provider?, variant? }` entry wins. No entry for that worker → `WorkflowModelResolutionError`.
-3. **`modelResolver`** — a function receiving the agent's resolved model target for this worker (keyed by camel-cased model identity, e.g. `{ gpt56Terra: { model: "gpt-5.6-terra" } }`) and returning the chosen model string. The agent must have a model target for the worker.
-4. **Agent modelspace profile** — the agent's own `model` ref, resolved for this worker. Source: `profile`. If the ref exists but has no entry for this worker, Prism falls back to the CLI `--model` (source: `cli-fallback`) or the harness registry's cheap-fast default (source: `default`) instead of crashing.
-5. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`, so workers that tolerate an omitted model flag (e.g. `opencode`) keep working.
+3. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`, so workers that tolerate an omitted model flag (e.g. `opencode`) keep working.
 
 Resolution can carry a **provider** (harness-side inference provider, e.g. hermes `--provider xai-oauth`) and a **variant** (harness-bound model variant such as Codex reasoning effort). `prism workflow validate <file>` prints each task's resolved `(worker, model)` before anything dispatches — read it.
 
@@ -211,7 +182,7 @@ Two criterion kinds:
 }
 ```
 
-Judge verdicts: `pass` (accept) · `continue` (not done — consumes one repair from `maxRepairs`, and its `feedback` becomes the next prompt) · `fail` (**terminal reject — no repair attempt, even with budget remaining**) · `escalate` (stop and surface). Deterministic check failures route through the repair path like `continue`: they consume budget and their `repairPrompt` drives the next round. The practical rule for judge authors: return `continue` when you want the worker to try again, `fail` when the output is unsalvageable. `goal` may be a string or a function of the evidence-selection context; `selectEvidence` narrows what the judge sees; `task` metadata (id, agent, cacheKey, worker) is available for context.
+Judge verdicts: `pass` (accept) · `continue` (not done — consumes one repair from `maxRepairs`, and its `feedback` becomes the next prompt) · `fail` (**terminal reject — no repair attempt, even with budget remaining**) · `escalate` (stop and surface). Deterministic check failures route through the repair path like `continue`: they consume budget and their `repairPrompt` drives the next round. The practical rule for judge authors: return `continue` when you want the worker to try again, `fail` when the output is unsalvageable. `goal` may be a string or a function of the evidence-selection context; `selectEvidence` narrows what the judge sees; `task` metadata (id, cacheKey, worker) is available for context.
 
 ## defineWorkflow
 
@@ -277,7 +248,7 @@ const report = yield* wf.phase(
 );
 ```
 
-An inline contract may override the phase's typed `input`/`output`, add `criteria`, and set `framing` (`purpose`, `when`, `escalation`). Tasks may pin an `agent`, or omit it: `defineTask` normalizes a missing agent to `anonymousWorkflowAgent`.
+An inline contract may override the phase's typed `input`/`output`, add `criteria`, and set `framing` (`purpose`, `when`, `escalation`).
 
 What the phase machinery does:
 
@@ -318,8 +289,8 @@ prism workflow run <file> \
 **There are no runtime limits, and no flags to set them.** A task is a long-running
 agent: Prism does not cap its runtime, its output size, its prompt size, the
 run's wall clock, its task count, or its cost — and there is no environment
-variable that reintroduces a cap. Scope belongs in the prompt, the agent, the
-model, and the graph; not in a number the runner guessed.
+variable that reintroduces a cap. Scope belongs in the prompt, the model, and
+the graph; not in a number the runner guessed.
 
 Live-run control is behavioural, not numeric:
 
@@ -327,7 +298,7 @@ Live-run control is behavioural, not numeric:
 |---|---|
 | stop a run now | `prism workflow runs stop <id>` (terminates the runner's whole process group) |
 | see what it's doing | `prism workflow runs events\|show\|trace <id>`, or `prism workflow monitor` |
-| bound the spend | choose the model, the agent, and the number of tasks when you author the graph |
+| bound the spend | choose the model and the number of tasks when you author the graph |
 
 Task concurrency is internal scheduler pacing sized to the machine
 (`max(4, min(16, cores - 2))`): excess live tasks queue and run as slots free, so

@@ -125,7 +125,8 @@ const resolveModelTargetBlock = (
   targetBlock: unknown,
 ): Record<string, unknown> | SourceParseError => {
   switch (target) {
-    case "opencode": {
+    case "opencode":
+    case "opencode2": {
       const decoded = decodeResolvedTargetBlock(
         sourcePath,
         target,
@@ -298,7 +299,7 @@ const validateConcreteSkillName = (
   target: string,
   concreteName: string,
 ): AgentValidationError | undefined => {
-  if (target !== "opencode") return undefined;
+  if (target !== "opencode" && target !== "opencode2") return undefined;
   if (OPENCODE_SKILL_NAME_PATTERN.test(concreteName)) return undefined;
 
   return agentError(

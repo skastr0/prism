@@ -256,13 +256,12 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> =>
 
 const hasFactoryOutput = (input: LowerInput): boolean =>
   input.agents.length > 0 ||
+  input.sops.length > 0 ||
   (input.tools?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0;
 
 const factoryBundleOwnsPluginSkills = (input: LowerInput): boolean =>
-  input.agents.length > 0 ||
-  (input.tools?.length ?? 0) > 0 ||
-  (input.hooks?.length ?? 0) > 0;
+  hasFactoryOutput(input);
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();

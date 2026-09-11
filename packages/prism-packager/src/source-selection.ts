@@ -23,7 +23,7 @@ export type SourceNoun = (typeof SOURCE_NOUNS)[number];
 const TARGET_PRESETS = {
   "coding-harness": [
     "claude-code",
-    "opencode",
+    "opencode2",
     "codex-cli",
     "antigravity-cli",
     "kimi-code",
@@ -40,6 +40,7 @@ const TARGET_PRESETS = {
 
 const COMPILE_SOURCE_HARNESSES = [
   "opencode",
+  "opencode2",
   "claude-code",
   "antigravity-cli",
   "codex-cli",

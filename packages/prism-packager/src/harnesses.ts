@@ -49,6 +49,28 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     alternativeRulesFiles: ["CLAUDE.md"],
   },
 
+  // Shares ~/.config/opencode/ with OpenCode 1.x until V1/V2 consolidate.
+  // Detected by the `opencode2` binary, not by this shared config root.
+  opencode2: {
+    id: "opencode2",
+    name: "OpenCode 2",
+    globalConfigPath: "~/.config/opencode/",
+    projectConfigPath: ".opencode/",
+    rulesFile: "AGENTS.md",
+    rulesDir: null,
+    commandsDir: "commands/",
+    agentsDir: "agents/",
+    toolsDir: null,
+    skillsDir: "skills/",
+    configFile: "opencode.json",
+    configFormat: "json",
+    supportsTools: true,
+    supportsCommands: true,
+    supportsAgents: true,
+    supportsSkills: true,
+    alternativeRulesFiles: ["CLAUDE.md"],
+  },
+
   openclaw: {
     id: "openclaw",
     name: "OpenClaw",
@@ -334,6 +356,64 @@ export function resolveHarnessRoot(
   }
 
   return join(expandPath(projectPath), harness.projectConfigPath);
+}
+
+/**
+ * Home-relative harness layout (`~/.config/opencode/` → `.config/opencode`).
+ * Used when `--compile-root` is a sandbox prefix rather than one harness root.
+ */
+export function relativeHarnessHome(harness: HarnessConfig): string {
+  return harness.globalConfigPath.replace(/^~\//, "").replace(/\/+$/, "");
+}
+
+/**
+ * Map a shared `--compile-root` onto one harness tree.
+ *
+ * The compile-root is a fake HOME / sandbox prefix. Each harness keeps the
+ * same relative layout it has under the real home (or under a project root
+ * when `scope` is `project`). Pipeline `root` remains an exact override;
+ * callers that already resolved a per-harness directory should pass that
+ * through unchanged.
+ */
+export function resolveCompileSandboxRoot(
+  compileRoot: string,
+  harness: HarnessConfig,
+  scope: HarnessScope,
+): string {
+  const prefix = expandPath(compileRoot);
+  if (scope === "project" && harness.projectConfigPath) {
+    return join(prefix, harness.projectConfigPath);
+  }
+  return join(prefix, relativeHarnessHome(harness));
+}
+
+export type CompileSandboxCollision = {
+  readonly root: string;
+  readonly harnesses: readonly HarnessId[];
+};
+
+/**
+ * OpenCode 1.x and 2 share `~/.config/opencode/` (and `.opencode/` in
+ * project scope). Nesting both under one compile-root prefix maps them to
+ * the same physical tree; later compile then prune-treats the earlier
+ * harness as orphaned. Callers that nest several harnesses must fail closed
+ * on a collision rather than writing both IDs into one home.
+ */
+export function collidingCompileSandboxGroups(
+  compileRoot: string,
+  harnessIds: readonly HarnessId[],
+  scope: HarnessScope,
+): readonly CompileSandboxCollision[] {
+  const byRoot = new Map<string, HarnessId[]>();
+  for (const id of harnessIds) {
+    const root = resolveCompileSandboxRoot(compileRoot, getHarness(id), scope);
+    const group = byRoot.get(root);
+    if (group) group.push(id);
+    else byRoot.set(root, [id]);
+  }
+  return [...byRoot.entries()]
+    .filter(([, ids]) => ids.length > 1)
+    .map(([root, harnesses]) => ({ root, harnesses }));
 }
 
 export function harnessSupportsProjectScope(harness: HarnessConfig): boolean {

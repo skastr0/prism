@@ -68,6 +68,7 @@ const CAMEL_BY_HARNESS: Readonly<Record<WorkflowWorkerId, string>> = {
   hermes: "hermes",
   "kimi-code": "kimiCode",
   opencode: "openCode",
+  opencode2: "openCode2",
   omp: "omp",
 };
 

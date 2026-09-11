@@ -178,6 +178,60 @@ export const LOWERER_CAPABILITIES = {
       },
     },
   },
+  opencode2: {
+    harness: "opencode2",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported(),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-api",
+        path: "<opencode-root>/plugins/prism-generated-<plugin>/",
+        summary: "Compile emits an OpenCode plugin using @opencode-ai/plugin APIs (shared home with OpenCode 1.x).",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<opencode-root>/AGENTS.md",
+        summary: "Install appends managed sections to the native instructions file.",
+      },
+      commands: {
+        kind: "direct-file",
+        path: "<opencode-root>/commands/",
+        summary: "Install writes markdown command files.",
+      },
+      agents: {
+        kind: "markdown-file",
+        path: "<opencode-root>/agents/",
+        summary: "Compile writes OpenCode agent markdown files.",
+      },
+      skills: {
+        kind: "markdown-file",
+        path: "<opencode-root>/skills/",
+        summary: "Install and compile write Agent Skill folders.",
+      },
+      generatedTools: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>/dist/server.mjs",
+        summary: "Canonical tools lower to OpenCode plugin tools.",
+      },
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>/dist/server.mjs",
+        summary: "Hooks lower through the OpenCode plugin API.",
+      },
+      agentConfig: {
+        kind: "config-patch",
+        path: "<opencode-root>/opencode.json#agent.<name>",
+        summary: "Compile patches compiler-owned agent keys and plugin entries.",
+      },
+    },
+    notes: [
+      "OpenCode 2 shares ~/.config/opencode/ with OpenCode 1.x until they consolidate.",
+      "Detected by the `opencode2` binary on PATH, not by the shared config root.",
+      "coding-harness targets opencode2, not opencode. `--harness opencode` remains for V1.",
+      "Workflow worker is `opencode2` only (PRISM_WORKFLOW_OPENCODE2_BIN). Never falls back to `opencode`.",
+    ],
+  },
   openclaw: {
     harness: "openclaw",
     family: "claw-harness",

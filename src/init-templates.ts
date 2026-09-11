@@ -35,7 +35,6 @@ export const typescriptTsconfigJson = `${JSON.stringify(
     },
     include: [
       "agents/**/*.ts",
-      "orbits/**/*.ts",
       "sops/**/*.ts",
       "modelspaces/**/*.ts",
       "schemas/**/*.ts",

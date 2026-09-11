@@ -392,7 +392,7 @@ export const codexCliCatalog: HarnessCatalog = {
     "Prism does not whole-file own config.toml; only fenced regions for hooks and features.hooks.",
     "Rules install as marker regions in AGENTS.md (regionKey codex.rules.<plugin>); also file-router fences.",
     "Agents lower to agents/<name>.toml (name, description, developer_instructions, model keys).",
-    "Commands install as prompts/*.md; skills and orbits as skills/<name>/SKILL.md.",
+    "Commands install as prompts/*.md; skills and sops as skills/<name>/SKILL.md.",
     "Canonical tools → <PRISM_HOME>/runtime/tools/<plugin>/; invoke via `prism tools invoke`.",
     "No plugin-bundle surface — direct files + config patches only (lowerer-capabilities).",
     "Workflow worker: PRISM_WORKFLOW_CODEX_BIN, `codex exec`, maps sandbox modes and model_reasoning_effort via --config.",

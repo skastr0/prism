@@ -157,7 +157,7 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     // requires enabled_background to be true", PQ-176 class) is handled by
     // the worker writing a tools-stripped temp agent copy for grok-4.x
     // models — verified live against a Prism-generated agent (probe
-    // orbit-arc-harness-probe, 2026-07-08).
+    // arc-harness-probe, 2026-07-08).
     defaultModel: "grok-4.5",
   },
   hermes: {

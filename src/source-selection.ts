@@ -123,7 +123,6 @@ const targetSupportsCompileSourceNoun = (
       return capabilities.generatedCanonicalTools === "executable";
     case "hooks":
       return capabilities.hooks === "supported";
-    case "orbits":
     case "modelspaces":
     case "skillspaces":
       return (COMPILE_SOURCE_HARNESSES as readonly HarnessId[]).includes(harnessId);

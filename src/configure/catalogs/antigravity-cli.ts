@@ -252,7 +252,7 @@ export const antigravityCliCatalog: HarnessCatalog = {
     "Binary is `agy` (not antigravity). Workflow override: PRISM_WORKFLOW_ANTIGRAVITY_BIN; related Prism-only env: PRISM_WORKFLOW_ANTIGRAVITY_PTY, _PTY_PYTHON, _PROCESS_TIMEOUT_MS, _RETRY_*.",
     "Prism global compile root is ~/.gemini/antigravity-cli/ (HARNESSES entry). Customization discovery also walks ~/.gemini/config/ and project .agents/ (or .agent/, _agents/, _agent/).",
     "Prism owns whole-file plugin bundles at plugins/prism-generated-<plugin>/ (plugin.json, agents/, skills/, rules/context.md, hooks.json + hooks/*.mjs). Lowerer returns regions: [] — no settings.json region patch.",
-    "Rules are compile-managed into the plugin bundle (rules/context.md), not direct root rules files. Commands are unsupported as direct files; model commands as skills/orbits.",
+    "Rules are compile-managed into the plugin bundle (rules/context.md), not direct root rules files. Commands are unsupported as direct files; model commands as skills/sops.",
     "Canonical tools lower to <PRISM_HOME>/runtime/tools/<plugin>/ (CLI invoke + skill inject), not into mcp_config.json.",
     "Official settings table omits live-observed keys model and trustedWorkspaces — keep both until docs catch up.",
     "Project-specific settings under ~/.gemini/config/projects/ can override global settings.json (CHANGELOG 1.0.12).",

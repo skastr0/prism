@@ -14,7 +14,7 @@ import type { PluginRegistry } from "../compile/registry.js";
 /**
  * Build an introspection summary from a plugin registry.
  *
- * For each non-empty Map in the registry (agents, orbits, tools, skills, hooks,
+ * For each non-empty Map in the registry (agents, sops, tools, skills, hooks,
  * identities, personalities, modelspaces, skillspaces),
  * creates an IntrospectionNounGroup with sorted entries.
  *
@@ -22,13 +22,12 @@ import type { PluginRegistry } from "../compile/registry.js";
  * usage; empty groups are omitted to keep the summary focused).
  *
  * @param registry - The plugin registry to introspect
- * @returns A PluginIntrospection with all non-empty noun groups and the orbit skill count
+ * @returns A PluginIntrospection with all non-empty noun groups and the derived skill count
  */
 export const buildIntrospection = (registry: PluginRegistry): PluginIntrospection => {
   // Maps to introspect, in order specified
   const mapEntries: Array<[string, Map<string, unknown>]> = [
     ["agent", registry.agents],
-    ["orbit", registry.orbits],
     ["sop", registry.sops],
     ["tool", registry.tools],
     ["skill", registry.skills],
@@ -71,6 +70,6 @@ export const buildIntrospection = (registry: PluginRegistry): PluginIntrospectio
   return {
     pluginName: registry.pluginName,
     groups,
-    derivedSkillCount: registry.orbits.size + registry.sops.size,
+    derivedSkillCount: registry.sops.size,
   };
 };

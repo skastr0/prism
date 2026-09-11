@@ -341,7 +341,7 @@ function IntrospectContent({
   if (groups.length === 0) {
     return (
       <text
-        content="(nothing compiled — this plugin defines no agents / tools / orbits / skills / hooks)"
+        content="(nothing compiled — this plugin defines no agents / tools / sops / skills / hooks)"
         style={{ fg: PALETTE.fgDim, wrapMode: "word" }}
       />
     );

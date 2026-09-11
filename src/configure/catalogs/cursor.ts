@@ -401,7 +401,7 @@ export const cursorCatalog: HarnessCatalog = {
     "CURSOR_CONFIG_DIR overrides the config directory; XDG_CONFIG_HOME uses $XDG_CONFIG_HOME/cursor/cli-config.json on Linux/BSD. Those are config-dir overrides, not binary paths. Binary override is PRISM_WORKFLOW_CURSOR_BIN.",
     "Prism does not whole-file own cli-config.json or mcp.json. Commands install under plugins/local/prism-generated-<plugin>/.cursor-plugin/plugin.json + commands/.",
     "Skills install direct to skills/. Rules install as owned .mdc under rules/ (or project .cursor/rules/); .cursorrules may receive marker regions for tools-cli inject.",
-    "Compile: plugin bundle under plugins/local/prism-generated-<plugin>/ (agents/, orbit skills/, hooks/hooks.json + wrappers). Skill permissions unsupported. Tools stay CLI runtime under PRISM_HOME. workflowWorker: true via `agent --print --output-format stream-json`.",
+    "Compile: plugin bundle under plugins/local/prism-generated-<plugin>/ (agents/, sop skills/, hooks/hooks.json + wrappers). Skill permissions unsupported. Tools stay CLI runtime under PRISM_HOME. workflowWorker: true via `agent --print --output-format stream-json`.",
     "Do not hand-edit model/selectedModel/hasChangedDefaultModel/privacyCache/authInfo/showSandboxIntro caches — CLI-managed.",
     "Internal CLI caches (autoReviewAvailabilityCache, serverConfigCache, runEverythingSettingsPromptStreak) are omitted from fields[].",
     "Legacy ~/.cursor/commands/*.md may still exist from pre-plugin-bundle installs; Prism now writes plugins/local only.",

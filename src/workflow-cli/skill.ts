@@ -16,7 +16,7 @@ description: Author and run Prism workflows — typed task graphs over real harn
 
 # Prism workflows
 
-Workflows are the flagship. A \`.workflow.ts\` file dispatches real harness CLIs (\`cursor\`, \`amp-code\`, \`claude-code\`, …). A Prism plugin is an optional add-on for compiled \`agents.*\` / \`orbits.*\` refs.
+Workflows are the flagship. A \`.workflow.ts\` file dispatches real harness CLIs (\`cursor\`, \`amp-code\`, \`claude-code\`, …). A Prism plugin is an optional add-on for compiled \`agents.*\` refs.
 
 Live runs spend real tokens. Rehearse with \`typecheck\`, \`validate\`, and \`--mock-output\`.
 

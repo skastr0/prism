@@ -452,7 +452,7 @@ export const opencodeCatalog: HarnessCatalog = {
   notes: [
     "Prism does not whole-file own opencode.json. Regions: agent.<name>.<compiler-key>, plugin[] members for prism-generated-*, permission.<ns>_* deny.",
     "Rules use marker regions in AGENTS.md (and alternative CLAUDE.md when present).",
-    "Compile owns agents/<name>.md, skills/<orbit>/SKILL.md, and plugins/prism-generated-<plugin>/dist/server.mjs (native @opencode-ai/plugin API).",
+    "Compile owns agents/<name>.md, skills/<sop>/SKILL.md, and plugins/prism-generated-<plugin>/dist/server.mjs (native @opencode-ai/plugin API).",
     "Install-phase commands write commands/*.md directly; skills install to skills/.",
     "Workflow worker: PRISM_WORKFLOW_OPENCODE_BIN or `opencode`; args `run --dir --agent --format json [--model] [--dangerously-skip-permissions]`.",
     "MCP env blocks and provider apiKey are secrets — never display raw.",

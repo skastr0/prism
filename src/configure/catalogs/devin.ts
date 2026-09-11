@@ -179,7 +179,7 @@ export const devinCatalog: HarnessCatalog = {
   notes: [
     "Never whole-file own config.json — herdr hooks and user prefs share it; global Prism hooks are json-array-member regions only.",
     "Project scope: hooks load from .devin/hooks.v1.json (Prism may whole-file own that path per plugin claim). Global: config.json#hooks + wrappers under hooks/prism-generated-<plugin>/*.mjs.",
-    "Install skills → ~/.config/devin/skills/ or project .devin/skills/; compile orbits lower as skills. No agents/commands/tools/plugins in PR1.",
+    "Install skills → ~/.config/devin/skills/ or project .devin/skills/; compile sops lower as skills. No agents/commands/tools/plugins in PR1.",
     "Rules: global markers in ~/.config/devin/AGENTS.md; project markers on repo-root AGENTS.md (not under .devin/). Also discovers AGENT.md, CLAUDE.md, AGENTS.local.md.",
     "Workflow: `devin -p` + --model (default swe-1-7) + --permission-mode + --prompt-file + --export ATIF + -r resume. Devin CLI has no --agent-config. Auth via `devin auth login`.",
     "Plugins are beta (`devin plugins install`); Prism does not manage them.",

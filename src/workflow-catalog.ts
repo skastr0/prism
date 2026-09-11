@@ -1,6 +1,6 @@
 /**
  * Workflow catalog — project the machine-global generated surface
- * (~/.prism/state/projects/<key>/generated/{agents,orbits,models}.ts) into a
+ * (~/.prism/state/projects/<key>/generated/{agents,sops,models}.ts) into a
  * compact, author-facing catalog for workflow authoring.
  *
  * The generated object keys ARE the refs an author types (`agents.forge.builder`),
@@ -49,28 +49,6 @@ interface RawAgent {
   readonly installs?: ReadonlyArray<string>;
   readonly model?: { readonly targets?: Readonly<Record<string, RawModelTarget>> };
 }
-interface RawOrbitAgent {
-  readonly plugin: string;
-  readonly name: string;
-}
-interface RawOrbitPhase {
-  readonly name: string;
-  readonly orbit: string;
-  readonly plugin: string;
-  readonly agents: Readonly<Record<string, RawOrbitAgent>>;
-  readonly criteria: ReadonlyArray<string>;
-  readonly io: { readonly inputs: ReadonlyArray<string>; readonly outputs: ReadonlyArray<string> };
-  readonly framing: Readonly<Record<string, string>>;
-  readonly notes?: Readonly<Record<string, string>>;
-  readonly contract?: { readonly input?: unknown; readonly output?: unknown };
-}
-interface RawOrbit {
-  readonly kind?: string;
-  readonly plugin: string;
-  readonly name: string;
-  readonly sequence?: ReadonlyArray<string>;
-  readonly phases?: Readonly<Record<string, RawOrbitPhase>>;
-}
 interface RawSopPhase {
   readonly name: string;
   readonly sop?: string;
@@ -91,12 +69,8 @@ interface RawSop {
 }
 type RawGroup<T> = Readonly<Record<string, Readonly<Record<string, T>>>>;
 
-const isTypedOrbit = (orbit: RawOrbit): orbit is RawOrbit & { readonly phases: Readonly<Record<string, RawOrbitPhase>> } =>
-  orbit.phases !== undefined && typeof orbit.phases === "object";
-
 export interface GeneratedSurface {
   readonly agents: RawGroup<RawAgent>;
-  readonly orbits: RawGroup<RawOrbit>;
   readonly sops: RawGroup<RawSop>;
   readonly models: Readonly<Record<string, Record<string, Record<string, unknown>>>>;
 }
@@ -108,30 +82,6 @@ export interface CatalogAgent {
   readonly description: string;
   readonly installs: ReadonlyArray<string>;
   readonly modelByHarness: Readonly<Record<string, string>>;
-}
-export interface CatalogOrbit {
-  readonly ref: string;
-  readonly plugin: string;
-  readonly name: string;
-}
-export interface CatalogPhaseAgent {
-  readonly slot: string;
-  readonly ref: string;
-  readonly plugin: string;
-  readonly name: string;
-}
-export interface CatalogPhaseSummary {
-  readonly ref: string;
-  readonly key: string;
-  readonly name: string;
-  readonly agents: ReadonlyArray<CatalogPhaseAgent>;
-  readonly criteriaCount: number;
-  readonly hasContract: boolean;
-}
-export interface CatalogOrbitDetail extends CatalogOrbit {
-  readonly sequence: ReadonlyArray<string>;
-  readonly phases: ReadonlyArray<CatalogPhaseSummary>;
-  readonly phaseDetails: ReadonlyArray<CatalogPhaseDetail>;
 }
 export interface CatalogSop {
   readonly ref: string;
@@ -153,20 +103,8 @@ export interface CatalogSopPhaseDetail {
 export interface CatalogSopDetail extends CatalogSop {
   readonly phases: ReadonlyArray<CatalogSopPhaseDetail>;
 }
-export interface CatalogPhaseDetail extends CatalogPhaseSummary {
-  readonly orbit: string;
-  readonly plugin: string;
-  readonly criteria: ReadonlyArray<string>;
-  readonly io: { readonly inputs: ReadonlyArray<string>; readonly outputs: ReadonlyArray<string> };
-  readonly framing: Readonly<Record<string, string>>;
-  readonly notes?: Readonly<Record<string, string>>;
-  readonly hasInputContract: boolean;
-  readonly hasOutputContract: boolean;
-}
 export interface CatalogNamespace {
   readonly namespace: string;
-  readonly orbit: CatalogOrbit | null;
-  readonly orbitDetail: CatalogOrbitDetail | null;
   readonly sops: ReadonlyArray<CatalogSopDetail>;
   readonly agents: ReadonlyArray<CatalogAgent>;
 }
@@ -193,96 +131,6 @@ const modelByHarness = (agent: RawAgent): Record<string, string> => {
     }
   }
   return out;
-};
-
-const orbitEntryForNamespace = (
-  orbits: RawGroup<RawOrbit>,
-  namespace: string,
-): { readonly key: string; readonly orbit: RawOrbit } | null => {
-  const group = orbits[namespace];
-  if (!group) return null;
-  const entry = Object.entries(group)[0];
-  if (!entry) return null;
-  return { key: entry[0], orbit: entry[1] };
-};
-
-const orbitForNamespace = (orbits: RawGroup<RawOrbit>, namespace: string): CatalogOrbit | null => {
-  const entry = orbitEntryForNamespace(orbits, namespace);
-  if (!entry) return null;
-  return { ref: `orbits.${namespace}.${entry.key}`, plugin: entry.orbit.plugin, name: entry.orbit.name };
-};
-
-const projectPhaseAgents = (namespace: string, agents: Readonly<Record<string, RawOrbitAgent>>): CatalogPhaseAgent[] =>
-  Object.entries(agents)
-    .map(([slot, agent]) => ({
-      slot,
-      ref: `agents.${namespace}.${slot}`,
-      plugin: agent.plugin,
-      name: agent.name,
-    }))
-    .sort((left, right) => left.slot.localeCompare(right.slot));
-
-const projectPhaseDetail = (
-  namespace: string,
-  orbitKey: string,
-  orbitName: string,
-  orbitPlugin: string,
-  phaseKey: string,
-  phase: RawOrbitPhase,
-): CatalogPhaseDetail => ({
-  ref: `orbits.${namespace}.${orbitKey}.phases.${phaseKey}`,
-  key: phaseKey,
-  name: phase.name,
-  orbit: orbitName,
-  plugin: orbitPlugin,
-  agents: projectPhaseAgents(namespace, phase.agents),
-  criteriaCount: phase.criteria.length,
-  hasContract: phase.contract?.input !== undefined || phase.contract?.output !== undefined,
-  criteria: [...phase.criteria],
-  io: {
-    inputs: [...phase.io.inputs],
-    outputs: [...phase.io.outputs],
-  },
-  framing: { ...phase.framing },
-  ...(phase.notes !== undefined ? { notes: { ...phase.notes } } : {}),
-  hasInputContract: phase.contract?.input !== undefined,
-  hasOutputContract: phase.contract?.output !== undefined,
-});
-
-const projectPhaseSummary = (detail: CatalogPhaseDetail): CatalogPhaseSummary => ({
-  ref: detail.ref,
-  key: detail.key,
-  name: detail.name,
-  agents: detail.agents,
-  criteriaCount: detail.criteriaCount,
-  hasContract: detail.hasContract,
-});
-
-const projectOrbitDetail = (
-  orbits: RawGroup<RawOrbit>,
-  namespace: string,
-): CatalogOrbitDetail | null => {
-  const entry = orbitEntryForNamespace(orbits, namespace);
-  if (!entry) return null;
-  const base = { ref: `orbits.${namespace}.${entry.key}`, plugin: entry.orbit.plugin, name: entry.orbit.name };
-  if (!isTypedOrbit(entry.orbit)) {
-    return { ...base, sequence: [], phases: [], phaseDetails: [] };
-  }
-  const sequence = entry.orbit.sequence ?? Object.keys(entry.orbit.phases);
-  const phaseDetails = sequence
-    .map((phaseKey) => {
-      const phase = entry.orbit.phases?.[phaseKey];
-      return phase
-        ? projectPhaseDetail(namespace, entry.key, entry.orbit.name, entry.orbit.plugin, phaseKey, phase)
-        : null;
-    })
-    .filter((phase): phase is CatalogPhaseDetail => phase !== null);
-  return {
-    ...base,
-    sequence: [...sequence],
-    phases: phaseDetails.map(projectPhaseSummary),
-    phaseDetails,
-  };
 };
 
 const projectSopPhaseDetail = (
@@ -341,8 +189,6 @@ export const projectCatalog = (surface: GeneratedSurface): WorkflowCatalog => {
         .sort((a, b) => a.name.localeCompare(b.name));
       return {
         namespace,
-        orbit: orbitForNamespace(surface.orbits, namespace),
-        orbitDetail: projectOrbitDetail(surface.orbits, namespace),
         sops: projectSopDetails(surface.sops, namespace),
         agents,
       };
@@ -367,15 +213,13 @@ export const loadGeneratedSurface = async (dir: string): Promise<GeneratedSurfac
     const path = join(dir, file);
     return existsSync(path) ? ((await import(path)) as Record<string, unknown>) : {};
   };
-  const [agentsMod, orbitsMod, sopsMod, modelsMod] = await Promise.all([
+  const [agentsMod, sopsMod, modelsMod] = await Promise.all([
     load("agents.ts"),
-    load("orbits.ts"),
     load("sops.ts"),
     load("models.ts"),
   ]);
   return {
     agents: (agentsMod.agents ?? {}) as GeneratedSurface["agents"],
-    orbits: (orbitsMod.orbits ?? {}) as GeneratedSurface["orbits"],
     sops: (sopsMod.sops ?? {}) as GeneratedSurface["sops"],
     models: (modelsMod.models ?? {}) as GeneratedSurface["models"],
   };
@@ -408,34 +252,18 @@ const renderMissingSurfaceHuman = (surfaceDir: string): string =>
     `Refresh the snapshot:     \`prism workflow refresh-harness-types\``,
     `Scaffold a starter:       \`prism workflow scaffold hello\``,
     ``,
-    `Plugin refs (agents.* / orbits.*) are optional. Compile a plugin only if you want them.`,
+    `Plugin refs (agents.*) are optional. Compile a plugin only if you want them.`,
   ].join("\n");
 
-/** Human-readable full-detail catalog rendering (used by `--full` and `--orbit <ns>`). */
-export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: string): string => {
+/** Human-readable full-detail catalog rendering (used by `--full`). */
+export const renderCatalogHuman = (result: BuildCatalogResult): string => {
   if (!result.present || !result.catalog) {
     return renderMissingSurfaceHuman(result.surfaceDir);
   }
   const lines: string[] = [`Workflow surface (import refs from \`prism/refs\`):`, `  ${result.surfaceDir}`, ``];
-  let shown = 0;
   for (const ns of result.catalog.namespaces) {
-    if (filterOrbit && ns.namespace !== filterOrbit) continue;
-    if (ns.agents.length === 0 && ns.orbit === null && ns.sops.length === 0) continue;
-    shown += 1;
-    lines.push(ns.orbit ? `${ns.namespace}  (orbit ref: ${ns.orbit.ref})` : `${ns.namespace}`);
-    if (ns.orbitDetail && ns.orbitDetail.phases.length > 0) {
-      const sequence = ns.orbitDetail.sequence.length > 0 ? ns.orbitDetail.sequence.join(" → ") : "(unordered)";
-      lines.push(`  phases (${sequence}):`);
-      for (const phase of ns.orbitDetail.phases) {
-        const agentNames = phase.agents.map((agent) => agent.slot).join(", ") || "(none)";
-        const contract = phase.hasContract ? "yes" : "no";
-        lines.push(
-          `    ${phase.name}  agents: ${agentNames}  criteria: ${phase.criteriaCount}  contract: ${contract}`,
-        );
-        lines.push(`      ref: ${phase.ref}`);
-      }
-      lines.push(``);
-    }
+    if (ns.agents.length === 0 && ns.sops.length === 0) continue;
+    lines.push(`${ns.namespace}`);
     for (const sop of ns.sops) {
       lines.push(`  sop ref: ${sop.ref}`);
       for (const phase of sop.phases) {
@@ -454,17 +282,10 @@ export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: str
     }
     lines.push(``);
   }
-  if (filterOrbit !== undefined && shown === 0) {
-    lines.push(
-      `No orbit/namespace named "${filterOrbit}". Available: ${result.catalog.namespaces.map((ns) => ns.namespace).join(", ")}`,
-    );
-  }
-  if (!filterOrbit) {
-    lines.push(`workers: ${result.catalog.workers.join(", ")}`);
-    const profiles = result.catalog.modelProfiles;
-    const sample = profiles.slice(0, 3).map((p) => p.ref).join(", ");
-    lines.push(`model profiles: ${profiles.length}${profiles.length > 0 ? ` (e.g. ${sample})` : ""}`);
-  }
+  lines.push(`workers: ${result.catalog.workers.join(", ")}`);
+  const profiles = result.catalog.modelProfiles;
+  const sample = profiles.slice(0, 3).map((p) => p.ref).join(", ");
+  lines.push(`model profiles: ${profiles.length}${profiles.length > 0 ? ` (e.g. ${sample})` : ""}`);
   return lines.join("\n");
 };
 
@@ -476,7 +297,6 @@ export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: str
 
 export interface CompactNamespaceEntry {
   readonly namespace: string;
-  readonly orbitRef: string | null;
   readonly sopRefs: ReadonlyArray<string>;
   readonly agentCount: number;
 }
@@ -494,10 +314,9 @@ export const projectCompactIndex = (catalog: WorkflowCatalog, surfaceDir: string
   surfaceDir,
   present: true,
   namespaces: catalog.namespaces
-    .filter((ns) => ns.agents.length > 0 || ns.orbit !== null || ns.sops.length > 0)
+    .filter((ns) => ns.agents.length > 0 || ns.sops.length > 0)
     .map((ns) => ({
       namespace: ns.namespace,
-      orbitRef: ns.orbit?.ref ?? null,
       sopRefs: ns.sops.map((sop) => sop.ref),
       agentCount: ns.agents.length,
     })),
@@ -511,7 +330,6 @@ export const renderCompactIndexHuman = (index: CompactCatalogIndex): string => {
     const agentCount = `${ns.agentCount} agent${ns.agentCount === 1 ? "" : "s"}`;
     const details = [
       agentCount,
-      ns.orbitRef ? `orbit ref: ${ns.orbitRef}` : null,
       ns.sopRefs.length > 0 ? `sop refs: ${ns.sopRefs.join(", ")}` : null,
     ].filter((part): part is string => part !== null);
     lines.push(`${ns.namespace}  (${details.join(", ")})`);
@@ -522,30 +340,9 @@ export const renderCompactIndexHuman = (index: CompactCatalogIndex): string => {
   lines.push(`harness models: \`prism workflow models\`  (plugin-free live slugs)`);
   lines.push(``);
   lines.push(
-    `Drill down: --orbit <ns> (one namespace) | --ref <ref> (one entity) | --query <text> (search) | --full (complete dump)`,
+    `Drill down: --sop <name> (one sop) | --ref <ref> (one entity) | --query <text> (search) | --full (complete dump)`,
   );
   return lines.join("\n");
-};
-
-export interface OrbitLookupResult {
-  readonly found: boolean;
-  readonly namespace: CatalogNamespace | null;
-  readonly orbitDetail: CatalogOrbitDetail | null;
-  readonly phases: ReadonlyArray<CatalogPhaseSummary>;
-  readonly available: ReadonlyArray<string>;
-}
-
-/** Pure lookup backing `--orbit <name>`'s JSON output (the human path still uses {@link renderCatalogHuman}). */
-export const lookupOrbitNamespace = (catalog: WorkflowCatalog, orbitName: string): OrbitLookupResult => {
-  const namespace = catalog.namespaces.find((ns) => ns.namespace === orbitName) ?? null;
-  const orbitDetail = namespace?.orbitDetail ?? null;
-  return {
-    found: namespace !== null,
-    namespace,
-    orbitDetail,
-    phases: orbitDetail?.phases ?? [],
-    available: catalog.namespaces.map((ns) => ns.namespace),
-  };
 };
 
 export interface SopLookupResult {
@@ -590,8 +387,6 @@ export const lookupSop = (catalog: WorkflowCatalog, query: string): SopLookupRes
 /** A single catalog entity resolved by ref, tagged with its kind so `--ref` output stays a discriminated union. */
 export type CatalogEntity =
   | ({ readonly kind: "agent" } & CatalogAgent)
-  | ({ readonly kind: "orbit" } & CatalogOrbitDetail)
-  | ({ readonly kind: "phase" } & CatalogPhaseDetail)
   | ({ readonly kind: "sop" } & CatalogSopDetail)
   | ({ readonly kind: "sop-phase" } & CatalogSopPhaseDetail)
   | ({ readonly kind: "model" } & CatalogModelProfile);
@@ -606,12 +401,6 @@ export interface RefLookupResult {
 const catalogEntities = (catalog: WorkflowCatalog): ReadonlyArray<CatalogEntity> => {
   const entities: CatalogEntity[] = [];
   for (const ns of catalog.namespaces) {
-    if (ns.orbitDetail) entities.push({ kind: "orbit", ...ns.orbitDetail });
-    if (ns.orbitDetail) {
-      for (const phase of ns.orbitDetail.phaseDetails) entities.push({ kind: "phase", ...phase });
-    } else if (ns.orbit) {
-      entities.push({ kind: "orbit", ...ns.orbit, sequence: [], phases: [], phaseDetails: [] });
-    }
     for (const sop of ns.sops) {
       entities.push({ kind: "sop", ...sop });
       for (const phase of sop.phases) entities.push({ kind: "sop-phase", ...phase });
@@ -657,38 +446,6 @@ export const renderRefDetailHuman = (entity: CatalogEntity): string => {
       ...(modelLines.length > 0 ? modelLines : [`    (none recorded)`]),
     ].join("\n");
   }
-  if (entity.kind === "orbit") {
-    const lines = [`${entity.ref}`, `  plugin: ${entity.plugin}`, `  name: ${entity.name}`];
-    if (entity.sequence.length > 0) lines.push(`  sequence: ${entity.sequence.join(" → ")}`);
-    if (entity.phases.length > 0) {
-      lines.push(`  phases:`);
-      for (const phase of entity.phases) {
-        const agentNames = phase.agents.map((agent) => agent.slot).join(", ") || "(none)";
-        lines.push(
-          `    ${phase.name}  agents: ${agentNames}  criteria: ${phase.criteriaCount}  contract: ${phase.hasContract ? "yes" : "no"}`,
-        );
-        lines.push(`      ref: ${phase.ref}`);
-      }
-    }
-    return lines.join("\n");
-  }
-  if (entity.kind === "phase") {
-    const agentLines = entity.agents.map((agent) => `    ${agent.slot}: ${agent.ref} (${agent.plugin}/${agent.name})`);
-    const framingLines = Object.entries(entity.framing).map(([key, value]) => `    ${key}: ${value}`);
-    return [
-      `${entity.ref}`,
-      `  orbit: ${entity.orbit}`,
-      `  plugin: ${entity.plugin}`,
-      `  name: ${entity.name}`,
-      `  agents:`,
-      ...(agentLines.length > 0 ? agentLines : ["    (none)"]),
-      `  criteria (${entity.criteria.length}): ${entity.criteria.length > 0 ? entity.criteria.join("; ") : "(none)"}`,
-      `  contract: input=${entity.hasInputContract ? "yes" : "no"} output=${entity.hasOutputContract ? "yes" : "no"}`,
-      `  io inputs: ${entity.io.inputs.join(", ") || "(none)"}`,
-      `  io outputs: ${entity.io.outputs.join(", ") || "(none)"}`,
-      ...(framingLines.length > 0 ? [`  framing:`, ...framingLines] : []),
-    ].join("\n");
-  }
   if (entity.kind === "sop") {
     const lines = [`${entity.ref}`, `  plugin: ${entity.plugin}`, `  name: ${entity.name}`];
     if (entity.phases.length > 0) {
@@ -720,7 +477,7 @@ export const renderRefDetailHuman = (entity: CatalogEntity): string => {
 export interface CatalogQueryHit {
   readonly ref: string;
   readonly name: string;
-  /** First ~100 chars of the entity's description; empty for entities without one (orbits, model profiles). */
+  /** First ~100 chars of the entity's description; empty for entities without one (models). */
   readonly descriptionExcerpt: string;
 }
 
@@ -734,16 +491,6 @@ export const searchCatalog = (catalog: WorkflowCatalog, query: string): Readonly
     haystack.some((text) => text.toLowerCase().includes(needle));
   const hits: CatalogQueryHit[] = [];
   for (const ns of catalog.namespaces) {
-    if (ns.orbit && matches(ns.orbit.ref, ns.orbit.name)) {
-      hits.push({ ref: ns.orbit.ref, name: ns.orbit.name, descriptionExcerpt: "" });
-    }
-    if (ns.orbitDetail) {
-      for (const phase of ns.orbitDetail.phaseDetails) {
-        if (matches(phase.ref, phase.name)) {
-          hits.push({ ref: phase.ref, name: phase.name, descriptionExcerpt: "" });
-        }
-      }
-    }
     for (const sop of ns.sops) {
       if (matches(sop.ref, sop.name)) {
         hits.push({ ref: sop.ref, name: sop.name, descriptionExcerpt: "" });

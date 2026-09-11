@@ -78,7 +78,6 @@ import { renderWorkflowTraceHuman, workflowSpansToOtlpJson } from "./workflow-tr
 import {
   buildWorkflowCatalog,
   lookupCatalogRef,
-  lookupOrbitNamespace,
   lookupSop,
   pickDefaultAgent,
   pickDefaultWorkers,
@@ -337,32 +336,30 @@ workflow
   .command("catalog")
   .description(
     "Discover workflow surface: live harness workers always, plugin refs when compiled. Default: compact index. " +
-      "Without a plugin, --query searches harness models. With compiled refs: --orbit <ns>, --sop <name>, --ref <ref>, --full.",
+      "Without a plugin, --query searches harness models. With compiled refs: --sop <name>, --ref <ref>, --full.",
   )
   .option("--json", "Emit machine-readable JSON")
-  .option("--orbit <name>", "Full detail for one orbit/namespace")
   .option("--sop <name>", "Full detail for one SOP (bare name, namespace-qualified, or full ref)")
   .option("--ref <ref>", "Full detail for exactly one entity by ref")
   .option("--query <text>", "Case-insensitive substring search across refs, names, and descriptions")
   .option("--full", "Print the complete catalog dump")
   .action(async (options: {
     readonly json?: boolean;
-    readonly orbit?: string;
     readonly sop?: string;
     readonly ref?: string;
     readonly query?: string;
     readonly full?: boolean;
   }) => {
     try {
-      const modeCount = [options.orbit !== undefined, options.sop !== undefined, options.ref !== undefined, options.query !== undefined, options.full === true]
+      const modeCount = [options.sop !== undefined, options.ref !== undefined, options.query !== undefined, options.full === true]
         .filter(Boolean).length;
       if (modeCount > 1) {
-        throw new CliUsageError("--orbit, --sop, --ref, --query, and --full are mutually exclusive — pass at most one");
+        throw new CliUsageError("--sop, --ref, --query, and --full are mutually exclusive — pass at most one");
       }
 
       const result = await buildWorkflowCatalog();
       if (result.catalog === null) {
-        if (options.orbit !== undefined || options.ref !== undefined || options.full === true) {
+        if (options.ref !== undefined || options.full === true) {
           throw new CliUsageError(
             [
               "That catalog flag needs compiled plugin refs (optional).",
@@ -420,15 +417,6 @@ workflow
         const output = options.json === true
           ? JSON.stringify({ query: options.query, hits }, null, 2)
           : renderQueryResultsHuman(hits, options.query);
-        await writeStdout(`${output}\n`);
-        return;
-      }
-
-      if (options.orbit !== undefined) {
-        const lookup = lookupOrbitNamespace(catalog, options.orbit);
-        const output = options.json === true
-          ? JSON.stringify({ surfaceDir: result.surfaceDir, present: true, ...lookup }, null, 2)
-          : renderCatalogHuman(result, options.orbit);
         await writeStdout(`${output}\n`);
         return;
       }

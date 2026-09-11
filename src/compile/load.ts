@@ -54,7 +54,8 @@ import { PluginManifestError } from "../errors.js";
 import { validateSkillName } from "../manifest.js";
 import { harnessModelsModulePath } from "../harness-types.js";
 import { resolvePrismHome } from "../prism-home.js";
-import { deriveProjectKey, projectGeneratedSopsPath, projectGeneratedRefsDir } from "../project-key.js";
+import { deriveProjectKey, projectGeneratedRefsDir } from "../project-key.js";
+import { rewriteGeneratedRefsForRuntime } from "../workflow-generated-surface.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { effectBundleImportPath, typescriptBundleImportPath } from "./runtime-deps.js";
@@ -410,7 +411,7 @@ const listTransformableTsFiles = async (
     return [];
   }
 
-  const ignoredDirs = new Set([".agents", ".git", "dist", "node_modules"]);
+  const ignoredDirs = new Set([".agents", ".git", "dist", "node_modules", ".runtime"]);
   const files: string[] = [];
   for (const entry of entries) {
     const entryPath = join(root, entry.name);
@@ -575,17 +576,23 @@ const copyTransformedPluginTree = async (options: {
  * §4): git repository root of the process cwd, else realpath(cwd). An off-repo
  * workflow file run from inside a repo resolves to that repo's generated refs.
  */
-const workflowRefsTargetPath = (): string => {
-  const prismHome = resolvePrismHome();
-  const { key } = deriveProjectKey();
-  return projectGeneratedSopsPath(prismHome, key);
-};
+export const resolveEffectRuntimePath = async (): Promise<string> =>
+  (await getImportRuntimePaths()).effect;
 
-const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> => {
+const workflowRefsDirForImport = async (): Promise<string> => {
   const prismHome = resolvePrismHome();
   const { key } = deriveProjectKey();
   const refsDir = projectGeneratedRefsDir(prismHome, key);
-  const modules = ["models", "sops"] as const;
+  if (!existsSync(join(refsDir, "sops.ts"))) return refsDir;
+  return rewriteGeneratedRefsForRuntime(refsDir, await resolveEffectRuntimePath());
+};
+
+const workflowRefsTargetPath = async (): Promise<string> =>
+  join(await workflowRefsDirForImport(), "sops.ts");
+
+const workflowRefsModuleTargets = async (cacheBust: string): Promise<Record<string, string>> => {
+  const refsDir = await workflowRefsDirForImport();
+  const modules = ["sops", "models"] as const;
   return Object.fromEntries(
     modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
   );
@@ -604,8 +611,8 @@ const workflowSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => 
   return {
     prism: toFileSpecifier(runtimePaths.workflowDsl),
     effect: toFileSpecifier(runtimePaths.effect),
-    prismRefs: `${toFileSpecifier(workflowRefsTargetPath())}${cacheBust}`,
-    prismRefsModules: workflowRefsModuleTargets(cacheBust),
+    prismRefs: `${toFileSpecifier(await workflowRefsTargetPath())}${cacheBust}`,
+    prismRefsModules: await workflowRefsModuleTargets(cacheBust),
     ...(existsSync(harnessTypesPath)
       ? { prismHarnesses: `${toFileSpecifier(harnessTypesPath)}${cacheBust}` }
       : {}),

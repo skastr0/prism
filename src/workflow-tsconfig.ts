@@ -27,7 +27,7 @@
  * This file is Prism-owned and must never be committed to the user's project.
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -179,8 +179,18 @@ const resolvePrismTypesDir = (): string | undefined => {
   const repoRoot = platformPackageRootFromSource();
   if (repoRoot && existsSync(join(repoRoot, "packages", "npm"))) {
     const tmp = join(repoRoot, "dist", "dts-tmp");
-    if (existsSync(join(tmp, "index.d.ts"))) {
-      return tmp;
+    const dtsIndex = join(tmp, "index.d.ts");
+    const dtsWorkflows = join(tmp, "workflows.d.ts");
+    const srcWorkflows = join(repoRoot, "src", "workflows.ts");
+    if (existsSync(dtsIndex)) {
+      // Skip a stale emit so `bun src/cli.ts workflow typecheck` matches source.
+      if (
+        !existsSync(dtsWorkflows) ||
+        !existsSync(srcWorkflows) ||
+        statSync(srcWorkflows).mtimeMs <= statSync(dtsWorkflows).mtimeMs
+      ) {
+        return tmp;
+      }
     }
   }
 

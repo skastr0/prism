@@ -12,6 +12,9 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { resolveEffectRuntimePath } from "./compile/load.js";
+import { rewriteGeneratedRefsForRuntime } from "./workflow-generated-surface.js";
 import { workflowWorkerHarnessIds, type WorkflowWorkerHarnessId } from "./lowerer-capabilities.js";
 import {
   deriveProjectKey,
@@ -161,9 +164,10 @@ export const projectCatalog = (surface: GeneratedSurface): WorkflowCatalog => {
 /** I/O: import the generated surface from a project's generated dir. Null when absent. */
 export const loadGeneratedSurface = async (dir: string): Promise<GeneratedSurface | null> => {
   if (!existsSync(join(dir, "sops.ts"))) return null;
+  const runtimeDir = rewriteGeneratedRefsForRuntime(dir, await resolveEffectRuntimePath());
   const load = async (file: string): Promise<Record<string, unknown>> => {
-    const path = join(dir, file);
-    return existsSync(path) ? ((await import(path)) as Record<string, unknown>) : {};
+    const path = join(runtimeDir, file);
+    return existsSync(path) ? ((await import(pathToFileURL(path).href)) as Record<string, unknown>) : {};
   };
   const [sopsMod, modelsMod] = await Promise.all([
     load("sops.ts"),

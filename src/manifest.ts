@@ -879,22 +879,7 @@ export function getHarnessFrontmatter(
   const base = frontmatter as Record<string, unknown>;
 
   // Remove all harness-specific keys from base
-  const harnessKeys: HarnessId[] = [
-    "claude-code",
-    "opencode",
-    "openclaw",
-    "hermes",
-    "codex-cli",
-    "antigravity-cli",
-    "kimi-code",
-    "amp-code",
-    "cursor",
-    "factory-droid",
-    "pi",
-    "omp",
-    "grok",
-    "devin",
-  ];
+  const harnessKeys = getAllHarnessIds();
 
   const cleanBase: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(base)) {

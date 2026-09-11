@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Schema } from "effect";
 import {
   type CompileManifest,
   type CompileManifestAgent,
@@ -9,6 +10,7 @@ import {
   encodeCompileManifest,
   getCompileManifestAgent,
   getCompileManifestAgentForTarget,
+  HarnessIdSchema,
   verifyAgentManifestHash,
   verifyCompileManifestHash,
 } from "@skastr0/prism-sdk/compile-manifest";
@@ -268,4 +270,9 @@ test("manifest hash is byte-stable for non-ASCII sop and tool names regardless o
 
   // Encoded output must also be identical
   expect(encodeCompileManifest(aa)).toBe(encodeCompileManifest(bb));
+});
+
+test("HarnessIdSchema admits opencode2", () => {
+  expect(Schema.is(HarnessIdSchema)("opencode2")).toBe(true);
+  expect(Schema.is(HarnessIdSchema)("opencode")).toBe(true);
 });

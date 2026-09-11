@@ -195,6 +195,13 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     probeArgs: ["--version"],
     defaultModel: "synthetic/hf:moonshotai/Kimi-K2.6",
   },
+  opencode2: {
+    harness: "opencode2",
+    command: "opencode2",
+    envVar: "PRISM_WORKFLOW_OPENCODE2_BIN",
+    probeArgs: ["--version"],
+    defaultModel: "opencode-go/deepseek-v4.1-flash",
+  },
   omp: {
     harness: "omp",
     command: "omp",

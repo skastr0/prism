@@ -163,13 +163,13 @@ const buildManifestTargets = (options: PluginScaffoldOptions): PluginManifestTar
     targets.rules = ["coding-harness"];
     targets.commands = [
       "claude-code",
-      "opencode",
+      "opencode2",
       "codex-cli",
       "cursor",
       "factory-droid",
     ];
   }
-  if (options.withAgent) targets.agents = ["claude-code", "opencode", "factory-droid"];
+  if (options.withAgent) targets.agents = ["claude-code", "opencode2", "factory-droid"];
   if (options.withSkill) targets.skills = ["coding-harness", "claw-harness"];
   return targets;
 };

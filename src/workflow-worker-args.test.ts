@@ -95,7 +95,7 @@ describe("workflow worker argument builders", () => {
   });
 
   test("workflow workers expose one task execution entrypoint", () => {
-    for (const worker of ["amp-code", "antigravity-cli", "claude-code", "codex-cli", "cursor", "grok", "hermes", "kimi-code", "opencode"]) {
+    for (const worker of ["amp-code", "antigravity-cli", "claude-code", "codex-cli", "cursor", "grok", "hermes", "kimi-code", "opencode", "opencode2"]) {
       const adapter = getWorkflowWorkerAdapter(worker);
       expect(typeof adapter.runTask).toBe("function");
       expect("continueTask" in adapter).toBe(false);

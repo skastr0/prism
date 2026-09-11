@@ -467,6 +467,7 @@ const validateHarnessConfig = async (options: {
       return validateTomlConfig({ harness: options.harness, path });
     case "claude-code":
     case "opencode":
+    case "opencode2":
       return validateJsonConfig({ harness: options.harness, path });
     default:
       return [];
@@ -664,6 +665,7 @@ const namespaceScanDirs = (harness: HarnessId): string[] => {
     case "claude-code":
       return ["skills", "commands", "agents"];
     case "opencode":
+    case "opencode2":
       return ["agents", "skills", "plugins", "commands"];
     case "hermes":
       return ["skills", "prism/mcp"];
@@ -1006,6 +1008,7 @@ const validateHarnessConfigReferences = async (options: {
       return codexFindings;
     }
     case "opencode":
+    case "opencode2":
       return path ? validateOpenCodeConfigReferences(path) : [];
     case "claude-code":
       return validateClaudeGeneratedPluginReferences(options.scope, options.projectPath, options.roots);

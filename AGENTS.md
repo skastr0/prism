@@ -634,7 +634,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 
 ### Preset groups
 
-- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `omp`, `grok`, `devin`
+- `coding-harness` → `claude-code`, `opencode2`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `omp`, `grok`, `devin` (`opencode` stays targetable for OpenCode 1.x until V1/V2 consolidate)
 - `claw-harness` → `openclaw`, `hermes`
 
 Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Claude Code, Cursor, Amp Code, Kimi Code, Pi, and OMP remain command targets, but Prism lowers those commands through each harness's generated plugin, package, API, or native command surface instead of treating every target as a direct markdown-copy destination. Factory Droid remains included for install-phase commands because Droid exposes `.factory/commands/` files.

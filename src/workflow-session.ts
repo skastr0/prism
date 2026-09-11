@@ -11,6 +11,7 @@ export const WorkflowContinuationAdapterIdSchema = Schema.Literal(
   "hermes",
   "kimi-code",
   "opencode-cli",
+  "opencode2-cli",
   "omp-cli",
 );
 export type WorkflowContinuationAdapterId = typeof WorkflowContinuationAdapterIdSchema.Type;
@@ -26,6 +27,7 @@ export const WorkflowContinuationWorkerIdSchema = Schema.Literal(
   "hermes",
   "kimi-code",
   "opencode",
+  "opencode2",
   "omp",
 );
 export type WorkflowContinuationWorkerId = typeof WorkflowContinuationWorkerIdSchema.Type;
@@ -73,6 +75,7 @@ export const workflowContinuationAdapterByWorker = {
   hermes: "hermes",
   "kimi-code": "kimi-code",
   opencode: "opencode-cli",
+  opencode2: "opencode2-cli",
   omp: "omp-cli",
 } as const satisfies Record<WorkflowContinuationWorkerId, WorkflowContinuationAdapterId>;
 export type WorkflowRepairLoopContinuationWorkerId = keyof typeof workflowContinuationAdapterByWorker;
@@ -173,6 +176,15 @@ export const workflowHarnessContinuationSupport = {
     exactSameSessionContinuation: true,
     sessionIdField: "sessionId",
     continueCommand: "opencode run -s <sessionId> <prompt>",
+    capture: "json step_start sessionID, session list, export, database, or log recovery",
+  },
+  "opencode2-cli": {
+    adapter: "opencode2-cli",
+    workflowWorker: true,
+    stableSessionIds: true,
+    exactSameSessionContinuation: true,
+    sessionIdField: "sessionId",
+    continueCommand: "opencode2 run -s <sessionId> <prompt>",
     capture: "json step_start sessionID, session list, export, database, or log recovery",
   },
   "omp-cli": {

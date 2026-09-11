@@ -224,6 +224,7 @@ export const syncWorkflowRefsForProject = async (options: {
 
 const SUPPORTED_TARGETS = [
   "opencode",
+  "opencode2",
   "claude-code",
   "antigravity-cli",
   "codex-cli",
@@ -241,6 +242,7 @@ const SUPPORTED_TARGETS = [
 const getLowerer = (target: string): LowererModule => {
   switch (target) {
     case "opencode":
+    case "opencode2":
       return { planLowering: planOpenCodeLowering };
     case "claude-code":
       return { planLowering: planClaudeCodeLowering };
@@ -362,6 +364,10 @@ const resolveCompileTargetContext = (
       options.projectPath,
       Option.getOrUndefined(rootsOption),
     );
+    // Exact harness output directory. CLI `--compile-root` is remapped to a
+    // per-harness path before it reaches here when several harnesses share
+    // one sandbox prefix; callers that already resolved a harness home pass
+    // that directory through unchanged.
     if (options.root) {
       return {
         targetId: options.target as HarnessId,

@@ -63,6 +63,8 @@ const workflowWorkerSemanticsVersion = (worker: string | null): string => {
     case "grok":
     case "opencode":
       return "native-cli-v1";
+    case "opencode2":
+      return "native-cli-v2";
     case "amp-code":
     case "codex-cli":
     case "devin":

@@ -213,7 +213,7 @@ const SCAFFOLD_WORKER_PREFERENCE: readonly WorkflowWorkerId[] = [
   "amp-code",
   "claude-code",
   "codex-cli",
-  "opencode",
+  "opencode2",
 ];
 
 export const pickScaffoldModel = (

@@ -14,6 +14,15 @@ export type OpenCodeWorkflowWorkerOptions = {
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"opencode">;
 
+export type OpenCode2WorkflowWorkerOptions = {
+  readonly cwd: string;
+  readonly bin?: string;
+  readonly model?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
+  readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
+} & WorkflowTaskRepairLoopOption<"opencode2">;
+
 export class OpenCodeWorkflowWorkerError extends Error {
   override readonly name = "OpenCodeWorkflowWorkerError";
   readonly metadata?: Record<string, unknown>;
@@ -24,7 +33,11 @@ export class OpenCodeWorkflowWorkerError extends Error {
   }
 }
 
-const assertOpenCodePermission = (mode: WorkflowPermissionMode): void => {
+const assertOpenCodePermission = (
+  mode: WorkflowPermissionMode,
+  worker: "opencode" | "opencode2" = "opencode",
+): void => {
+  const label = worker === "opencode2" ? "OpenCode 2" : "OpenCode";
   switch (mode) {
     case "legacy":
     case "permissive":
@@ -32,30 +45,30 @@ const assertOpenCodePermission = (mode: WorkflowPermissionMode): void => {
       return;
     case "restricted":
       throw new WorkflowPermissionError(
-        "opencode",
+        worker,
         mode,
-        "OpenCode has no CLI flag to restrict permissions beyond the user's config. Restricted mode requires pre-configuring opencode.json with specific 'deny' entries, which is a config-management concern, not a runtime flag. Choose 'legacy' or 'permissive' instead.",
+        `${label} has no CLI flag to restrict permissions beyond the user's config. Restricted mode requires pre-configuring opencode.json with specific 'deny' entries, which is a config-management concern, not a runtime flag. Choose 'legacy' or 'permissive' instead.`,
       );
     case "interactive":
       throw new WorkflowPermissionError(
-        "opencode",
+        worker,
         mode,
-        "OpenCode interactive mode (-i/--interactive) is incompatible with Prism workflow execution. Workflow tasks run headless and cannot participate in interactive prompts. Choose 'permissive' or 'legacy' instead.",
+        `${label} interactive mode is incompatible with Prism workflow execution. Workflow tasks run headless and cannot participate in interactive prompts. Choose 'permissive' or 'legacy' instead.`,
       );
     case "sandbox-read-only":
       throw new WorkflowPermissionError(
-        "opencode",
+        worker,
         mode,
-        "OpenCode has no --sandbox or read-only execution mode. Apply host-level process isolation (Docker, macOS sandbox-exec) outside the harness. Choose 'permissive' or 'legacy' instead.",
+        `${label} has no --sandbox or read-only execution mode. Apply host-level process isolation (Docker, macOS sandbox-exec) outside the harness. Choose 'permissive' or 'legacy' instead.`,
       );
     case "sandbox-workspace-write":
       throw new WorkflowPermissionError(
-        "opencode",
+        worker,
         mode,
-        "OpenCode has no workspace-write sandbox mode. Apply host-level process isolation outside the harness. Choose 'permissive' or 'legacy' instead.",
+        `${label} has no workspace-write sandbox mode. Apply host-level process isolation outside the harness. Choose 'permissive' or 'legacy' instead.`,
       );
   }
-  return assertNeverWorkflowPermissionMode("opencode", mode);
+  return assertNeverWorkflowPermissionMode(worker, mode);
 };
 
 export const buildOpenCodeArgs = (input: {
@@ -66,7 +79,7 @@ export const buildOpenCodeArgs = (input: {
   readonly permission?: WorkflowPermissionMode;
 }): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
-  assertOpenCodePermission(mode);
+  assertOpenCodePermission(mode, "opencode");
   const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--dangerously-skip-permissions"] : [];
   return [
     "run",
@@ -74,6 +87,30 @@ export const buildOpenCodeArgs = (input: {
     input.cwd,
     // `--format json` emits a newline-delimited event stream that carries the session id on
     // every event: the only race-free source for the repair-loop continuation id.
+    "--format",
+    "json",
+    ...(input.sessionId !== undefined ? ["-s", input.sessionId] : []),
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...permissionArgs,
+    input.prompt,
+  ];
+};
+
+/**
+ * OpenCode 2 `run` has no `--dir` (the process cwd is the project) and uses
+ * `--auto` instead of `--dangerously-skip-permissions`. Never emit V1 flags.
+ */
+export const buildOpenCode2Args = (input: {
+  readonly model?: string;
+  readonly prompt: string;
+  readonly sessionId?: string;
+  readonly permission?: WorkflowPermissionMode;
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertOpenCodePermission(mode, "opencode2");
+  const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--auto"] : [];
+  return [
+    "run",
     "--format",
     "json",
     ...(input.sessionId !== undefined ? ["-s", input.sessionId] : []),
@@ -169,6 +206,55 @@ export const runOpenCodeWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(stream.text),
     metadata: {
       adapter: "opencode-cli",
+      model: options.model,
+      durationMs,
+      sessionId: sessionId ?? stream.sessionId,
+      ...summarizeWorkflowWorkerStderr(stderr),
+    },
+  };
+};
+
+export const runOpenCode2WorkflowTask = async (
+  task: AnyWorkflowTask,
+  options: OpenCode2WorkflowWorkerOptions,
+): Promise<WorkflowTaskExecution> => {
+  const command = options.bin ?? process.env.PRISM_WORKFLOW_OPENCODE2_BIN ?? "opencode2";
+  const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
+  const prompt = options.repair !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const args = buildOpenCode2Args({
+    model: options.model,
+    prompt,
+    sessionId,
+    permission: options.resolvedPermission,
+  });
+
+  const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
+    command,
+    args,
+    cwd: options.cwd,
+    abortSignal: options.abortSignal,
+    onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
+  });
+  if (aborted) {
+    throw new OpenCodeWorkflowWorkerError(
+      "opencode2 was aborted by Prism workflow stop",
+      workflowWorkerFailureMetadata({ adapter: "opencode2-cli", stderr, sessionId: parseOpenCodeJsonStream(stdout).sessionId ?? sessionId }),
+    );
+  }
+  if (exitCode !== 0) {
+    throw new OpenCodeWorkflowWorkerError(
+      `opencode2 exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      workflowWorkerFailureMetadata({ adapter: "opencode2-cli", stderr, sessionId: parseOpenCodeJsonStream(stdout).sessionId ?? sessionId }),
+    );
+  }
+
+  const stream = parseOpenCodeJsonStream(stdout);
+  return {
+    output: parseWorkflowWorkerJsonOutput(stream.text),
+    metadata: {
+      adapter: "opencode2-cli",
       model: options.model,
       durationMs,
       sessionId: sessionId ?? stream.sessionId,

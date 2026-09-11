@@ -313,6 +313,7 @@ describe("refreshHarnessTypes", () => {
           });
         }
         if (command === "opencode" && args[0] === "models") return "openai/gpt-5.4\n";
+        if (command === "opencode2" && args[0] === "models") return "opencode/deepseek-v4-flash\n";
         if (command === "omp" && args[0] === "models" && args[1] === "--json") {
           return JSON.stringify({
             models: [{
@@ -329,6 +330,8 @@ describe("refreshHarnessTypes", () => {
     });
     const opencode = result.snapshot.harnesses.find((entry) => entry.harness === "opencode");
     expect(opencode?.models.map((model) => model.id)).toEqual(["openai/gpt-5.4"]);
+    const opencode2 = result.snapshot.harnesses.find((entry) => entry.harness === "opencode2");
+    expect(opencode2?.models.map((model) => model.id)).toEqual(["opencode/deepseek-v4-flash"]);
     const amp = result.snapshot.harnesses.find((entry) => entry.harness === "amp-code");
     expect(amp?.models.map((model) => model.id)).toEqual([
       "low",
@@ -348,6 +351,8 @@ describe("refreshHarnessTypes", () => {
     const source = await readFile(result.modelsPath, "utf8");
     expect(source).toContain("openCodeModelSlugs");
     expect(source).toContain("openai/gpt-5.4");
+    expect(source).toContain("openCode2ModelSlugs");
+    expect(source).toContain("opencode/deepseek-v4-flash");
     expect(source).toContain("ampCodeModelSlugs");
     expect(source).toContain("grok45");
     expect(source).toContain("ampCodeCatalogSlugs");

@@ -192,6 +192,37 @@ describe("workflow-devin-worker", () => {
     }
   });
 
+  test("reads assistant text from ATIF messages[] with role+parts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-devin-worker-test-"));
+    try {
+      const fakeDevin = join(root, "fake-devin.mjs");
+      await writeFile(
+        fakeDevin,
+        [
+          "#!/usr/bin/env node",
+          "import { writeFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          "const exportIndex = args.indexOf('--export');",
+          "writeFileSync(args[exportIndex + 1], JSON.stringify({",
+          "  session_id: 'devin-messages-shape',",
+          "  messages: [{ role: 'assistant', parts: [{ type: 'text', text: '{\\\"ok\\\":true}' }] }],",
+          "}));",
+          "",
+        ].join("\n"),
+      );
+      await chmod(fakeDevin, 0o755);
+
+      const result = await runDevinWorkflowTask(
+        { ...failureTask, id: "atif-messages" },
+        { cwd: root, bin: fakeDevin, resolvedPermission: "permissive" },
+      );
+      expect(result.output).toEqual({ ok: true });
+      expect(result.metadata?.sessionId).toBe("devin-messages-shape");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("falls back to the known continuation session id when no ATIF export was written (OBS-006)", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-devin-worker-test-"));
     try {

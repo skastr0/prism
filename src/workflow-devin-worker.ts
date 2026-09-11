@@ -101,27 +101,60 @@ export const buildDevinArgs = (input: {
   ];
 };
 
+const AGENT_STEP_SOURCES = new Set(["agent", "assistant", "model", "llm"]);
+const AGENT_ROLES = new Set(["agent", "assistant", "model"]);
+
+const textFromUnknown = (value: unknown): string | undefined => {
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (!isRecord(item)) return undefined;
+        if (typeof item.text === "string") return item.text;
+        if (typeof item.content === "string") return item.content;
+        return undefined;
+      })
+      .filter((part): part is string => part !== undefined && part.trim().length > 0);
+    if (parts.length > 0) return parts.join("");
+  }
+  if (isRecord(value)) {
+    for (const key of ["content", "text", "output", "message"] as const) {
+      const nested = textFromUnknown(value[key]);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+};
+
 const extractAgentTextFromAtif = (exportJson: unknown): string => {
   if (!isRecord(exportJson)) {
     throw new DevinWorkflowWorkerError("devin ATIF export was not a JSON object");
   }
-  const steps = exportJson.steps;
-  if (!Array.isArray(steps)) {
+  const collections = [exportJson.steps, exportJson.messages, exportJson.turns, exportJson.events]
+    .filter(Array.isArray);
+  if (collections.length === 0) {
+    const topLevel = textFromUnknown(exportJson.output ?? exportJson.result ?? exportJson.message);
+    if (topLevel !== undefined) return topLevel;
     throw new DevinWorkflowWorkerError("devin ATIF export missing steps array");
   }
-  for (let i = steps.length - 1; i >= 0; i -= 1) {
-    const step = steps[i];
-    if (!isRecord(step)) continue;
-    if (step.source !== "agent" && step.source !== "assistant") continue;
-    const message = step.message;
-    if (typeof message === "string" && message.trim().length > 0) return message;
-    if (isRecord(message)) {
-      for (const key of ["content", "text", "output"] as const) {
-        const value = message[key];
-        if (typeof value === "string" && value.trim().length > 0) return value;
-      }
+  for (const collection of collections) {
+    for (let i = collection.length - 1; i >= 0; i -= 1) {
+      const step = collection[i];
+      if (!isRecord(step)) continue;
+      const source = typeof step.source === "string" ? step.source : undefined;
+      const role = typeof step.role === "string" ? step.role : undefined;
+      if (
+        source !== undefined && !AGENT_STEP_SOURCES.has(source)
+        && role !== undefined && !AGENT_ROLES.has(role)
+      ) continue;
+      if (source === undefined && role === undefined) continue;
+      const message = textFromUnknown(step.message ?? step);
+      if (message !== undefined) return message;
     }
   }
+  const topLevel = textFromUnknown(exportJson.output ?? exportJson.result ?? exportJson.message);
+  if (topLevel !== undefined) return topLevel;
   throw new DevinWorkflowWorkerError("devin ATIF export did not contain an agent message");
 };
 

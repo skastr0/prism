@@ -24,8 +24,8 @@ An unpinned worker (\`{ worker: "cursor" }\` with no \`model\`) is correct. Pris
 
 1. \`prism workflow refresh-harness-types\` if there is no snapshot.
 2. \`prism workflow models --offer\` (or \`--json --offer\`). This lists every worker, its slug count, a sample of up to five slugs, and any already-stated preferences.
-3. Show that offer to the user. Ask which workers they use and which slug (Amp: \`catalogModel\` + \`effort\`) they want for each. They may say "leave this worker on my harness default".
-4. Save with \`prism workflow models prefer <id> --model <slug>\` (Amp: \`--catalog-model\` / \`--effort\`). Clear a pin with \`--clear\`. Write a free-form note with \`--notes\`.
+3. Show that offer to the user. Stop and wait for their answer. Ask which workers they use and which slug they want. They may say "leave this worker on my harness default". Do not save a slug they did not choose.
+4. Save only their answer: \`prism workflow models prefer <id> --model <slug>\`. Amp dial/plugin key: \`--model\`. Amp catalog slug: \`--catalog-model\` / \`--effort\`. Clear a pin with \`--clear\`. Write a free-form note with \`--notes\`.
 5. When writing a task, copy a stated preference into \`worker.model\` / \`catalogModel\` / \`effort\`. If there is no preference, omit those fields.
 
 Re-quiz anytime. The offer reprints current preferences next to the live inventory so the user can change one worker without redoing the rest.
@@ -34,8 +34,10 @@ Re-quiz anytime. The offer reprints current preferences next to the live invento
 
 \`\`\`bash
 prism workflow models --offer
-prism workflow models prefer cursor --model composer-2.5-fast
-prism workflow models prefer amp-code --catalog-model anthropic/claude-haiku-4-5-20251001 --effort none
+# examples after the user answers — do not run these unprompted
+prism workflow models prefer <worker> --model <slug>
+prism workflow models prefer amp-code --model low
+prism workflow models prefer amp-code --catalog-model <provider/model> --effort none
 prism workflow models prefer grok --clear
 prism workflow models prefer --notes "cheap cursor; opus only for review"
 \`\`\`

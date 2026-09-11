@@ -23,6 +23,8 @@ test("embedded workflow skill teaches the plugin-free path", () => {
   expect(markdown).toContain("catalog --sop");
   expect(markdown).not.toContain("orbit");
   expect(markdown).toContain("omit model");
+  expect(markdown).toContain("Save only their answer");
+  expect(markdown).not.toContain("prefer cursor --model composer-2.5-fast");
 });
 
 test("writeWorkflowAuthoringSkill materializes SKILL.md under PRISM_HOME", async () => {

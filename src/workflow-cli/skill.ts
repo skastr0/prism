@@ -25,7 +25,9 @@ Live runs spend real tokens. Rehearse with \`typecheck\`, \`validate\`, and \`--
 \`\`\`bash
 prism workflow refresh-harness-types
 prism workflow models --offer
-prism workflow models prefer cursor --model composer-2.5-fast
+# Stop. Quiz the user from that offer. Save only their answer:
+#   prism workflow models prefer <worker> --model <slug>
+# Amp catalog: --catalog-model <slug> [--effort <value>]
 prism workflow scaffold hello
 prism workflow typecheck ~/.prism/workflows/hello.workflow.ts
 prism workflow validate ~/.prism/workflows/hello.workflow.ts --table
@@ -117,7 +119,7 @@ Workflow files live in \`~/.prism/workflows/\`, never inside the repo they drive
 
 1. \`prism workflow refresh-harness-types\`
 2. \`prism workflow models --offer\` — workers, slug counts, five-slug samples, current prefs
-3. Quiz the user. Save with \`prism workflow models prefer <id> --model <slug>\`
+3. Quiz the user from the offer. Save only their answer: \`prism workflow models prefer <id> --model <slug>\` (Amp catalog: \`--catalog-model\`)
 4. Copy a stated preference into \`worker.model\` (Amp: \`catalogModel\` / \`effort\`). No preference → omit the field so the harness default stays.
 
 If typecheck rejects a family name, the error should list the effort-suffixed slugs. Fix the one-line pin; do not invent a shared model type. Never write \`model: ""\`.

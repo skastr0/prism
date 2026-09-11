@@ -13,7 +13,7 @@ import {
   pickPluginFreeScaffoldPins,
   pickScaffoldModel,
   projectWorkerModelCatalog,
-  sampleWorkerSlugs,
+  sampleWorkerModels,
   renderWorkerModelCatalogHuman,
   suggestHarnessSlugs,
 } from "./workflow-models.js";
@@ -137,10 +137,11 @@ describe("pickPluginFreeScaffoldPins", () => {
   test("uses stated preferences when present", () => {
     const pins = pickPluginFreeScaffoldPins(snapshot, [
       { worker: "cursor", model: "composer-2.5-fast" },
+      { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
     ]);
     expect(pins).toEqual([
       { worker: "cursor", model: "composer-2.5-fast" },
-      { worker: "amp-code" },
+      { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
     ]);
   });
 
@@ -185,16 +186,38 @@ describe("buildWorkflowModelCatalog", () => {
   });
 });
 
-describe("sampleWorkerSlugs", () => {
+describe("sampleWorkerModels", () => {
   test("returns up to five family representatives", () => {
     const catalogs = projectWorkerModelCatalog(snapshot);
     const cursor = catalogs.find((entry) => entry.worker === "cursor");
     expect(cursor).toBeDefined();
-    expect(sampleWorkerSlugs(cursor!, 5)).toEqual([
+    expect(sampleWorkerModels(cursor!, 5).map((sample) => sample.slug)).toEqual([
       "claude-opus-5-low",
       "composer-2.5-fast",
       "cursor-grok-4.6-low",
       "gemini-3.8-flash-high",
+    ]);
+  });
+
+  test("labels Amp dials vs catalog slugs", () => {
+    const catalogs = projectWorkerModelCatalog({
+      generatedAt: "2026-09-11T00:00:00.000Z",
+      harnesses: [{
+        harness: "amp-code",
+        source: "command",
+        models: [
+          { id: "low", kind: "dial" },
+          { id: "grok45", kind: "plugin-mode" },
+          { id: "anthropic/claude-haiku-4-5-20251001", kind: "model" },
+        ],
+      }],
+    });
+    const amp = catalogs.find((entry) => entry.worker === "amp-code");
+    expect(amp).toBeDefined();
+    expect(sampleWorkerModels(amp!, 5)).toEqual([
+      { slug: "low", pin: "model", kind: "dial" },
+      { slug: "grok45", pin: "model", kind: "plugin-mode" },
+      { slug: "anthropic/claude-haiku-4-5-20251001", pin: "catalogModel", kind: "model" },
     ]);
   });
 });

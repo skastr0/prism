@@ -206,6 +206,14 @@ export const renderWorkerModelCatalogHuman = (
 export interface ScaffoldWorkerPin {
   readonly worker: WorkflowWorkerId;
   readonly model?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+}
+
+export interface WorkerModelSample {
+  readonly slug: string;
+  readonly pin: "model" | "catalogModel";
+  readonly kind?: "dial" | "plugin-mode" | "model";
 }
 
 const SCAFFOLD_WORKER_PREFERENCE: readonly WorkflowWorkerId[] = [
@@ -247,32 +255,55 @@ export const pickScaffoldModel = (
     ?? slugs[0];
 };
 
-export const sampleWorkerSlugs = (
+const ampSampleKind = (
+  family: HarnessModelFamily,
+  slug: string,
+): NonNullable<WorkerModelSample["kind"]> => {
+  if (family.kind === "dial" || family.kind === "plugin-mode" || family.kind === "model") return family.kind;
+  if (slug.includes("/")) return "model";
+  if (slug === "low" || slug === "medium" || slug === "high" || slug === "ultra") return "dial";
+  return "plugin-mode";
+};
+
+export const sampleWorkerModels = (
   entry: WorkerModelCatalog,
   limit = 5,
-): readonly string[] => {
+): readonly WorkerModelSample[] => {
   if (limit <= 0) return [];
   if (entry.worker === "amp-code") {
-    const dials: string[] = [];
-    const rest: string[] = [];
+    const dials: WorkerModelSample[] = [];
+    const plugins: WorkerModelSample[] = [];
+    const catalog: WorkerModelSample[] = [];
     for (const family of entry.families) {
-      const target = family.kind === "dial" || family.family === "low" || family.family === "medium"
-        || family.family === "high" || family.family === "ultra"
-        ? dials
-        : rest;
       for (const slug of family.slugs) {
-        if (!target.includes(slug)) target.push(slug);
+        const kind = ampSampleKind(family, slug);
+        const sample: WorkerModelSample = {
+          slug,
+          pin: kind === "model" ? "catalogModel" : "model",
+          kind,
+        };
+        if (kind === "dial") dials.push(sample);
+        else if (kind === "plugin-mode") plugins.push(sample);
+        else catalog.push(sample);
       }
     }
-    return [...dials, ...rest].slice(0, limit);
+    const ordered = [...dials, ...plugins, ...catalog];
+    const unique: WorkerModelSample[] = [];
+    for (const sample of ordered) {
+      if (unique.some((item) => item.slug === sample.slug && item.pin === sample.pin)) continue;
+      unique.push(sample);
+      if (unique.length >= limit) break;
+    }
+    return unique;
   }
-  const slugs: string[] = [];
+  const samples: WorkerModelSample[] = [];
   for (const family of entry.families) {
     const slug = family.slugs.find((item) => item === family.family) ?? family.slugs[0];
-    if (slug !== undefined && !slugs.includes(slug)) slugs.push(slug);
-    if (slugs.length >= limit) break;
+    if (slug === undefined || samples.some((item) => item.slug === slug)) continue;
+    samples.push({ slug, pin: "model" });
+    if (samples.length >= limit) break;
   }
-  return slugs;
+  return samples;
 };
 
 export const pickPluginFreeScaffoldPins = (

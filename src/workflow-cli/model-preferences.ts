@@ -6,6 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Schema } from "effect";
+import { AMP_WORKFLOW_DIAL_MODES } from "../workflow-amp-worker.js";
 import type { WorkflowWorkerId } from "../workflows.js";
 import { parseWorkflowWorkerId } from "../workflow-models.js";
 import { prismWorkflowModelPreferencesPath } from "./paths.js";
@@ -45,11 +46,25 @@ const emptyPreferences = (): WorkflowModelPreferences => ({
   workers: [],
 });
 
+const AMP_DIAL_SET = new Set<string>(AMP_WORKFLOW_DIAL_MODES);
+
 const pinFromRaw = (raw: typeof WorkerPinSchema.Type): WorkflowModelPreferencePin => {
   const worker = parseWorkflowWorkerId(raw.worker);
   const model = raw.model?.trim();
   const catalogModel = raw.catalogModel?.trim();
   const effort = raw.effort?.trim();
+  if (worker !== "amp-code") {
+    if (catalogModel !== undefined && catalogModel.length > 0) {
+      throw new Error(`catalogModel is Amp-only. Worker ${JSON.stringify(worker)} takes --model.`);
+    }
+    if (effort !== undefined && effort.length > 0) {
+      throw new Error(`effort is Amp-only. Worker ${JSON.stringify(worker)} takes --model.`);
+    }
+  } else if (catalogModel !== undefined && catalogModel.length > 0 && AMP_DIAL_SET.has(catalogModel)) {
+    throw new Error(
+      `Amp dial ${JSON.stringify(catalogModel)} is worker.model / --model, not --catalog-model. Fix: prism workflow models prefer amp-code --model ${catalogModel}`,
+    );
+  }
   return {
     worker,
     ...(model !== undefined && model.length > 0 ? { model } : {}),

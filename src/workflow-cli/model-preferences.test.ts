@@ -59,11 +59,62 @@ describe("workflow model preferences", () => {
       preferencesPath: "/tmp/prefs.json",
       snapshotPresent: true,
     });
-    expect(offer.workers[0]?.sample).toContain("composer-2.5-fast");
+    expect(offer.workers[0]?.sample.map((sample) => sample.slug)).toContain("composer-2.5-fast");
     expect(offer.workers[0]?.preference?.model).toBe("composer-2.5-fast");
     const human = renderWorkflowModelOfferHuman(offer);
     expect(human).toContain("preferred: model composer-2.5-fast");
     expect(human).toContain("sample:");
+  });
+
+  test("offer still shows saved prefs without a snapshot", () => {
+    const catalogs = projectWorkerModelCatalog(undefined);
+    const offer = buildWorkflowModelOffer({
+      catalogs: catalogs.filter((entry) => entry.worker === "cursor"),
+      preferences: { version: 1, notes: "cheap cursor", workers: [{ worker: "cursor", model: "composer-2.5-fast" }] },
+      preferencesPath: "/tmp/prefs.json",
+      snapshotPresent: false,
+    });
+    const human = renderWorkflowModelOfferHuman(offer);
+    expect(human).toContain("No harness model snapshot yet");
+    expect(human).toContain("preferred: model composer-2.5-fast");
+    expect(human).toContain("Notes: cheap cursor");
+  });
+
+  test("Amp offer labels dial vs catalog flags", () => {
+    const catalogs = projectWorkerModelCatalog({
+      generatedAt: "2026-09-11T00:00:00.000Z",
+      harnesses: [{
+        harness: "amp-code",
+        source: "command",
+        models: [
+          { id: "low", kind: "dial" },
+          { id: "grok45", kind: "plugin-mode" },
+          { id: "anthropic/claude-haiku-4-5-20251001", kind: "model" },
+        ],
+      }],
+    });
+    const offer = buildWorkflowModelOffer({
+      catalogs: catalogs.filter((entry) => entry.worker === "amp-code"),
+      preferences: { version: 1, workers: [] },
+      preferencesPath: "/tmp/prefs.json",
+      snapshotPresent: true,
+    });
+    expect(offer.workers[0]?.sample).toEqual([
+      { slug: "low", pin: "model", kind: "dial" },
+      { slug: "grok45", pin: "model", kind: "plugin-mode" },
+      { slug: "anthropic/claude-haiku-4-5-20251001", pin: "catalogModel", kind: "model" },
+    ]);
+    const human = renderWorkflowModelOfferHuman(offer);
+    expect(human).toContain("low [--model dial]");
+    expect(human).toContain("grok45 [--model plugin]");
+    expect(human).toContain("anthropic/claude-haiku-4-5-20251001 [--catalog-model]");
+  });
+
+  test("rejects an Amp dial saved as catalogModel", () => {
+    expect(() => decodeWorkflowModelPreferences({
+      version: 1,
+      workers: [{ worker: "amp-code", catalogModel: "low" }],
+    })).toThrow(/--model/);
   });
 
   test("models skill teaches quiz then prefer", () => {
@@ -72,5 +123,7 @@ describe("workflow model preferences", () => {
     expect(markdown).toContain("prism workflow models --offer");
     expect(markdown).toContain("prism workflow models prefer");
     expect(markdown).toContain("Do not invent slugs");
+    expect(markdown).toContain("Stop and wait for their answer");
+    expect(markdown).not.toContain("prefer cursor --model composer-2.5-fast");
   });
 });

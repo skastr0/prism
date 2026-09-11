@@ -165,10 +165,10 @@ describe("scaffoldWorkflowSource", () => {
   test("pins a typed worker.model per task", () => {
     const src = scaffoldWorkflowSource("typed", [
       { worker: "cursor", model: "composer-2.5-fast" },
-      { worker: "amp-code", model: "low" },
+      { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
     ]);
     expect(src).toContain('worker: { worker: "cursor", model: "composer-2.5-fast" }');
-    expect(src).toContain('worker: { worker: "amp-code", model: "low" }');
+    expect(src).toContain('worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }');
     expect(src).not.toContain("const probe");
   });
 

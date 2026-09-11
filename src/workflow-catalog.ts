@@ -525,15 +525,25 @@ const scaffoldWorkflowHeader = (name: string): string => `/**
  * Model quiz skill:        prism workflow skill --models
  */`;
 
-const renderScaffoldWorker = (pin: { readonly worker: string; readonly model?: string }): string =>
-  pin.model === undefined
-    ? `{ worker: ${JSON.stringify(pin.worker)} }`
-    : `{ worker: ${JSON.stringify(pin.worker)}, model: ${JSON.stringify(pin.model)} }`;
+export interface ScaffoldSourcePin {
+  readonly worker: string;
+  readonly model?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+}
+
+const renderScaffoldWorker = (pin: ScaffoldSourcePin): string => {
+  const fields = [`worker: ${JSON.stringify(pin.worker)}`];
+  if (pin.model !== undefined) fields.push(`model: ${JSON.stringify(pin.model)}`);
+  if (pin.catalogModel !== undefined) fields.push(`catalogModel: ${JSON.stringify(pin.catalogModel)}`);
+  if (pin.effort !== undefined) fields.push(`effort: ${JSON.stringify(pin.effort)}`);
+  return `{ ${fields.join(", ")} }`;
+};
 
 const renderScaffoldTask = (
   name: string,
   id: string,
-  pin: { readonly worker: string; readonly model?: string },
+  pin: ScaffoldSourcePin,
 ): string => `      const ${id} = defineTask({
         id: ${JSON.stringify(id)},
         prompt: ${JSON.stringify(`Run under the ${pin.worker} harness and return a one-line summary in "summary". Set worker="${pin.worker}".`)},
@@ -544,7 +554,7 @@ const renderScaffoldTask = (
 
 const renderScaffoldRun = (
   name: string,
-  pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>],
+  pins: readonly [ScaffoldSourcePin, ...ScaffoldSourcePin[]],
 ): string => {
   const ids = pins.map((_, index) => (index === 0 ? "a" : "b"));
   const tasks = pins.map((pin, index) => renderScaffoldTask(name, ids[index]!, pin)).join("\n");
@@ -575,7 +585,7 @@ ${tasks}
 /** A complete, validating starter workflow: harness workers with a prompt and typed IO. */
 export const scaffoldWorkflowSource = (
   name: string,
-  pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>] = [
+  pins: readonly [ScaffoldSourcePin, ...ScaffoldSourcePin[]] = [
     { worker: "claude-code" },
   ],
 ): string => {

@@ -312,6 +312,29 @@ export const workflow = defineWorkflow({
   expect(bad.stderr + bad.stdout).toContain("not-a-mode");
 }, 30_000);
 
+test("workflow models prefer amp catalog pins survive scaffold --print", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const env = { PRISM_HOME: prismHome };
+
+  const prefer = await runCli([
+    "workflow", "models", "prefer", "amp-code",
+    "--catalog-model", "anthropic/claude-haiku-4-5-20251001",
+    "--effort", "none",
+  ], env, { cwd: root });
+  expect(prefer.exitCode).toBe(0);
+
+  const none = await runCli(["workflow", "scaffold", "unpinned", "--print"], env, { cwd: root });
+  expect(none.exitCode).toBe(0);
+  expect(none.stdout).toContain('worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }');
+
+  const unpinnedHome = join(root, "unpinned-home");
+  const unpinned = await runCli(["workflow", "scaffold", "plain", "--print"], { PRISM_HOME: unpinnedHome }, { cwd: root });
+  expect(unpinned.exitCode).toBe(0);
+  expect(unpinned.stdout).toContain('worker: { worker: "claude-code" }');
+  expect(unpinned.stdout).not.toContain("catalogModel");
+}, 30_000);
+
 test("workflow typecheck accepts a workflow against shipped Prism declarations", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");

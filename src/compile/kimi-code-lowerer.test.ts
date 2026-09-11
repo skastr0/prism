@@ -8,6 +8,7 @@ import { Effect } from "effect";
 import { composeAgent } from "./compose.js";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/kimi-code.js";
+import { Sop } from "./sources.js";
 import { cliToolNameForBinding } from "./tool-runtime-bundle.js";
 import {
   resolveAgent,
@@ -187,4 +188,50 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
   }
+});
+
+test("kimi-code lowerer emits the generated plugin for a sop-only plugin", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".kimi-code");
+
+  const sop = new Sop({
+    name: "survey",
+    sourcePath: join(root, "sops", "survey.sop.ts"),
+    description: "Research method.",
+    phases: [
+      {
+        name: "explore",
+        purpose: "Bound the question.",
+        acceptanceCriteria: ["Question is answerable"],
+        body: "Scope it.",
+      },
+    ],
+    body: "Cross-phase frame.",
+  });
+
+  const { files } = await planLowering({
+    agents: [],
+    sops: [sop],
+    tools: [],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "survey",
+      sourcePluginVersion: "0.5.0",
+    },
+  });
+
+  const sopSkill = findContentOperation(files, "skills/survey/SKILL.md");
+  expect(sopSkill?.content).toContain("survey");
+
+  const reference = findContentOperation(
+    files,
+    "skills/survey/references/explore.md",
+  );
+  expect(reference?.content).toContain("Bound the question.");
+
+  const manifest = findContentOperation(files, "kimi.plugin.json");
+  expect(manifest?.content).toContain("prism-generated-survey");
 });

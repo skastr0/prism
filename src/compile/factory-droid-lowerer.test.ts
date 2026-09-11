@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/factory-droid.js";
+import { Skill, Sop } from "./sources.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -349,4 +350,106 @@ test("factory-droid lowerer rejects mixed category and explicit tools", async ()
       },
     }),
   ).rejects.toThrow("cannot combine tools category");
+});
+
+test("factory-droid lowerer emits the bundle for a sop-only plugin", async () => {
+  const root = await createTempRoot();
+
+  const sop = new Sop({
+    name: "survey",
+    sourcePath: join(root, "sops", "survey.sop.ts"),
+    description: "Research method.",
+    phases: [
+      {
+        name: "explore",
+        purpose: "Bound the question.",
+        acceptanceCriteria: ["Question is answerable"],
+        body: "Scope it.",
+      },
+    ],
+    body: "Cross-phase frame.",
+  });
+
+  const { files: operations } = await planLowering({
+    agents: [],
+    sops: [sop],
+    tools: [],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "global",
+      root,
+      sourcePluginName: "survey",
+      sourcePluginVersion: "0.5.0",
+    },
+  });
+
+  const manifest = findContentOperation(
+    operations,
+    join(".factory-plugin", "plugin.json"),
+  );
+  expect(manifest?.content).toContain("prism-generated-survey");
+
+  const sopSkill = findContentOperation(
+    operations,
+    join("skills", "survey", "SKILL.md"),
+  );
+  expect(sopSkill?.content).toContain("survey");
+
+  const reference = findContentOperation(
+    operations,
+    join("skills", "survey", "references", "explore.md"),
+  );
+  expect(reference?.content).toContain("Bound the question.");
+});
+
+test("factory-droid lowerer bundles plugin skills alongside sop skills", async () => {
+  const root = await createTempRoot();
+  const skillPath = join(root, "skills-src", "testing", "SKILL.md");
+  await writeText(
+    skillPath,
+    `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`,
+  );
+
+  const sop = new Sop({
+    name: "forge",
+    sourcePath: join(root, "sops", "forge.sop.ts"),
+    description: "Dev method.",
+    phases: [
+      {
+        name: "build",
+        purpose: "Build the change.",
+        acceptanceCriteria: [],
+        body: "Build it.",
+      },
+    ],
+    body: "Cross-phase frame.",
+  });
+  const skill = new Skill({ name: "testing", sourcePath: skillPath });
+
+  const { files: operations } = await planLowering({
+    agents: [],
+    sops: [sop],
+    tools: [],
+    skills: [skill],
+    hooks: [],
+    target: {
+      scope: "global",
+      root,
+      sourcePluginName: "forge",
+      sourcePluginVersion: "3.2.0",
+    },
+  });
+
+  const bundledSkill = findContentOperation(
+    operations,
+    join("plugins", "prism-generated-forge", "skills", "testing", "SKILL.md"),
+  );
+  expect(bundledSkill?.content).toContain("# Testing");
+  expect(
+    findContentOperation(
+      operations,
+      join("plugins", "prism-generated-forge", "skills", "forge", "SKILL.md"),
+    ),
+  ).toBeDefined();
 });

@@ -488,6 +488,7 @@ const hasPluginOutput = (
   contexts: ReadonlyArray<{ label: string; content: string }>,
 ): boolean =>
   input.agents.length > 0 ||
+  input.sops.length > 0 ||
   (input.skills?.length ?? 0) > 0 ||
   (input.tools?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0 ||

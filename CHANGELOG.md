@@ -19,9 +19,12 @@ line. `0.4.0` was committed but never tagged or published.
   `body`. Concrete sop instances lower into `skills/<sop-name>/SKILL.md` on
   every skill harness, and the generated `prism/refs/sops` module exposes each
   typed phase for `wf.phase(...)` workflow binding.
-- **Agent-optional workflow tasks** — `defineTask`/`ctx.task` accept a missing
-  `agent`; it normalizes to `anonymousWorkflowAgent`, so a workflow can
-  dispatch a bare worker with a prompt and model without compiled plugin refs.
+- **Agent-free workflow tasks** — a workflow task binds a worker, a prompt, an
+  output schema, and finish criteria. There is no `agent` field on a task, no
+  agent refs for workflows, and no anonymous sentinel: agents remain a
+  standalone compile primitive (`agents/*.agent.ts` → harness agent files)
+  that workflows simply do not reference. Workers no longer receive agent
+  identity in prompts, argv, or metadata.
 - **Typed phase input** — `ctx.task({ input })` decodes against the bound SOP
   phase's input contract before dispatch; a failed decode surfaces as
   `WorkflowTaskInputError` and the decoded value is rendered into the task
@@ -44,6 +47,12 @@ line. `0.4.0` was committed but never tagged or published.
 - **Orbit-era side surfaces** — signal emitters, pulsar checkpoints, orbit
   `definitions`, and hook toolspace matchers (`toolspace-tool` /
   `toolspace-group`, `toolRef` bridging).
+- **Workflow agent refs** — `WorkflowAgentRef`, `anonymousWorkflowAgent`,
+  `isAnonymousWorkflowAgent`, generated `prism/refs/agents`, `prism/refs` for
+  agents, agent namespaces in `prism workflow catalog`, agent-based default
+  worker selection, agent-phase install checks, and every worker's agent
+  preload/metadata path (Claude `--agent`/`--plugin-dir`, OpenCode `--agent`,
+  Grok agent-file preload, Kimi role skill, OMP installed/temp system prompt).
 
 ### Changed
 
@@ -54,6 +63,14 @@ line. `0.4.0` was committed but never tagged or published.
 - Stale generated refs (`orbits.ts`, `traits.ts`) and old manifests under
   `~/.prism/state/projects/*/` are derived state: purged here and regenerated
   by the next project compile.
+- **Workflow store schema v6** — `WORKFLOW_STORE_SCHEMA_VERSION` is now 6.
+  Opening an older store drops the `agent_*` and `native_agent` ledger
+  columns and clears `workflow_task_records`, whose pre-v6 rows were keyed on
+  an agent manifest hash and identity v3 prompt hashes that can never hit
+  again. CI's `check:workflow-store-schema-version` requires a `package.json`
+  version move for any schema bump; `package.json` is deliberately not bumped
+  here because version selection is an operator decision
+  ([`docs/release-train.md`](docs/release-train.md)).
 
 ## 0.4.6 - 2026-08-17
 

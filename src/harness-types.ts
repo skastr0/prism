@@ -186,6 +186,8 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
  * on \`prism\` so \`defineTask({ worker: { worker, model } })\` is typed
  * per harness without a compiled plugin. Amp catalog slugs and efforts
  * narrow \`worker.catalogModel\` and \`worker.effort\`.
+ * Omit \`worker.model\` to keep the harness default. Pin only from
+ * \`prism workflow models --offer\` / stated preferences.
  */
 
 import "prism";

@@ -104,6 +104,16 @@ import {
   renderWorkerModelCountsHuman,
 } from "./workflow-models.js";
 import { renderWorkflowAuthoringSkillMarkdown, writeWorkflowAuthoringSkill } from "./workflow-cli/skill.js";
+import { renderWorkflowModelsSkillMarkdown, writeWorkflowModelsSkill } from "./workflow-cli/models-skill.js";
+import {
+  clearWorkflowModelPreference,
+  loadWorkflowModelPreferences,
+  preferenceScaffoldPins,
+  upsertWorkflowModelPreference,
+  writeWorkflowModelPreferences,
+} from "./workflow-cli/model-preferences.js";
+import { buildWorkflowModelOffer, renderWorkflowModelOfferHuman } from "./workflow-cli/model-offer.js";
+import { prismWorkflowModelPreferencesPath } from "./workflow-cli/paths.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
 import { runConfigureTui } from "./configure/index.js";
@@ -466,11 +476,18 @@ workflow
   .command("skill")
   .description("Print the embedded workflow-authoring skill (plugin-free)")
   .option("--write", "Write SKILL.md under PRISM_HOME/runtime/workflow-authoring/")
-  .action(async (options: { readonly write?: boolean }) => {
+  .option("--models", "Print the model-preference quiz skill")
+  .action(async (options: { readonly write?: boolean; readonly models?: boolean }) => {
     try {
+      const prismHome = resolvePrismHome();
       if (options.write === true) {
-        const result = await writeWorkflowAuthoringSkill(resolvePrismHome());
-        await writeStdout(`Wrote ${result.path}\n`);
+        const authoring = await writeWorkflowAuthoringSkill(prismHome);
+        const models = await writeWorkflowModelsSkill(prismHome);
+        await writeStdout(`Wrote ${authoring.path}\nWrote ${models.path}\n`);
+        return;
+      }
+      if (options.models === true) {
+        await writeStdout(`${renderWorkflowModelsSkillMarkdown()}\n`);
         return;
       }
       await writeStdout(`${renderWorkflowAuthoringSkillMarkdown()}\n`);
@@ -480,20 +497,41 @@ workflow
     }
   });
 
-workflow
+const workflowModels = workflow
   .command("models")
-  .description("List live harness model slugs (plugin-free). Family-grouped; filter with --worker and --query")
+  .description("List live harness model slugs (plugin-free). Family-grouped; filter with --worker and --query. --offer quizzes with samples + prefs");
+
+workflowModels
+  .command("list", { isDefault: true })
+  .description("List live harness model slugs")
   .option("--json", "Emit machine-readable JSON")
   .option("--worker <id>", "One workflow worker (cursor, amp-code, ...)")
   .option("--query <text>", "Case-insensitive substring over family ids and slugs")
+  .option("--offer", "Workers, slug counts, five-slug samples, and stated preferences")
   .action(async (options: {
     readonly json?: boolean;
     readonly worker?: string;
     readonly query?: string;
+    readonly offer?: boolean;
   }) => {
     try {
       const worker = options.worker === undefined ? undefined : parseWorkflowWorkerId(options.worker);
       const result = buildWorkflowModelCatalog({ worker, query: options.query });
+      if (options.offer === true) {
+        const prismHome = resolvePrismHome();
+        const offer = buildWorkflowModelOffer({
+          catalogs: result.catalogs,
+          preferences: loadWorkflowModelPreferences(prismHome),
+          preferencesPath: prismWorkflowModelPreferencesPath(prismHome),
+          snapshotPresent: result.snapshotPresent,
+        });
+        if (options.json === true) {
+          await writeStdout(`${JSON.stringify(offer, null, 2)}\n`);
+          return;
+        }
+        await writeStdout(`${renderWorkflowModelOfferHuman(offer)}\n`);
+        return;
+      }
       if (options.json === true) {
         await writeStdout(`${JSON.stringify({
           snapshotPresent: result.snapshotPresent,
@@ -509,6 +547,66 @@ workflow
       })}\n`);
     } catch (error) {
       printCliError(error, "Workflow models failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowModels
+  .command("prefer [worker]")
+  .description("Save or clear a stated workflow model preference for one worker")
+  .option("--model <slug>", "Harness-bound worker.model slug (Amp: --mode dial or plugin key)")
+  .option("--catalog-model <slug>", "Amp catalog slug for worker.catalogModel")
+  .option("--effort <value>", "Amp reasoning effort")
+  .option("--notes <text>", "Free-form preference notes")
+  .option("--clear", "Remove the stated preference for the worker")
+  .option("--json", "Emit machine-readable JSON")
+  .action(async (workerArg: string | undefined, options: {
+    readonly model?: string;
+    readonly catalogModel?: string;
+    readonly effort?: string;
+    readonly notes?: string;
+    readonly clear?: boolean;
+    readonly json?: boolean;
+  }) => {
+    try {
+      const prismHome = resolvePrismHome();
+      let preferences = loadWorkflowModelPreferences(prismHome);
+      if (options.notes !== undefined) {
+        const notes = options.notes.trim();
+        preferences = notes.length > 0
+          ? { ...preferences, notes }
+          : { version: preferences.version, ...(preferences.updatedAt !== undefined ? { updatedAt: preferences.updatedAt } : {}), workers: preferences.workers };
+      }
+      if (workerArg !== undefined) {
+        const worker = parseWorkflowWorkerId(workerArg);
+        if (options.clear === true) {
+          preferences = clearWorkflowModelPreference(preferences, worker);
+        } else {
+          const model = options.model?.trim();
+          const catalogModel = options.catalogModel?.trim();
+          const effort = options.effort?.trim();
+          if ((model === undefined || model.length === 0) && (catalogModel === undefined || catalogModel.length === 0) && (effort === undefined || effort.length === 0)) {
+            throw new CliUsageError("prefer needs --model, --catalog-model, and/or --effort, or --clear");
+          }
+          preferences = upsertWorkflowModelPreference(preferences, {
+            worker,
+            ...(model !== undefined && model.length > 0 ? { model } : {}),
+            ...(catalogModel !== undefined && catalogModel.length > 0 ? { catalogModel } : {}),
+            ...(effort !== undefined && effort.length > 0 ? { effort } : {}),
+          });
+        }
+      } else if (options.clear === true || options.model !== undefined || options.catalogModel !== undefined || options.effort !== undefined) {
+        throw new CliUsageError("prefer <worker> is required unless you are only setting --notes");
+      }
+      const written = writeWorkflowModelPreferences(prismHome, preferences);
+      const saved = loadWorkflowModelPreferences(prismHome);
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify({ path: written.path, preferences: saved }, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`Wrote ${written.path}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow models prefer failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
@@ -530,11 +628,12 @@ workflow
         harnessTypesPath: result.modelsPath,
       });
       const skill = await writeWorkflowAuthoringSkill(prismHome);
+      const modelsSkill = await writeWorkflowModelsSkill(prismHome);
       if (options.json === true) {
-        await writeStdout(`${JSON.stringify({ ...result, skillPath: skill.path }, null, 2)}\n`);
+        await writeStdout(`${JSON.stringify({ ...result, skillPath: skill.path, modelsSkillPath: modelsSkill.path }, null, 2)}\n`);
         return;
       }
-      await writeStdout(`${renderHarnessTypesRefreshHuman(result)}\nSkill: ${skill.path}\n`);
+      await writeStdout(`${renderHarnessTypesRefreshHuman(result)}\nSkill: ${skill.path}\nModels skill: ${modelsSkill.path}\n`);
     } catch (error) {
       printCliError(error, "Workflow refresh-harness-types failed");
       exitWith(EXIT_CODES.domainFailure);
@@ -566,7 +665,10 @@ workflow
   .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
     try {
       const prismHome = resolvePrismHome();
-      const pins = pickPluginFreeScaffoldPins(loadHarnessTypesSnapshot(prismHome));
+      const pins = pickPluginFreeScaffoldPins(
+        loadHarnessTypesSnapshot(prismHome),
+        preferenceScaffoldPins(loadWorkflowModelPreferences(prismHome)),
+      );
       const source = scaffoldWorkflowSource(name, pins);
       const workers = pins.map((pin) => pin.worker);
       if (options.print === true) {
@@ -574,6 +676,7 @@ workflow
         return;
       }
       const skill = await writeWorkflowAuthoringSkill(prismHome);
+      await writeWorkflowModelsSkill(prismHome);
       const outPath = options.out ?? join(prismWorkflowsSourceDir(prismHome), `${name}.workflow.ts`);
       await ensureDir(dirname(outPath));
       await writeFile(outPath, source, "utf8");

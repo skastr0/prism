@@ -321,8 +321,9 @@ Transient worker failures retry with bounded attempts and backoff; config errors
 
 ```bash
 prism workflow refresh-harness-types  # global typed slugs from installed harnesses (no plugin)
-prism workflow models --worker cursor --query opus
+prism workflow models --offer         # quiz: workers, samples, stated prefs
 prism workflow skill                  # embedded authoring guide
+prism workflow skill --models         # model-preference quiz skill
 prism workflow scaffold my-first      # validating starter in ~/.prism/workflows
 prism workflow validate ~/.prism/workflows/my-first.workflow.ts   # resolved (worker, model) per task
 prism workflow run ~/.prism/workflows/my-first.workflow.ts

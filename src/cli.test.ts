@@ -230,10 +230,32 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   expect(skill.stdout).toContain("wf.phase");
   expect(skill.stdout).toContain("prism/refs/sops");
   expect(skill.stdout).not.toContain("agent:");
+  expect(skill.stdout).toContain("prism workflow models --offer");
 
   const skillWrite = await runCli(["workflow", "skill", "--write"], env, { cwd: root });
   expect(skillWrite.exitCode).toBe(0);
   expect(skillWrite.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "SKILL.md"));
+  expect(skillWrite.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "models", "SKILL.md"));
+
+  const modelsSkill = await runCli(["workflow", "skill", "--models"], env, { cwd: root });
+  expect(modelsSkill.exitCode).toBe(0);
+  expect(modelsSkill.stdout).toContain("prism workflow models --offer");
+  expect(modelsSkill.stdout).toContain("Do not invent slugs");
+
+  const offer = await runCli(["workflow", "models", "--offer", "--json"], env, { cwd: root });
+  expect(offer.exitCode).toBe(0);
+  const offerJson = JSON.parse(offer.stdout) as {
+    snapshotPresent: boolean;
+    workers: ReadonlyArray<{ worker: string; sample: string[]; preference?: { model?: string } }>;
+  };
+  expect(offerJson.snapshotPresent).toBe(true);
+  expect(offerJson.workers.length).toBeGreaterThan(0);
+  expect(offerJson.workers.some((entry) => entry.sample.length > 0 || entry.worker.length > 0)).toBe(true);
+
+  const prefer = await runCli(["workflow", "models", "prefer", "claude-code", "--model", "sonnet", "--json"], env, { cwd: root });
+  expect(prefer.exitCode).toBe(0);
+  const preferJson = JSON.parse(prefer.stdout) as { preferences: { workers: ReadonlyArray<{ worker: string; model?: string }> } };
+  expect(preferJson.preferences.workers).toEqual([{ worker: "claude-code", model: "sonnet" }]);
 
   const scaffold = await runCli(["workflow", "scaffold", "plugin-free"], env, { cwd: root });
   expect(scaffold.exitCode).toBe(0);

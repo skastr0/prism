@@ -13,6 +13,7 @@ import {
   pickPluginFreeScaffoldPins,
   pickScaffoldModel,
   projectWorkerModelCatalog,
+  sampleWorkerSlugs,
   renderWorkerModelCatalogHuman,
   suggestHarnessSlugs,
 } from "./workflow-models.js";
@@ -125,11 +126,21 @@ describe("renderWorkerModelCatalogHuman", () => {
 });
 
 describe("pickPluginFreeScaffoldPins", () => {
-  test("prefers cursor then amp-code with cheap slugs", () => {
+  test("omits invented slugs unless the user stated a preference", () => {
     const pins = pickPluginFreeScaffoldPins(snapshot);
     expect(pins).toEqual([
+      { worker: "cursor" },
+      { worker: "amp-code" },
+    ]);
+  });
+
+  test("uses stated preferences when present", () => {
+    const pins = pickPluginFreeScaffoldPins(snapshot, [
       { worker: "cursor", model: "composer-2.5-fast" },
-      { worker: "amp-code", model: "low" },
+    ]);
+    expect(pins).toEqual([
+      { worker: "cursor", model: "composer-2.5-fast" },
+      { worker: "amp-code" },
     ]);
   });
 
@@ -171,5 +182,19 @@ describe("buildWorkflowModelCatalog", () => {
     const result = buildWorkflowModelCatalog({ prismHome, worker: "cursor", query: "grok" });
     expect(result.snapshotPresent).toBe(true);
     expect(result.catalogs[0]?.families[0]?.family).toBe("cursor-grok-4.6");
+  });
+});
+
+describe("sampleWorkerSlugs", () => {
+  test("returns up to five family representatives", () => {
+    const catalogs = projectWorkerModelCatalog(snapshot);
+    const cursor = catalogs.find((entry) => entry.worker === "cursor");
+    expect(cursor).toBeDefined();
+    expect(sampleWorkerSlugs(cursor!, 5)).toEqual([
+      "claude-opus-5-low",
+      "composer-2.5-fast",
+      "cursor-grok-4.6-low",
+      "gemini-3.8-flash-high",
+    ]);
   });
 });

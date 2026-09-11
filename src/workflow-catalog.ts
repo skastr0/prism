@@ -519,9 +519,10 @@ const scaffoldWorkflowHeader = (name: string): string => `/**
  *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
  *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts
  *
- * Discover harness models: prism workflow models --worker cursor --query opus
+ * Discover harness models: prism workflow models --offer
  * Refresh slugs:           prism workflow refresh-harness-types
  * Authoring skill:         prism workflow skill
+ * Model quiz skill:        prism workflow skill --models
  */`;
 
 const renderScaffoldWorker = (pin: { readonly worker: string; readonly model?: string }): string =>

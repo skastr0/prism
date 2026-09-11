@@ -247,21 +247,55 @@ export const pickScaffoldModel = (
     ?? slugs[0];
 };
 
+export const sampleWorkerSlugs = (
+  entry: WorkerModelCatalog,
+  limit = 5,
+): readonly string[] => {
+  if (limit <= 0) return [];
+  if (entry.worker === "amp-code") {
+    const dials: string[] = [];
+    const rest: string[] = [];
+    for (const family of entry.families) {
+      const target = family.kind === "dial" || family.family === "low" || family.family === "medium"
+        || family.family === "high" || family.family === "ultra"
+        ? dials
+        : rest;
+      for (const slug of family.slugs) {
+        if (!target.includes(slug)) target.push(slug);
+      }
+    }
+    return [...dials, ...rest].slice(0, limit);
+  }
+  const slugs: string[] = [];
+  for (const family of entry.families) {
+    const slug = family.slugs.find((item) => item === family.family) ?? family.slugs[0];
+    if (slug !== undefined && !slugs.includes(slug)) slugs.push(slug);
+    if (slugs.length >= limit) break;
+  }
+  return slugs;
+};
+
 export const pickPluginFreeScaffoldPins = (
   snapshot: HarnessTypesSnapshot | undefined,
+  preferred: readonly ScaffoldWorkerPin[] = [],
 ): readonly [ScaffoldWorkerPin] | readonly [ScaffoldWorkerPin, ScaffoldWorkerPin] => {
   const catalogs = projectWorkerModelCatalog(snapshot);
   const withModels = new Set(
     catalogs.filter((entry) => entry.modelCount > 0).map((entry) => entry.worker),
   );
+  const preferredWorkers = preferred.map((pin) => pin.worker);
   const ordered = [
-    ...SCAFFOLD_WORKER_PREFERENCE.filter((worker) => withModels.has(worker)),
-    ...catalogs.map((entry) => entry.worker).filter((worker) => withModels.has(worker) && !SCAFFOLD_WORKER_PREFERENCE.includes(worker)),
+    ...preferredWorkers,
+    ...SCAFFOLD_WORKER_PREFERENCE.filter((worker) => withModels.has(worker) && !preferredWorkers.includes(worker)),
+    ...catalogs
+      .map((entry) => entry.worker)
+      .filter((worker) => withModels.has(worker) && !SCAFFOLD_WORKER_PREFERENCE.includes(worker) && !preferredWorkers.includes(worker)),
   ];
   const unique = [...new Set(ordered)];
   const toPin = (worker: WorkflowWorkerId): ScaffoldWorkerPin => {
-    const model = pickScaffoldModel(catalogs, worker);
-    return model === undefined ? { worker } : { worker, model };
+    const hit = preferred.find((pin) => pin.worker === worker);
+    if (hit !== undefined) return hit;
+    return { worker };
   };
   if (unique.length >= 2) return [toPin(unique[0]!), toPin(unique[1]!)];
   if (unique.length === 1) return [toPin(unique[0]!)];

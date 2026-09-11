@@ -42,6 +42,13 @@ line. `0.4.0` was committed but never tagged or published.
 
 ### Added
 
+- **Workflow model preferences** — `prism workflow models --offer` lists each
+  worker, slug count, a five-slug sample, and stated prefs. Agents quiz the
+  user and save pins with `prism workflow models prefer`. Unpinned workers omit
+  the harness `--model` flag so the user's harness default stays. Quiz skill:
+  `prism workflow skill --models`.
+
+
 - **SOPs** — `sops/<name>.sop.ts` source artifacts: type-safe procedures whose
   phases declare a `purpose`, optional typed `input`/`output` contracts
   (Effect Schema), `acceptance_criteria`, an optional `escalation`, and prose

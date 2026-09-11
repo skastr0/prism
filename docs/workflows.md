@@ -43,8 +43,10 @@ Workflow **store and refs** are project-scoped. Harness model types are not — 
 
 ```bash
 prism workflow refresh-harness-types   # global live model unions (no plugin)
-prism workflow models --worker cursor --query opus
+prism workflow models --offer          # workers, samples, stated prefs — quiz the user
+prism workflow models prefer cursor --model composer-2.5-fast
 prism workflow skill                   # embedded authoring guide (also written on scaffold)
+prism workflow skill --models          # quiz skill for model preferences
 prism workflow catalog                 # workers + live slug counts; plugin refs if compiled
 prism workflow catalog --query opus    # searches harness models when no plugin
 prism workflow refs                    # optional plugin refs location + freshness
@@ -128,7 +130,7 @@ Tasks without a `worker` fall back to the CLI: `prism workflow run --worker <id>
 
 1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`. After `prism workflow refresh-harness-types`, that string is checked against the installed harness's discovered slugs. OMP pins are `provider/id` selectors from `omp models --json` (example: `ollama-cloud/glm-5.3-flash`); unpinned OMP tasks prefer `~/.omp/agent/config.yml` `modelRoles.default` with the `:thinking` suffix stripped. `opencode-go/*` is Console Go and 400s in workflow `--print` (`MissingSessionID`). Amp inventories three surfaces: the `--mode` dial (`low | medium | high | ultra`), plugin mode keys (both valid `worker.model` / `--mode` values), and the curated `provider/model` catalog from `amp plugins show-agent-options --json`. Catalog slugs are `worker.catalogModel` (`AmpCodeCatalogSlug`); reasoning effort is `worker.effort` (`AmpCodeEffort`). Amp has no `--model` flag, so Prism pins catalog/effort through a one-shot project plugin mode when no existing plugin mode already binds that slug. Run metadata reports `model` as the catalog slug (or dial), plus `ampMode`, `catalogModel`, and `effort` — never the transport key `prism-pin`. A dial in `worker.model` can `extends` that pin; a plugin mode key cannot combine with `catalogModel` / `effort`. `prism workflow validate` fail-closes when the snapshot lists the catalog row and `worker.effort` is not on that row. Modelspaces stay optional policy, not the inventory.
 2. **Task modelspace profile ref** — `worker.model: { kind: "model-profile-ref", plugin, modelspace, profile }` resolves the profile's target for the task's worker; the first concrete `{ model, provider?, variant? }` entry wins. No entry for that worker → `WorkflowModelResolutionError`.
-3. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`, so workers that tolerate an omitted model flag (e.g. `opencode`) keep working.
+3. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`. Spawn omits the harness model flag so the user's harness default stays. Do not invent a Prism default. Stated preferences live in `~/.prism/state/workflow-model-preferences.json` (`prism workflow models --offer` / `prefer`) and are copied into `worker.model` by the authoring agent — they are not applied at run time.
 
 Resolution can carry a **provider** (harness-side inference provider, e.g. hermes `--provider xai-oauth`) and a **variant** (harness-bound model variant such as Codex reasoning effort). `prism workflow validate <file>` prints each task's resolved `(worker, model)` before anything dispatches — read it.
 

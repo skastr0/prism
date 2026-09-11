@@ -24,14 +24,15 @@ Live runs spend real tokens. Rehearse with \`typecheck\`, \`validate\`, and \`--
 
 \`\`\`bash
 prism workflow refresh-harness-types
-prism workflow models --worker cursor --query opus
+prism workflow models --offer
+prism workflow models prefer cursor --model composer-2.5-fast
 prism workflow scaffold hello
 prism workflow typecheck ~/.prism/workflows/hello.workflow.ts
 prism workflow validate ~/.prism/workflows/hello.workflow.ts --table
 prism workflow run ~/.prism/workflows/hello.workflow.ts --mock-output mocks.json
 \`\`\`
 
-Print this skill anytime: \`prism workflow skill\`.
+Print this skill anytime: \`prism workflow skill\`. Model quiz: \`prism workflow skill --models\`.
 
 ## Authoring surface
 
@@ -45,7 +46,7 @@ export const workflow = defineWorkflow({
     id: "cursor",
     prompt: "Reply with summary: hello",
     output: Schema.Struct({ summary: Schema.String }),
-    worker: { worker: "cursor", model: "composer-2.5-fast" },
+    worker: { worker: "cursor" }, // omit model → harness default. Pin only from \`prism workflow models --offer\`.
   })],
 });
 \`\`\`
@@ -54,7 +55,7 @@ export const workflow = defineWorkflow({
 - Cursor slugs are effort-suffixed. \`gemini-3.8-flash\` is not a slug; use \`gemini-3.8-flash-low|medium|high\`.
 - OMP pins are \`provider/id\` selectors from \`omp models --json\` (e.g. \`ollama-cloud/glm-5.3-flash\`). Bare ids such as \`gpt-5.6-luna\` are not selectors. \`opencode-go/*\` is Console Go and 400s in workflow \`--print\` (\`MissingSessionID\`). Thinking stays on \`--thinking\` / a \`:high\` config suffix, not \`worker.effort\`.
 - Amp: \`worker.model\` is a \`--mode\` dial (\`low|medium|high|ultra\`) or plugin key. Catalog slugs go in \`worker.catalogModel\`. Reasoning goes in \`worker.effort\`. Example: \`{ worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }\`.
-- Discover slugs: \`prism workflow models --worker <id> --query <text>\`.
+- Discover slugs: \`prism workflow models --offer\` then \`--worker <id> --query <text>\`. Do not invent slugs.
 - \`worker.permission\` is harness-bound. Do not copy Codex \`sandbox-read-only\` onto Claude, Grok, Amp, or OMP.
 
 | Worker | Allowed \`permission\` |
@@ -100,7 +101,7 @@ refresh the plugin (not required for plugin-free workflows).
 
 | Command | What it does |
 |---|---|
-| \`models\` | Live harness slugs, family-grouped. \`--worker\` \`--query\` \`--json\` |
+| \`models\` | Live harness slugs. \`--offer\` quizzes with samples + prefs. \`prefer\` saves them |
 | \`catalog\` | Workers + slug counts. \`--query\` searches models when no plugin |
 | \`scaffold <name>\` | Starter in \`~/.prism/workflows/\` with typed pins when a snapshot exists |
 | \`refresh-harness-types\` | Write \`prism/harnesses\` unions from installed CLIs |
@@ -115,10 +116,11 @@ Workflow files live in \`~/.prism/workflows/\`, never inside the repo they drive
 ## Pinning models
 
 1. \`prism workflow refresh-harness-types\`
-2. \`prism workflow models --worker cursor --query opus\`
-3. Copy a listed slug into \`worker.model\` (or Amp \`catalogModel\`).
+2. \`prism workflow models --offer\` — workers, slug counts, five-slug samples, current prefs
+3. Quiz the user. Save with \`prism workflow models prefer <id> --model <slug>\`
+4. Copy a stated preference into \`worker.model\` (Amp: \`catalogModel\` / \`effort\`). No preference → omit the field so the harness default stays.
 
-If typecheck rejects a family name, the error should list the effort-suffixed slugs. Fix the one-line pin; do not invent a shared model type.
+If typecheck rejects a family name, the error should list the effort-suffixed slugs. Fix the one-line pin; do not invent a shared model type. Never write \`model: ""\`.
 
 ## Validate before you spend
 
@@ -138,3 +140,5 @@ export const writeWorkflowAuthoringSkill = async (
   await writeFile(path, markdown, "utf8");
   return { path, bytes: markdown.length };
 };
+
+export { writeWorkflowModelsSkill } from "./models-skill.js";

@@ -72,6 +72,12 @@ describe("buildAgyArgs", () => {
     ]);
   });
 
+  test("omits --model when none is pinned", () => {
+    const args: readonly string[] = buildAgyArgs({ cwd: "/tmp", printTimeout: "5m", prompt: "hello" });
+    expect(args).not.toContain("--model");
+    expect(args.at(-2)).toBe("--print");
+  });
+
   test("keeps --print as the final flag before the prompt", () => {
     const args: readonly string[] = buildAgyArgs({ cwd: "/tmp", model: DEFAULT_ANTIGRAVITY_MODEL, printTimeout: "5m", prompt: "hello" });
     expect(args.at(-2)).toBe("--print");
@@ -242,7 +248,7 @@ describe("runAntigravityWorkflowTask retries", () => {
 
       expect(result.output).toEqual({ ok: true, attempt: 1 });
       expect(result.metadata?.adapter).toBe("antigravity-cli");
-      expect(result.metadata?.model).toBe(DEFAULT_ANTIGRAVITY_MODEL);
+      expect(result.metadata?.model).toBeUndefined();
       const attempts = (await readFile(path.join(root, "attempts.ndjson"), "utf8"))
         .trim()
         .split("\n")

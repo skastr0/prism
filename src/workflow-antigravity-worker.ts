@@ -66,11 +66,12 @@ type AgyWorkspaceArgs = readonly ["--add-dir", AgyWorkspaceDir];
 type AgyModelArgs = readonly ["--model", AgyModel];
 type AgyOptionalLogFileArgs = readonly [] | AgyLogFileArgs;
 type AgyOptionalConversationArgs = readonly [] | AgyConversationArgs;
+type AgyOptionalModelArgs = readonly [] | AgyModelArgs;
 type AgyRequiredPrintArgs = readonly [
   ...AgyPermissionArgs,
   ...AgyTimeoutArgs,
   ...AgyWorkspaceArgs,
-  ...AgyModelArgs,
+  ...AgyOptionalModelArgs,
   "--print",
   AgyPrompt,
 ];
@@ -191,14 +192,15 @@ export const detectAgyPrintTimeout = (stdout: string, stderr: string): boolean =
 const agyPrintFailureMessage = (input: {
   readonly printedError: string;
   readonly printTimeout: string;
-  readonly model: string;
+  readonly model?: string;
 }): string => {
-  return `agy print mode failed before Prism worker JSON (printTimeout: ${input.printTimeout}, model: ${input.model}): ${input.printedError}`;
+  const model = input.model ?? "harness-default";
+  return `agy print mode failed before Prism worker JSON (printTimeout: ${input.printTimeout}, model: ${model}): ${input.printedError}`;
 };
 
 const antigravityMetadata = (input: {
   readonly task: AnyWorkflowTask;
-  readonly model: string;
+  readonly model?: string;
   readonly durationMs: number;
   readonly printTimeout: string;
   readonly stderr: string;
@@ -269,7 +271,7 @@ export const resolveAntigravityPermission = (mode: WorkflowPermissionMode): Anti
 
 export const buildAgyArgs = (input: {
   readonly cwd: string;
-  readonly model: string;
+  readonly model?: string;
   readonly permission?: AntigravityWorkflowPermissionMode;
   readonly printTimeout: string;
   readonly prompt: string;
@@ -293,8 +295,7 @@ export const buildAgyArgs = (input: {
     agyValue<"print-timeout">(input.printTimeout),
     "--add-dir",
     agyValue<"workspace-dir">(input.cwd),
-    "--model",
-    agyValue<"model">(input.model),
+    ...(input.model !== undefined ? (["--model", agyValue<"model">(input.model)] as const) : ([] as const)),
     "--print",
     agyValue<"prompt">(input.prompt),
   ];
@@ -442,7 +443,7 @@ const runAgyWithRetry = (input: {
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
   readonly printTimeout: string;
-  readonly model: string;
+  readonly model?: string;
   readonly permission: AntigravityWorkflowPermissionMode;
   readonly prompt: string;
   readonly initialConversationId?: AgyConversationId;
@@ -545,7 +546,7 @@ export const runAntigravityWorkflowTask = async (
   options: AntigravityWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_ANTIGRAVITY_BIN ?? "agy";
-  const model = options.model ?? DEFAULT_ANTIGRAVITY_MODEL;
+  const model = options.model;
   const resumeConversationId = parseAgyConversationId(options.repair?.continuation?.sessionId);
   const prompt = options.repair !== undefined && resumeConversationId !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`

@@ -335,7 +335,7 @@ const profileTask = defineTask({
 
 const defaultTask = defineTask({
   id: "default",
-  prompt: "Use the grok registry default.",
+  prompt: "Use grok with no model pin.",
   output,
   worker: { worker: "grok" },
 });
@@ -597,7 +597,7 @@ export default defineWorkflow({
     expect(summary.modelResolution).toEqual([
       { id: "explicit", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
       { id: "profile", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
-      { id: "default", worker: "grok", model: "grok-4.5", source: "default" },
+      { id: "default", worker: "grok" },
       { id: "deferred" },
     ]);
   });
@@ -650,7 +650,7 @@ export default defineWorkflow({
     await expect(validateWorkflowFile(file)).rejects.toThrow(/worker 'codex-cli'/);
   });
 
-  test("validate annotates a dynamic workflow with statically discoverable worker ids and registry defaults (WDX-009)", async () => {
+  test("validate annotates a dynamic workflow with statically discoverable worker ids (WDX-009)", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     await writeFile(file, scaffoldLikeDynamicWorkflowSource());
@@ -660,14 +660,14 @@ export default defineWorkflow({
     expect(summary.dynamic).toBe(true);
     expect(summary.tasks).toEqual([]);
     expect(summary.modelResolution).toEqual([
-      { id: "a", worker: "claude-code", model: "claude-haiku-4-5", source: "default" },
-      { id: "b", worker: "grok", model: "grok-4.5", source: "default" },
+      { id: "a", worker: "claude-code" },
+      { id: "b", worker: "grok" },
     ]);
     expect(summary.note).toBeDefined();
     expect(summary.note?.length ?? 0).toBeGreaterThan(0);
     expect(summary.staticWorkers).toEqual([
-      { worker: "claude-code", defaultModel: "claude-haiku-4-5" },
-      { worker: "grok", defaultModel: "grok-4.5" },
+      { worker: "claude-code" },
+      { worker: "grok" },
     ]);
   });
 
@@ -693,7 +693,7 @@ export default defineWorkflow({
     expect(exitCode).toBe(0);
     expect(stdout).toContain("task");
     expect(stdout).toContain("worker");
-    expect(stdout).toContain("grok-4.5");
+    expect(stdout).toContain("grok");
     expect(stdout).toContain("default");
   });
 
@@ -1085,7 +1085,7 @@ export default defineWorkflow({
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("from grok");
     expect(calls.trim().split("\n").map((line) => JSON.parse(line) as { hasAgent: boolean; model: string })).toEqual([
-      { hasAgent: false, model: "grok-4.5" },
+      { hasAgent: false, model: "missing" },
     ]);
   });
 

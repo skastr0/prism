@@ -194,7 +194,7 @@ describe("workflow worker continuation arg mapping", () => {
 
 describe("antigravity-cli permission arg mapping", () => {
   test("puts all options before --print so agy receives the prompt value", () => {
-    const args: AgyPrintArgs = buildAgyArgs({ cwd: "/r", model: "Gemini", prompt: "p", printTimeout: "5m", permission: "permissive" });
+    const args = buildAgyArgs({ cwd: "/r", model: "Gemini", prompt: "p", printTimeout: "5m", permission: "permissive" });
     const rawArgs: readonly string[] = args;
     expect(rawArgs).toEqual([
       "--dangerously-skip-permissions",
@@ -570,6 +570,11 @@ describe("grok permission arg mapping", () => {
   test("model override replaces the grok-build fallback", () => {
     const args = buildGrokArgs({ cwd: "/r", model: "grok-custom", prompt: "p", permission: "legacy" });
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "grok-custom"]);
+  });
+
+  test("omits --model when none is pinned", () => {
+    const args = buildGrokArgs({ cwd: "/r", prompt: "p", permission: "legacy" });
+    expect(args).not.toContain("--model");
   });
 
   test("default emits permissive --always-approve and bypassPermissions", () => {

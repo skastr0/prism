@@ -135,7 +135,7 @@ describe("workflow harness detection", () => {
     ]);
   });
 
-  test("every workflow harness carries a cheap-fast registry default model", () => {
+  test("every workflow harness documents a cheap-fast slug (not applied to unpinned spawn)", () => {
     for (const harness of WORKFLOW_HARNESS_IDS) {
       const model = workflowHarnessDefaultModel(harness);
       expect(typeof model).toBe("string");

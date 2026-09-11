@@ -59,11 +59,9 @@ export interface WorkflowHarnessDetectionSpec {
   readonly envVar: string;
   readonly probeArgs: ReadonlyArray<string>;
   /**
-   * Cheap-fast-tier model used by `resolveWorkflowTaskModel` when a task
-   * declares this harness but nothing (task, profile, or CLI --model) supplies
-   * a concrete model. Chosen from the empirical modelspace's throughput/triage
-   * profiles (not the premium tier) so a scaffolded workflow never crashes at
-   * run with "no concrete model for workflow worker X".
+   * Documented cheap-fast slug for this harness. Detection/probes may cite it.
+   * Unpinned workflow tasks must omit the harness model flag so the user's
+   * harness default stays in force — do not feed this into spawn.
    */
   readonly defaultModel: string;
   /**
@@ -219,9 +217,8 @@ export const isWorkflowHarnessId = (id: string): id is WorkflowHarnessId =>
   workflowHarnessIdSet.has(id);
 
 /**
- * Cheap-fast-tier default model for a workflow harness, or `undefined` for an
- * id outside the registry. Single source of truth for `resolveWorkflowTaskModel`
- * (src/workflows.ts) — do not hand-maintain a second per-harness default list.
+ * Documented cheap-fast slug for a workflow harness, or `undefined` outside
+ * the registry. Not applied to unpinned tasks — omit the spawn flag instead.
  */
 export const workflowHarnessDefaultModel = (harness: string): string | undefined => {
   if (!isWorkflowHarnessId(harness)) return undefined;

@@ -98,11 +98,7 @@ export const buildGrokArgs = (input: {
     ? ["--always-approve", "--permission-mode", "bypassPermissions"]
     : [];
   return [
-    "--model",
-    // Keep in sync with WORKFLOW_HARNESS_DETECTION_SPECS.grok.defaultModel
-    // (workflow-harness-detection.ts). This fallback only fires when
-    // buildGrokArgs is called directly without going through model resolution.
-    input.model ?? "grok-4.5",
+    ...(input.model !== undefined ? ["--model", input.model] : []),
     "--cwd",
     input.cwd,
     ...(input.sessionId !== undefined ? ["-r", input.sessionId] : []),
@@ -218,7 +214,7 @@ export const runGrokWorkflowTask = async (
   });
   const processMetadata = {
     adapter: "grok-cli",
-    model: options.model ?? "grok-4.5",
+    model: options.model,
     durationMs,
     sessionId,
     exitCode,
@@ -280,7 +276,7 @@ export const runGrokWorkflowTask = async (
     const message = error instanceof Error ? error.message : String(error);
     throw new WorkflowWorkerError(message, {
       adapter: "grok-cli",
-      model: options.model ?? "grok-4.5",
+      model: options.model,
       durationMs: Date.now() - startedAt,
       sessionId,
       stage: "process-setup",

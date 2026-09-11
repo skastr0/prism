@@ -21,7 +21,6 @@ import {
   checkWorkflowRefsFreshness,
   typecheckWorkflowFile,
 } from "./workflow-typecheck.js";
-import { workflowHarnessDefaultModel } from "./workflow-harness-detection.js";
 import {
   isWorkflowDefinition,
   resolveWorkflowTaskModelResolution,
@@ -69,7 +68,6 @@ export interface WorkflowTaskModelResolutionRow {
 /** A worker id literal discovered by a static source scan of a dynamic workflow file. */
 export interface WorkflowStaticWorkerReference {
   readonly worker: string;
-  readonly defaultModel?: string;
 }
 
 export interface WorkflowValidationResult extends WorkflowValidationSummary {
@@ -87,7 +85,7 @@ const DYNAMIC_WORKFLOW_NOTE =
 const staticallyReferencedWorkers = (source: string): ReadonlyArray<WorkflowStaticWorkerReference> =>
   supportedWorkflowWorkers()
     .filter((worker) => source.includes(`"${worker}"`) || source.includes(`'${worker}'`) || source.includes(`\`${worker}\``))
-    .map((worker) => ({ worker, defaultModel: workflowHarnessDefaultModel(worker) }));
+    .map((worker) => ({ worker }));
 
 /**
  * Resolves one task's (worker, model) the same way `workflow run` will.
@@ -142,11 +140,7 @@ const resolveTaskModelRow = (
   try {
     const resolution = resolveWorkflowTaskModelResolution(task, { worker });
     const row = resolution === undefined
-      ? (() => {
-        const defaultModel = workflowHarnessDefaultModel(worker);
-        if (defaultModel === undefined) return { id: task.id, worker, ...pinFields };
-        return { id: task.id, worker, model: defaultModel, source: "default" as const, ...pinFields };
-      })()
+      ? { id: task.id, worker, ...pinFields }
       : { id: task.id, worker, model: resolution.model, source: resolution.source, ...pinFields };
     if (worker === "omp" && "model" in row) assertOmpWorkflowModel(row.model);
     return row;

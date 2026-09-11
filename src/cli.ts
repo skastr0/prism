@@ -895,7 +895,6 @@ workflowCache
   .option("--task-id <id>", "Filter cache entries by task id")
   .option("--cache-key <key>", "Filter cache entries by task cache key")
   .option("--prompt-hash <hash>", "Filter cache entries by prompt hash")
-  .option("--agent-manifest-hash <hash>", "Filter cache entries by agent manifest hash")
   .option("--limit <n>", "Maximum number of cache entries to return", parsePositiveInteger)
   .action(async (options: {
     readonly store?: string;
@@ -903,7 +902,6 @@ workflowCache
     readonly taskId?: string;
     readonly cacheKey?: string;
     readonly promptHash?: string;
-    readonly agentManifestHash?: string;
     readonly limit?: number;
   }) => {
     let store: WorkflowStore | undefined;
@@ -914,7 +912,6 @@ workflowCache
         taskId: options.taskId,
         cacheKey: options.cacheKey,
         promptHash: options.promptHash,
-        agentManifestHash: options.agentManifestHash,
       })
         .slice(0, options.limit);
       console.log(JSON.stringify({ entries }, null, 2));
@@ -934,14 +931,12 @@ workflowCache
   .option("--store <path>", "SQLite workflow store path")
   .option("--task-id <id>", "Filter cache entries by task id")
   .option("--prompt-hash <hash>", "Filter cache entries by prompt hash")
-  .option("--agent-manifest-hash <hash>", "Filter cache entries by agent manifest hash")
   .action(async (options: {
     readonly store?: string;
     readonly workflow: string;
     readonly taskId?: string;
     readonly cacheKey: string;
     readonly promptHash?: string;
-    readonly agentManifestHash?: string;
   }) => {
     let store: WorkflowStore | undefined;
     try {
@@ -951,7 +946,6 @@ workflowCache
         taskId: options.taskId,
         cacheKey: options.cacheKey,
         promptHash: options.promptHash,
-        agentManifestHash: options.agentManifestHash,
       });
       if (entries.length !== 1) {
         throw new Error(`workflow cache show expected exactly one entry, found ${entries.length}`);

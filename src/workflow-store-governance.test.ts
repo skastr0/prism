@@ -27,7 +27,6 @@ const identity = (taskId: string, cacheKey: string = `${taskId}-cache`) => ({
   taskId,
   cacheKey,
   promptHash: "a".repeat(64),
-  agentManifestHash: "b".repeat(64),
 });
 
 const taskSnapshot = (runId: string, taskId: string = "build", ordinal: number = 0) => ({
@@ -37,14 +36,6 @@ const taskSnapshot = (runId: string, taskId: string = "build", ordinal: number =
   prompt: "Build with password=prompt-secret",
   cacheKey: `${taskId}-cache`,
   promptHash: "a".repeat(64),
-  agentManifestHash: "b".repeat(64),
-  agent: {
-    plugin: "forge",
-    name: "builder",
-    description: "Bearer abcdefghijklmnop",
-    sourceHash: "c".repeat(64),
-    manifestHash: "b".repeat(64),
-  },
   finishCriteria: ["do not expose api_key=finish-secret"],
 });
 
@@ -74,15 +65,6 @@ describe("workflow store data governance", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"), { applyDefaultRetention: false });
     const task = defineTask({
       id: "secret-result",
-      agent: {
-        kind: "agent-ref",
-        plugin: "forge",
-        name: "builder",
-        description: "Build specialist",
-        sourceHash: "a".repeat(64),
-        manifestHash: "b".repeat(64),
-        installs: ["codex-cli"],
-      },
       prompt: "Return the result.",
       output: Schema.Struct({ summary: Schema.String, accessToken: Schema.String }),
       cacheKey: "secret-result-cache",
@@ -124,7 +106,6 @@ describe("workflow store data governance", () => {
 
     expect(store.recordCompleted({
       identity: identity("single-serialization"),
-      agent: { plugin: "forge", name: "builder" },
       output,
     })).toEqual({ stored: true });
     expect(calls).toBe(1);
@@ -174,7 +155,6 @@ describe("workflow store data governance", () => {
       runId,
       ordinal: 0,
       identity: identity("build"),
-      agent: { plugin: "forge", name: "builder" },
       status: "failed",
       cached: false,
       output: { accessToken: "output-secret" },
@@ -217,13 +197,11 @@ describe("workflow store data governance", () => {
 
     expect(store.recordCompleted({
       identity: identity("unsafe"),
-      agent: { plugin: "forge", name: "builder" },
       output: { accessToken: "cache-secret" },
     })).toMatchObject({ stored: false, reason: "sensitive-data" });
     expect(store.getCompleted(identity("unsafe"))).toBeNull();
     expect(store.recordCompleted({
       identity: identity("safe"),
-      agent: { plugin: "forge", name: "builder" },
       output: { summary: "safe" },
       metadata: { sessionId: "sk-safe-continuation-id" },
     })).toEqual({ stored: true });
@@ -306,7 +284,6 @@ describe("workflow store data governance", () => {
     store.recordTaskAttemptFinished({ runId, ordinal: 0, attempt: 1, status: "completed" });
     store.recordCompleted({
       identity: identity("legacy-cache"),
-      agent: { plugin: "forge", name: "builder" },
       output: { summary: "safe-before-corruption" },
     });
     store.recordJudge({
@@ -384,7 +361,6 @@ describe("workflow store data governance", () => {
       runId: oldRun,
       ordinal: 0,
       identity: identity("build"),
-      agent: { plugin: "forge", name: "builder" },
       status: "completed",
       cached: false,
       output: { summary: "old" },
@@ -395,7 +371,6 @@ describe("workflow store data governance", () => {
     const runningRun = store.createRun("running-run", "running-run");
     store.recordCompleted({
       identity: identity("old-cache"),
-      agent: { plugin: "forge", name: "builder" },
       output: { summary: "old cache" },
     });
     store.recordJudge({

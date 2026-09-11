@@ -9,7 +9,7 @@ import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { isWorkflowRunOutcomeSuccessful, WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore, workflowRunLiveness, workflowTaskIdentity } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
-import { DEFAULT_WORKFLOW_DECODE_REPAIRS, defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
+import { DEFAULT_WORKFLOW_DECODE_REPAIRS, defineTask, defineWorkflow, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
 
 const tempRoots: string[] = [];
 
@@ -33,22 +33,6 @@ const readUserVersion = (db: Database): number => {
   return row.user_version;
 };
 
-const builder = {
-  kind: "agent-ref",
-  plugin: "forge",
-  name: "builder",
-  description: "Build specialist",
-  sourceHash: "a".repeat(64),
-  manifestHash: "b".repeat(64),
-  installs: ["grok"],
-} as const satisfies WorkflowAgentRef;
-
-const reviewer = {
-  ...builder,
-  name: "reviewer",
-  description: "Review specialist",
-} as const satisfies WorkflowAgentRef;
-
 const Output = Schema.Struct({ summary: Schema.String });
 const ReviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 
@@ -69,14 +53,12 @@ const deadPid = async (): Promise<number> => {
 
 const createWorkflow = (options?: {
   readonly prompt?: string;
-  readonly agent?: WorkflowAgentRef;
   readonly worker?: WorkflowWorkerId;
   readonly model?: string;
   readonly finish?: WorkflowFinishOptions<{ summary: string }>;
 }) => {
   const build = defineTask({
     id: "build",
-    agent: options?.agent ?? builder,
     prompt: options?.prompt ?? "Build the slice.",
     output: Output,
     cacheKey: "builder-cache",
@@ -431,7 +413,7 @@ describe("workflow store", () => {
     reopenedDb.close();
   });
 
-  test("migrates a pre-AR-001 v3 task-cache fixture to the global content-addressed schema cleanly", async () => {
+  test("migrates a pre-AR-001 v3 task-cache fixture to the v6 shape and clears unreachable legacy rows", async () => {
     const root = await createTempRoot();
     const path = join(root, "workflows.sqlite");
     const db = new Database(path);
@@ -485,14 +467,14 @@ describe("workflow store", () => {
       taskId: "build",
       cacheKey: "builder-cache",
       promptHash: "a".repeat(64),
-      agentManifestHash: "b".repeat(64),
     };
 
     const store = await WorkflowStore.open(path);
-    expect(store.getCompleted(legacyIdentity)).toMatchObject({ output: { summary: "pre-migration" } });
-    expect(store.listCompletedCache()).toEqual([
-      expect.objectContaining({ identity: legacyIdentity, output: { summary: "pre-migration" } }),
-    ]);
+    // The v4 migration replayed the row under the pre-v6 key, but v6 now clears
+    // the cache table: identity v4 changed every prompt hash, so no pre-v6 row
+    // can ever hit again and retaining it would only be dead weight.
+    expect(store.getCompleted(legacyIdentity)).toBeNull();
+    expect(store.listCompletedCache()).toEqual([]);
     store.close();
 
     const migratedDb = new Database(path);
@@ -500,18 +482,12 @@ describe("workflow store", () => {
     const columns = migratedDb.query<{ readonly name: string }, []>("pragma table_info(workflow_task_records);").all()
       .map((column) => column.name);
     expect(columns).toEqual(expect.arrayContaining(["scope_key", "stable_key", "semantic_hash"]));
-    const resourceKeyRow = migratedDb.query<{
-      readonly scope_key: string;
-      readonly stable_key: string;
-      readonly semantic_hash: string;
-    }, []>("select scope_key, stable_key, semantic_hash from workflow_task_records").get();
-    expect(resourceKeyRow?.scope_key).toBeTruthy();
-    expect(resourceKeyRow?.stable_key).toBeTruthy();
-    expect(resourceKeyRow?.semantic_hash).toBeTruthy();
+    expect(columns).not.toEqual(expect.arrayContaining(["agent_manifest_hash", "agent_plugin", "agent_name"]));
+    expect(migratedDb.query("select 1 from workflow_task_records").get()).toBeNull();
     migratedDb.close();
 
     const reopened = await WorkflowStore.open(path);
-    expect(reopened.getCompleted(legacyIdentity)).toMatchObject({ output: { summary: "pre-migration" } });
+    expect(reopened.getCompleted(legacyIdentity)).toBeNull();
     expect(readUserVersion(new Database(path))).toBe(WORKFLOW_STORE_SCHEMA_VERSION);
     reopened.close();
   });
@@ -529,9 +505,7 @@ describe("workflow store", () => {
         taskId: "optional-reviewer",
         cacheKey: "optional-reviewer",
         promptHash: "a".repeat(64),
-        agentManifestHash: "b".repeat(64),
       },
-      agent: { plugin: "forge", name: "reviewer" },
       status: "failed",
       cached: false,
       output: { error: "reviewer setup blocker" },
@@ -565,9 +539,7 @@ describe("workflow store", () => {
         taskId: "failed-task",
         cacheKey: "failed-task",
         promptHash: "a".repeat(64),
-        agentManifestHash: "b".repeat(64),
       },
-      agent: { plugin: "forge", name: "reviewer" },
       status: "failed",
       cached: false,
       output: { error: "legacy failure" },
@@ -802,7 +774,6 @@ describe("workflow store", () => {
         adapter: "codex-cli",
         sessionID: "session-one",
         model: "gpt-5.6",
-        nativeAgent: "forge:builder",
       },
     });
     expect(() => store.recordTaskAttemptStarted({
@@ -834,7 +805,6 @@ describe("workflow store", () => {
         adapter: "codex-cli",
         sessionId: "session-one",
         model: "gpt-5.6",
-        nativeAgent: "forge:builder",
         usage: {
           inputTokens: 10,
           outputTokens: 2,
@@ -877,7 +847,6 @@ describe("workflow store", () => {
         adapter: "codex-cli",
         sessionId: "session-two",
         model: "gpt-5.6",
-        nativeAgent: "forge:builder",
         repairExecution: { attempt: 1, mode: "fresh-executor-invocation" },
         usage: {
           tokensIn: 5,
@@ -907,7 +876,6 @@ describe("workflow store", () => {
         status: "failed",
         adapter: "codex-cli",
         model: "gpt-5.6",
-        nativeAgent: "forge:builder",
         sessionId: "session-one",
         failure: { kind: "decode", message: "invalid output" },
         metadata: expect.objectContaining({ sessionId: "session-one" }),
@@ -969,9 +937,7 @@ describe("workflow store", () => {
         taskId: "build",
         cacheKey: "build",
         promptHash: "a".repeat(64),
-        agentManifestHash: "b".repeat(64),
       },
-      agent: { plugin: "forge", name: "builder" },
       status: "completed",
       cached: true,
       output: { summary: "cached" },
@@ -994,9 +960,7 @@ describe("workflow store", () => {
         taskId: "build",
         cacheKey: "build",
         promptHash: "a".repeat(64),
-        agentManifestHash: "b".repeat(64),
       },
-      agent: { plugin: "forge", name: "builder" },
       status: "completed",
       cached: true,
       output: { summary: "cached-again" },
@@ -1533,14 +1497,12 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const first = defineTask({
       id: "first",
-      agent: builder,
       prompt: "First task.",
       output: Output,
       cacheKey: "first-cache",
     });
     const second = defineTask({
       id: "second",
-      agent: reviewer,
       prompt: "Second task.",
       output: ReviewOutput,
       cacheKey: "second-cache",
@@ -1580,7 +1542,6 @@ describe("workflow store", () => {
     const runId = store.createRun("stop-before-repair-smoke");
     const task = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: Output,
       finish: {
@@ -1620,7 +1581,7 @@ describe("workflow store", () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const runId = store.createRun("stop-dynamic-fanout-smoke");
-    const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: Output });
+    const leaf = (id: string) => defineTask({ id, prompt: `Run ${id}.`, output: Output });
     const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
     const workflow = defineWorkflow({
       name: "stop-dynamic-fanout-smoke",
@@ -1661,7 +1622,6 @@ describe("workflow store", () => {
 
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "stored" },
       metadata: contractMetadata,
     });
@@ -1673,7 +1633,6 @@ describe("workflow store", () => {
     expect(store.listCompletedCache()).toEqual([
       {
         identity,
-        agent: { plugin: "forge", name: "builder" },
         status: "completed",
         output: { summary: "stored" },
         metadata: contractMetadata,
@@ -1689,7 +1648,6 @@ describe("workflow store", () => {
       taskId: "build",
       cacheKey: "builder-cache",
       promptHash: identity.promptHash,
-      agentManifestHash: identity.agentManifestHash,
     }).map((entry) => entry.metadata)).toEqual([contractMetadata]);
     expect(store.listCompletedCache({ cacheKey: "missing-cache" })).toEqual([]);
     store.close();
@@ -1704,7 +1662,6 @@ describe("workflow store", () => {
 
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "first run" },
       metadata: contractMetadata,
     });
@@ -1718,12 +1675,11 @@ describe("workflow store", () => {
     store.close();
   });
 
-  test("AR-001 golden vector: same agent+prompt+schema+harness+model yields the same resource id across different workflow files", async () => {
+  test("AR-001 golden vector: same prompt+schema+harness+model yields the same resource id across different workflow files", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const task = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: Output,
       cacheKey: "builder-cache",
@@ -1737,13 +1693,11 @@ describe("workflow store", () => {
     // The old workflow-scoped identity differs across the two workflow files...
     expect(identityA.workflow).not.toBe(identityB.workflow);
     expect(identityA).not.toEqual(identityB);
-    // ...while the semantic content (agent+prompt+schema+harness+model) is identical.
+    // ...while the semantic content (prompt+schema+harness+model) is identical.
     expect(identityA.promptHash).toBe(identityB.promptHash);
-    expect(identityA.agentManifestHash).toBe(identityB.agentManifestHash);
 
     store.recordCompleted({
       identity: identityA,
-      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "produced by workflow-file-a" },
       metadata: contractMetadata,
     });
@@ -1775,13 +1729,11 @@ describe("workflow store", () => {
 
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "first" },
       metadata: { ...contractMetadata, adapter: "claude-code", sessionId: "session-1" },
     });
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "second" },
       metadata: { ...contractMetadata, adapter: "claude-code", sessionId: "session-2" },
     });
@@ -1853,7 +1805,6 @@ describe("workflow store", () => {
       output: { summary: "done" },
       taskMetadata: {
         id: "build",
-        agent: { plugin: "forge", name: "builder" },
       },
       metadata: { judgeModel: "mock" },
       createdAt: expect.any(String),
@@ -1951,7 +1902,6 @@ describe("workflow store", () => {
         cacheKey: "builder-cache",
         status: "completed",
         cached: false,
-        agent: { plugin: "forge", name: "builder" },
         output: { summary: "first" },
         metadata: contractMetadata,
       },
@@ -1980,7 +1930,6 @@ describe("workflow store", () => {
         cacheKey: "builder-cache",
         status: "completed",
         cached: true,
-        agent: { plugin: "forge", name: "builder" },
         output: { summary: "first" },
         metadata: {
           ...contractMetadata,
@@ -2173,7 +2122,6 @@ describe("workflow store", () => {
         cached: false,
         cacheLookup: "miss",
         repairs: 0,
-        agent: { plugin: "forge", name: "builder" },
         lastEventType: "task.completed",
       }),
     ]);
@@ -2206,7 +2154,6 @@ describe("workflow store", () => {
     const buildA = defineTask({
       id: "build",
       phase: "Build",
-      agent: builder,
       prompt: "Build the slice.",
       output: Output,
       cacheKey: "builder-cache",
@@ -2241,7 +2188,6 @@ describe("workflow store", () => {
         phase: "Build",
         prompt: "Build the slice.",
         cacheKey: "builder-cache",
-        agent: expect.objectContaining({ plugin: "forge", name: "builder" }),
         worker: { worker: "grok", model: "grok-build" },
         finishCriteria: [],
       }),
@@ -2259,7 +2205,6 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const base = {
       id: "study",
-      agent: builder,
       prompt: "Study the historical session.",
       output: Output,
       cacheKey: "session-study-v1",
@@ -2340,7 +2285,6 @@ describe("workflow store", () => {
     ] as const) {
       const base = {
         id: `study-${worker}`,
-        agent: builder,
         prompt: `Study the historical session with ${worker}.`,
         output: Output,
         cacheKey: `session-study-${worker}-v1`,
@@ -2399,7 +2343,6 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const base = {
       id: "study",
-      agent: builder,
       prompt: "Study the legacy cached session.",
       output: Output,
       cacheKey: "legacy-session-study-v1",
@@ -2458,7 +2401,6 @@ describe("workflow store", () => {
         output: { summary: "fresh" },
         metadata: {
           adapter: "grok-cli",
-          nativeAgent: "builder",
           model: "grok-build",
           durationMs: 25,
           sessionId: "grok-session-1",
@@ -2513,7 +2455,6 @@ describe("workflow store", () => {
           metadata: {
             adapter: "claude-code",
             model: "sonnet",
-            nativeAgent: "builder",
             sessionId: "native-session",
             durationMs: nativeRepairCalls * 10,
           },
@@ -2534,7 +2475,6 @@ describe("workflow store", () => {
         metadata: {
           adapter: "mock-worker",
           model: "mock-model",
-          nativeAgent: "builder",
           durationMs: 10,
         },
       }),
@@ -2558,7 +2498,6 @@ describe("workflow store", () => {
       payload: {
         adapter: "claude-code",
         model: "sonnet",
-        nativeAgent: "builder",
         durationMs: 123,
         sessionId: "claude-session",
       },
@@ -2571,7 +2510,6 @@ describe("workflow store", () => {
       runId: metadataOnlyRunId,
       ordinal: 0,
       identity: workflowTaskIdentity(metadataOnlyWorkflow.name, metadataOnlyTask),
-      agent: { plugin: metadataOnlyTask.agent.plugin, name: metadataOnlyTask.agent.name },
       status: "completed",
       cached: false,
       output: { summary: "metadata repair" },
@@ -2592,7 +2530,6 @@ describe("workflow store", () => {
       runId: mixedRunId,
       ordinal: 0,
       identity: workflowTaskIdentity(metadataOnlyWorkflow.name, metadataOnlyTask),
-      agent: { plugin: metadataOnlyTask.agent.plugin, name: metadataOnlyTask.agent.name },
       status: "completed",
       cached: false,
       output: { summary: "terminal" },
@@ -2612,7 +2549,6 @@ describe("workflow store", () => {
         cached: false,
         workerAdapter: "grok-cli",
         model: "grok-build",
-        nativeAgent: "builder",
         repairCount: 0,
         repairMode: "none",
         durationMs: 25,
@@ -2679,7 +2615,6 @@ describe("workflow store", () => {
         execution: "fresh",
         workerAdapter: "mock-worker",
         model: "mock-model",
-        nativeAgent: "builder",
         durationMs: 10,
         repairCount: 1,
         repairMode: "fresh-executor-invocation",
@@ -2713,7 +2648,6 @@ describe("workflow store", () => {
         cached: false,
         workerAdapter: "claude-code",
         model: "sonnet",
-        nativeAgent: "builder",
         repairCount: 1,
         repairMode: null,
         durationMs: 123,
@@ -2743,14 +2677,12 @@ describe("workflow store", () => {
       run: (wf) => Effect.gen(function* () {
         const build = yield* wf.runTask(defineTask({
           id: "build",
-          agent: builder,
           prompt: "Build the slice.",
           output: Output,
           cacheKey: "dynamic-builder-cache",
         }));
         const review = yield* wf.runTask(defineTask({
           id: "review",
-          agent: reviewer,
           prompt: `Review ${build.summary}`,
           output: ReviewOutput,
           cacheKey: "dynamic-review-cache",
@@ -2794,14 +2726,12 @@ describe("workflow store", () => {
       run: (wf) => Effect.gen(function* () {
         const slow = defineTask({
           id: "slow",
-          agent: builder,
           prompt: "Return slow output.",
           output: Output,
           cacheKey: "dynamic-slow-cache",
         });
         const fast = defineTask({
           id: "fast",
-          agent: reviewer,
           prompt: "Return fast output.",
           output: ReviewOutput,
           cacheKey: "dynamic-fast-cache",
@@ -2841,7 +2771,6 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const repeated = defineTask({
       id: "review",
-      agent: reviewer,
       prompt: "Review the item.",
       output: ReviewOutput,
       cacheKey: "repeated-review-cache",
@@ -2884,7 +2813,6 @@ describe("workflow store", () => {
       run: (wf) => Effect.gen(function* () {
         yield* wf.runTask(defineTask({
           id: "build",
-          agent: builder,
           prompt: "Build before failing.",
           output: Output,
         }));
@@ -2914,7 +2842,6 @@ describe("workflow store", () => {
         cacheKey: "build",
         status: "completed",
         cached: false,
-        agent: { plugin: "forge", name: "builder" },
         output: { summary: "built" },
         metadata: contractMetadata,
       },
@@ -2935,7 +2862,6 @@ describe("workflow store", () => {
     // on the first hard failure, not the new executor-retry budget.
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: Output,
       finish: { maxRepairs: 0 },
@@ -2980,7 +2906,6 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: Output,
       finish: {
@@ -3032,14 +2957,12 @@ describe("workflow store", () => {
       run: (wf) => Effect.gen(function* () {
         const fail = defineTask({
           id: "fail",
-          agent: builder,
           prompt: "Fail quickly.",
           output: Output,
           cacheKey: "dynamic-fail-cache",
         });
         const slow = defineTask({
           id: "slow",
-          agent: reviewer,
           prompt: "Finish slowly.",
           output: Output,
           cacheKey: "dynamic-slow-cache",
@@ -3106,7 +3029,6 @@ describe("workflow store", () => {
         cacheKey: "builder-cache",
         status: "failed",
         cached: false,
-        agent: { plugin: "forge", name: "builder" },
         output: { notSummary: "wrong" },
         metadata: {
           ...contractMetadata,
@@ -3184,7 +3106,6 @@ describe("workflow store", () => {
         cacheKey: "builder-cache",
         status: "failed",
         cached: false,
-        agent: { plugin: "forge", name: "builder" },
         output: { error: "mock harness failed" },
         metadata: contractMetadata,
       },
@@ -3239,13 +3160,11 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const build = defineTask({
       id: "build",
-      agent: builder,
       prompt: "Build the slice.",
       output: Output,
     });
     const review = defineTask({
       id: "review",
-      agent: reviewer,
       prompt: "Review the slice.",
       output: ReviewOutput,
       finish: { maxRepairs: 0, maxDecodeRepairs: 1 },
@@ -3269,7 +3188,6 @@ describe("workflow store", () => {
         cacheKey: "build",
         status: "completed",
         cached: false,
-        agent: { plugin: "forge", name: "builder" },
         output: { summary: "built" },
         metadata: contractMetadata,
       },
@@ -3280,7 +3198,6 @@ describe("workflow store", () => {
         cacheKey: "review",
         status: "failed",
         cached: false,
-        agent: { plugin: "forge", name: "reviewer" },
         output: { verdict: "needs-work" },
         metadata: {
           ...contractMetadata,
@@ -3352,34 +3269,6 @@ describe("workflow store", () => {
       },
     });
     const second = await runWorkflow(createWorkflow({ prompt: "Build the changed slice." }), {
-      store,
-      executeTask: async () => {
-        calls += 1;
-        return { summary: "second" };
-      },
-    });
-
-    expect(calls).toBe(2);
-    expect(second.tasks[0]?.cached).toBe(false);
-    expect(second.tasks[0]?.output).toEqual({ summary: "second" });
-    store.close();
-  });
-
-  test("changing the agent manifest hash breaks the task cache", async () => {
-    const root = await createTempRoot();
-    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
-    let calls = 0;
-
-    await runWorkflow(createWorkflow(), {
-      store,
-      executeTask: async () => {
-        calls += 1;
-        return { summary: "first" };
-      },
-    });
-    const second = await runWorkflow(createWorkflow({
-      agent: { ...builder, manifestHash: "c".repeat(64) },
-    }), {
       store,
       executeTask: async () => {
         calls += 1;
@@ -3617,12 +3506,12 @@ describe("workflow store", () => {
 
     // Construct the same payload as workflowTaskIdentity does internally in canonical order.
     const canonicalOrder = {
-      identityVersion: 3,
+      identityVersion: 4,
       workerJsonContractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
       workerJsonInstructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
       prompt: task.prompt,
       worker: task.worker?.worker ?? null,
-      workerSemantics: "native-agent-v1",
+      workerSemantics: "native-cli-v1",
       model: task.worker?.model ?? null,
       profile: task.worker?.profile ?? null,
       outputSchema,

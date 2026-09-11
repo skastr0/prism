@@ -91,10 +91,6 @@ export interface WorkflowRunTaskRecord {
   readonly cacheKey: string;
   readonly status: WorkflowRunTaskStatus;
   readonly cached: boolean;
-  readonly agent: {
-    readonly plugin: string;
-    readonly name: string;
-  };
   readonly output: unknown;
   readonly metadata?: Record<string, unknown>;
 }
@@ -111,10 +107,6 @@ export interface WorkflowRunTaskProgress {
   readonly cached?: boolean;
   readonly cacheLookup?: WorkflowRunTaskCacheLookup;
   readonly repairs: number;
-  readonly agent?: {
-    readonly plugin: string;
-    readonly name: string;
-  };
   readonly lastEventType?: string;
   readonly lastEventAt?: string;
 }
@@ -130,10 +122,6 @@ export interface WorkflowRunTaskCompactSummary {
   readonly evidenceSource: WorkflowRunTaskEvidenceSource;
   readonly cached: boolean | null;
   readonly cacheLookup?: WorkflowRunTaskCacheLookup;
-  readonly agent?: {
-    readonly plugin: string;
-    readonly name: string;
-  };
   readonly workerAdapter: string | null;
   readonly model: string | null;
   readonly repairCount: number;
@@ -1138,7 +1126,6 @@ const migrateWorkflowStoreToVersion2 = (db: WorkflowDatabase): void => {
         finished_at text,
         adapter text,
         model text,
-        native_agent text,
         session_id text,
         failure_kind text check (failure_kind is null or failure_kind in ('executor', 'decode', 'finish', 'stopped', 'crashed')),
         failure_message text,
@@ -1264,6 +1251,16 @@ const migrateWorkflowStoreToVersion4 = (db: WorkflowDatabase): void => {
     const legacyTableExists = db.query<{ readonly name: string }, []>(`
       select name from sqlite_master where type = 'table' and name = 'workflow_task_records'
     `).get() !== null;
+    // A hand-built ledger may already carry the v4+ content-addressed shape
+    // (scope_key/stable_key/semantic_hash) with a stale user_version. There is
+    // nothing to rebuild then; skip straight to the version bump.
+    const existingColumns = legacyTableExists
+      ? db.query<{ readonly name: string }, []>("pragma table_info(workflow_task_records);").all()
+      : [];
+    if (existingColumns.some((column) => column.name === "scope_key")) {
+      db.exec("pragma user_version = 4;");
+      return;
+    }
     const legacyRows = legacyTableExists
       ? db.query<LegacyWorkflowTaskRecordRow, []>(`
           select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
@@ -1452,7 +1449,6 @@ const migrateWorkflowStoreToVersion5 = (db: WorkflowDatabase): void => {
         finished_at text,
         adapter text,
         model text,
-        native_agent text,
         session_id text,
         failure_kind text check (failure_kind is null or failure_kind in ('executor', 'decode', 'finish', 'stopped', 'crashed')),
         failure_message text,
@@ -1660,35 +1656,57 @@ const migrateWorkflowStoreToVersion5 = (db: WorkflowDatabase): void => {
     }
 
     if (tableExists("workflow_run_task_snapshots")) {
+      const snapshotColumns = db.query<{ readonly name: string }, []>(
+        "pragma table_info(workflow_run_task_snapshots);",
+      ).all();
+      const hasAgentDescription = snapshotColumns.some((column) => column.name === "agent_description");
       const taskSnapshots = db.query<{
       readonly run_id: string;
       readonly ordinal: number;
       readonly prompt: string;
-      readonly agent_description: string;
+      readonly agent_description?: string;
       readonly worker_json: string | null;
       readonly output_schema_json: string | null;
       readonly finish_criteria_json: string;
     }, []>(`
-      select run_id, ordinal, prompt, agent_description, worker_json,
+      select run_id, ordinal, prompt, ${hasAgentDescription ? "agent_description," : ""} worker_json,
              output_schema_json, finish_criteria_json
       from workflow_run_task_snapshots
     `).all();
-      const updateTaskSnapshot = db.query(`
+      const updateTaskSnapshot = hasAgentDescription
+        ? db.query(`
       update workflow_run_task_snapshots
       set prompt = ?, agent_description = ?, worker_json = ?,
           output_schema_json = ?, finish_criteria_json = ?
       where run_id = ? and ordinal = ?
+    `)
+        : db.query(`
+      update workflow_run_task_snapshots
+      set prompt = ?, worker_json = ?,
+          output_schema_json = ?, finish_criteria_json = ?
+      where run_id = ? and ordinal = ?
     `);
       for (const row of taskSnapshots) {
-        updateTaskSnapshot.run(
-          redactWorkflowText(row.prompt),
-          redactWorkflowText(row.agent_description),
-          row.worker_json === null ? null : redactPersistedJson(row.worker_json),
-          row.output_schema_json === null ? null : redactPersistedJson(row.output_schema_json),
-          redactPersistedJson(row.finish_criteria_json),
-          row.run_id,
-          row.ordinal,
-        );
+        if (hasAgentDescription) {
+          updateTaskSnapshot.run(
+            redactWorkflowText(row.prompt),
+            redactWorkflowText(row.agent_description ?? ""),
+            row.worker_json === null ? null : redactPersistedJson(row.worker_json),
+            row.output_schema_json === null ? null : redactPersistedJson(row.output_schema_json),
+            redactPersistedJson(row.finish_criteria_json),
+            row.run_id,
+            row.ordinal,
+          );
+        } else {
+          updateTaskSnapshot.run(
+            redactWorkflowText(row.prompt),
+            row.worker_json === null ? null : redactPersistedJson(row.worker_json),
+            row.output_schema_json === null ? null : redactPersistedJson(row.output_schema_json),
+            redactPersistedJson(row.finish_criteria_json),
+            row.run_id,
+            row.ordinal,
+          );
+        }
       }
     }
 
@@ -1714,14 +1732,50 @@ const migrateWorkflowStoreToVersion5 = (db: WorkflowDatabase): void => {
   })();
 };
 
+/**
+ * WFE agent removal (identity v4): the run ledger no longer records agent
+ * identity and the task cache no longer keys on an agent manifest hash. Drop
+ * every agent column from the ledger tables, drop the native agent column
+ * from attempts, and clear `workflow_task_records`: its pre-v6 rows carry
+ * `promptHash` values from identity v3, so none of them can ever hit again
+ * under the v4 runtime; the cache is disposable by design.
+ */
 const migrateWorkflowStoreToVersion6 = (db: WorkflowDatabase): void => {
   db.transaction(() => {
-    const columns = db.query<{ readonly name: string }, []>(
-      "pragma table_info(workflow_task_attempts);",
-    ).all();
-    if (columns.some((column) => column.name === "native_agent")) {
-      db.exec("alter table workflow_task_attempts drop column native_agent;");
+    const dropColumnIfPresent = (table: string, column: string): void => {
+      const columns = db.query<{ readonly name: string }, []>(
+        `pragma table_info(${table});`,
+      ).all();
+      if (columns.some((entry) => entry.name === column)) {
+        db.exec(`alter table ${table} drop column ${column};`);
+      }
+    };
+    for (const column of ["agent_manifest_hash", "agent_plugin", "agent_name"]) {
+      dropColumnIfPresent("workflow_task_records", column);
     }
+    for (const column of ["agent_manifest_hash", "agent_plugin", "agent_name"]) {
+      dropColumnIfPresent("workflow_run_tasks", column);
+    }
+    for (const column of [
+      "agent_manifest_hash",
+      "agent_plugin",
+      "agent_name",
+      "agent_description",
+      "agent_source_hash",
+    ]) {
+      dropColumnIfPresent("workflow_run_task_snapshots", column);
+    }
+    // Attempts carried one native agent pointer column; drop every
+    // `native_`-prefixed column there (the only one ever written was the
+    // native agent pointer).
+    for (const column of db.query<{ readonly name: string }, []>(
+      "pragma table_info(workflow_task_attempts);",
+    ).all()) {
+      if (column.name.startsWith("native_")) {
+        db.exec(`alter table workflow_task_attempts drop column ${column.name};`);
+      }
+    }
+    db.exec("delete from workflow_task_records;");
     db.exec("pragma user_version = 6;");
   })();
 };
@@ -2347,9 +2401,8 @@ export class WorkflowStore {
     this.db.query(`
       insert into workflow_run_task_snapshots (
         run_id, ordinal, task_id, phase, prompt, cache_key, prompt_hash,
-        agent_manifest_hash, agent_plugin, agent_name, agent_description,
-        agent_source_hash, worker_json, output_schema_json, finish_criteria_json
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        worker_json, output_schema_json, finish_criteria_json
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       on conflict(run_id, ordinal)
       do update set
         task_id = excluded.task_id,
@@ -2357,11 +2410,6 @@ export class WorkflowStore {
         prompt = excluded.prompt,
         cache_key = excluded.cache_key,
         prompt_hash = excluded.prompt_hash,
-        agent_manifest_hash = excluded.agent_manifest_hash,
-        agent_plugin = excluded.agent_plugin,
-        agent_name = excluded.agent_name,
-        agent_description = excluded.agent_description,
-        agent_source_hash = excluded.agent_source_hash,
         worker_json = excluded.worker_json,
         output_schema_json = excluded.output_schema_json,
         finish_criteria_json = excluded.finish_criteria_json
@@ -2373,11 +2421,6 @@ export class WorkflowStore {
       redactWorkflowText(input.prompt),
       input.cacheKey,
       input.promptHash,
-      input.agentManifestHash,
-      input.agent.plugin,
-      input.agent.name,
-      redactWorkflowText(input.agent.description),
-      input.agent.sourceHash,
       input.worker === undefined ? null : redactedJson(input.worker),
       input.outputSchema === undefined ? null : redactedJson(input.outputSchema),
       redactedJson(input.finishCriteria),
@@ -2387,8 +2430,7 @@ export class WorkflowStore {
   listRunTaskSnapshots(runId: string): WorkflowRunTaskSnapshot[] {
     const rows = this.db.query<RunTaskSnapshotRow, [string]>(`
       select run_id, ordinal, task_id, phase, prompt, cache_key, prompt_hash,
-             agent_manifest_hash, agent_plugin, agent_name, agent_description,
-             agent_source_hash, worker_json, output_schema_json,
+             worker_json, output_schema_json,
              finish_criteria_json, created_at
       from workflow_run_task_snapshots
       where run_id = ?
@@ -2402,14 +2444,6 @@ export class WorkflowStore {
       prompt: row.prompt,
       cacheKey: row.cache_key,
       promptHash: row.prompt_hash,
-      agentManifestHash: row.agent_manifest_hash,
-      agent: {
-        plugin: row.agent_plugin,
-        name: row.agent_name,
-        description: row.agent_description,
-        sourceHash: row.agent_source_hash,
-        manifestHash: row.agent_manifest_hash,
-      },
       ...(row.worker_json !== null ? { worker: JSON.parse(row.worker_json) as WorkflowRunTaskSnapshot["worker"] } : {}),
       ...(row.output_schema_json !== null ? { outputSchema: JSON.parse(row.output_schema_json) as unknown } : {}),
       finishCriteria: JSON.parse(row.finish_criteria_json) as string[],
@@ -2543,7 +2577,6 @@ export class WorkflowStore {
     this.db.transaction(() => {
       const row = this.db.query<TaskAttemptRow, [
         WorkflowTaskAttemptFinishedInput["status"],
-        string | null,
         string | null,
         string | null,
         string | null,
@@ -3037,7 +3070,6 @@ export class WorkflowStore {
     readonly runId: string;
     readonly ordinal: number;
     readonly identity: WorkflowTaskIdentity;
-    readonly agent: { readonly plugin: string; readonly name: string };
     readonly status: WorkflowRunTaskStatus;
     readonly cached: boolean;
     readonly output: unknown;
@@ -3053,9 +3085,9 @@ export class WorkflowStore {
       }
       this.db.query(`
         insert into workflow_run_tasks (
-          run_id, ordinal, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-          agent_plugin, agent_name, status, cached, output_json, metadata_json
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          run_id, ordinal, workflow, task_id, cache_key, prompt_hash,
+          status, cached, output_json, metadata_json
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.runId,
         input.ordinal,
@@ -3063,9 +3095,6 @@ export class WorkflowStore {
         input.identity.taskId,
         input.identity.cacheKey,
         input.identity.promptHash,
-        input.identity.agentManifestHash,
-        input.agent.plugin,
-        input.agent.name,
         input.status,
         input.cached ? 1 : 0,
         redactedJson(input.output),
@@ -3098,7 +3127,7 @@ export class WorkflowStore {
   listRunTasks(runId: string): WorkflowRunTaskRecord[] {
     this.failDeadPidRuns();
     const rows = this.db.query<RunTaskRow, [string]>(`
-      select run_id, ordinal, task_id, cache_key, status, cached, agent_plugin, agent_name, output_json, metadata_json
+      select run_id, ordinal, task_id, cache_key, status, cached, output_json, metadata_json
       from workflow_run_tasks
       where run_id = ?
       order by ordinal asc
@@ -3110,10 +3139,6 @@ export class WorkflowStore {
       cacheKey: row.cache_key,
       status: row.status,
       cached: row.cached === 1,
-      agent: {
-        plugin: row.agent_plugin,
-        name: row.agent_name,
-      },
       output: JSON.parse(row.output_json) as unknown,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
     }));
@@ -3143,7 +3168,6 @@ export class WorkflowStore {
         status: task.status,
         cacheKey: task.cacheKey,
         cached: task.cached,
-        agent: task.agent,
       });
     }
 
@@ -3245,7 +3269,6 @@ export class WorkflowStore {
         externalSessionPointer: externalSessionPointer(metadata) ?? patch.externalSessionPointer ?? existing?.externalSessionPointer ?? null,
         durationMs,
         ...(patch.cacheLookup !== undefined || existing?.cacheLookup !== undefined ? { cacheLookup: patch.cacheLookup ?? existing?.cacheLookup } : {}),
-        ...(patch.agent !== undefined || existing?.agent !== undefined ? { agent: patch.agent ?? existing?.agent } : {}),
         ...(patch.lastEventType !== undefined || existing?.lastEventType !== undefined ? { lastEventType: patch.lastEventType ?? existing?.lastEventType } : {}),
         ...(lastEventAt !== undefined ? { lastEventAt } : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
@@ -3263,7 +3286,6 @@ export class WorkflowStore {
         execution: task.cached ? "cached" : "fresh",
         evidenceSource: task.cached ? "prior-cache-record" : "this-run",
         cached: task.cached,
-        agent: task.agent,
         metadata: task.metadata,
         repairCount: repairCountMetadata(task.metadata) ?? 0,
         durationMs: numberMetadata(task.metadata, "durationMs"),
@@ -3501,7 +3523,6 @@ export class WorkflowStore {
 
   recordCompleted(input: {
     readonly identity: WorkflowTaskIdentity;
-    readonly agent: { readonly plugin: string; readonly name: string };
     readonly output: unknown;
     readonly metadata?: Record<string, unknown>;
     readonly outputSource?: WorkflowTaskOutputSource;
@@ -3509,7 +3530,6 @@ export class WorkflowStore {
     const metadata = normalizeWorkflowSessionMetadata(input.metadata);
     const policy = applyWorkflowDataPolicy({
       identity: input.identity,
-      agent: input.agent,
       output: input.output,
       ...(metadata !== undefined ? { metadata } : {}),
     });
@@ -3525,13 +3545,11 @@ export class WorkflowStore {
     const key = workflowTaskResourceKey(input.identity);
     this.db.query(`
       insert into workflow_task_records (
-        scope_key, stable_key, semantic_hash, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-        agent_plugin, agent_name, status, output_json, metadata_json, output_source, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, datetime('now'))
+        scope_key, stable_key, semantic_hash, workflow, task_id, cache_key, prompt_hash,
+        status, output_json, metadata_json, output_source, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, datetime('now'))
       on conflict(scope_key, stable_key, semantic_hash)
       do update set
-        agent_plugin = excluded.agent_plugin,
-        agent_name = excluded.agent_name,
         status = excluded.status,
         output_json = excluded.output_json,
         metadata_json = excluded.metadata_json,
@@ -3547,9 +3565,6 @@ export class WorkflowStore {
       input.identity.taskId,
       input.identity.cacheKey,
       input.identity.promptHash,
-      input.identity.agentManifestHash,
-      input.agent.plugin,
-      input.agent.name,
       JSON.stringify(persisted.output),
       persisted.metadata === undefined ? null : JSON.stringify(persisted.metadata),
       input.outputSource ?? null,

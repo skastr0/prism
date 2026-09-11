@@ -143,9 +143,7 @@ test("workflow run governance CLI inspects, redacts exports, deletes exactly, an
       taskId: "build",
       cacheKey: "build",
       promptHash: "a".repeat(64),
-      agentManifestHash: "b".repeat(64),
     },
-    agent: { plugin: "forge", name: "builder" },
     output: { summary: "old" },
   });
   retentionStore.close();

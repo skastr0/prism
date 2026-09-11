@@ -63,7 +63,38 @@ export const workflow = defineWorkflow({
 | \`codex-cli\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-read-only\` \`sandbox-workspace-write\` |
 | \`cursor\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-workspace-write\` |
 | \`devin\` \`omp\` | \`legacy\` \`permissive\` \`restricted\` \`full-access\` |
-| \`amp-code\` \`antigravity-cli\` \`grok\` \`hermes\` \`kimi-code\` \`opencode\` | \`legacy\` \`permissive\` \`full-access\` |
+| \`amp-code\` \`antigravity-cli\` \`grok\` \`hermes\` \`kimi-code\` \`opencode\` \`opencode2\` | \`legacy\` \`permissive\` \`full-access\` |
+
+## SOP phases (optional plugin)
+
+A compiled plugin adds typed phase refs. Tasks have no agent field — bind a
+phase with \`wf.phase\`, then \`ctx.task({ worker, prompt })\`:
+
+\`\`\`ts
+import { Effect } from "effect";
+import { defineWorkflow } from "prism";
+import { sops } from "prism/refs/sops";
+
+export const workflow = defineWorkflow({
+  name: "forge-explore",
+  run: (wf) =>
+    Effect.gen(function* () {
+      return yield* wf.phase(sops.forge.forge.phases.explore, (ctx) =>
+        ctx.task({
+          id: "explore",
+          worker: { worker: "claude-code" },
+          prompt: "Inspect the repo; return seams, risks, and a direction.",
+        }),
+      );
+    }),
+});
+\`\`\`
+
+\`wf.phase\` applies the SOP's input/output schemas, acceptance criteria, and
+framing. Discover what is compiled here: \`prism workflow catalog --sop forge\`.
+Refs live at \`~/.prism/state/projects/<key>/generated/\` — run from the repo
+root so the project key matches. If \`prism workflow refs\` is missing/stale,
+refresh the plugin (not required for plugin-free workflows).
 
 ## Commands (all plugin-free)
 

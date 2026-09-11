@@ -119,7 +119,7 @@ const textFromUnknown = (value: unknown): string | undefined => {
     if (parts.length > 0) return parts.join("");
   }
   if (isRecord(value)) {
-    for (const key of ["content", "text", "output", "message"] as const) {
+    for (const key of ["content", "text", "output", "message", "parts"] as const) {
       const nested = textFromUnknown(value[key]);
       if (nested !== undefined) return nested;
     }

@@ -1651,12 +1651,17 @@ test("bare doctor defaults to detected-installed harnesses and prints the detect
   const prismHome = join(root, "prism-home");
 
   // Only claude-code and codex-cli have a global config root on this fake
-  // HOME; every other supported harness's root is absent.
+  // HOME; every other supported harness's root is absent. Hide the host
+  // opencode2 binary so PATH does not leak into HOME-isolated detection.
   await mkdir(join(homeRoot, ".claude"), { recursive: true });
   await mkdir(join(homeRoot, ".codex"), { recursive: true });
   await mkdir(prismHome, { recursive: true });
 
-  const result = await runCli(["doctor"], { HOME: homeRoot, PRISM_HOME: prismHome });
+  const result = await runCli(["doctor"], {
+    HOME: homeRoot,
+    PRISM_HOME: prismHome,
+    PRISM_WORKFLOW_OPENCODE2_BIN: "/nonexistent/opencode2",
+  });
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout.split("\n")[0]).toBe("Detected installed harnesses: claude-code, codex-cli");
@@ -1683,7 +1688,11 @@ test("bare refresh/plan default to detected-installed harnesses (fake HOME, matc
   );
   await writeFile(rulePath, "Always prefer the detected-installed default.\n");
 
-  const env = { HOME: homeRoot, PRISM_HOME: prismHome };
+  const env = {
+    HOME: homeRoot,
+    PRISM_HOME: prismHome,
+    PRISM_WORKFLOW_OPENCODE2_BIN: "/nonexistent/opencode2",
+  };
   for (const command of ["refresh", "plan"]) {
     // `plan` has no --dry-run flag (it is always a dry run); `refresh` needs
     // it explicitly so this test never writes into the fake HOME.
@@ -1712,12 +1721,16 @@ test("bare invocation fails with a helpful error when no harness is installed (n
   await mkdir(homeRoot, { recursive: true });
   await mkdir(prismHome, { recursive: true });
 
-  const env = { HOME: homeRoot, PRISM_HOME: prismHome };
+  const env = {
+    HOME: homeRoot,
+    PRISM_HOME: prismHome,
+    PRISM_WORKFLOW_OPENCODE2_BIN: "/nonexistent/opencode2",
+  };
   const doctorResult = await runCli(["doctor"], env);
 
   expect(doctorResult.exitCode).toBe(2);
   expect(doctorResult.stderr).toContain(
-    "No installed harnesses detected (checked the global config root for every supported harness).",
+    "No installed harnesses detected (config root for most harnesses; opencode2 by `opencode2` on PATH).",
   );
   expect(doctorResult.stderr).toContain("Please specify --harness <ids> or --all.");
   // Never a silent no-op and never a silent fall-through to --all: no

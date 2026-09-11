@@ -89,10 +89,21 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
+  scaffoldPluginFreeWorkflowSource,
   scaffoldWorkflowSource,
   searchCatalog,
+  WORKFLOW_WORKERS,
   workflowRefsStatus,
 } from "./workflow-catalog.js";
+import {
+  buildWorkflowModelCatalog,
+  loadHarnessTypesSnapshot,
+  parseWorkflowWorkerId,
+  pickPluginFreeScaffoldPins,
+  renderWorkerModelCatalogHuman,
+  renderWorkerModelCountsHuman,
+} from "./workflow-models.js";
+import { renderWorkflowAuthoringSkillMarkdown, writeWorkflowAuthoringSkill } from "./workflow-cli/skill.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
 import { runConfigureTui } from "./configure/index.js";
@@ -107,6 +118,9 @@ import {
 } from "./workflow-controls.js";
 import type { WorkflowPermissionMode } from "./workflows.js";
 import { decodeWorkflowProcessGuardRequest, runWorkflowProcessGuard } from "./workflow-process-guard.js";
+import { refreshHarnessTypes, renderHarnessTypesRefreshHuman } from "./harness-types-discover.js";
+import { generateWorkflowTsconfig } from "./workflow-tsconfig.js";
+import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -216,7 +230,7 @@ program
 
 const workflow = program
   .command("workflow")
-  .description("Validate Prism workflow files");
+  .description("Author and run harness workflows (plugins optional)");
 
 const parseIntegerAtLeast = (value: string, minimum: number, message: string): number => {
   const parsed = Number(value);
@@ -322,8 +336,8 @@ workflow
 workflow
   .command("catalog")
   .description(
-    "Discover refs (agents.*/orbits.*/sops.*/models.*) compiled for this project. Default: compact index. " +
-      "--orbit <ns> for one namespace, --sop <name> for one SOP, --ref <ref> for one entity, --query <text> to search, --full for the complete dump.",
+    "Discover workflow surface: live harness workers always, plugin refs when compiled. Default: compact index. " +
+      "Without a plugin, --query searches harness models. With compiled refs: --orbit <ns>, --sop <name>, --ref <ref>, --full.",
   )
   .option("--json", "Emit machine-readable JSON")
   .option("--orbit <name>", "Full detail for one orbit/namespace")
@@ -348,10 +362,43 @@ workflow
 
       const result = await buildWorkflowCatalog();
       if (result.catalog === null) {
-        const output = options.json === true
-          ? JSON.stringify({ surfaceDir: result.surfaceDir, present: false }, null, 2)
-          : renderCatalogHuman(result);
-        await writeStdout(`${output}\n`);
+        if (options.orbit !== undefined || options.ref !== undefined || options.full === true) {
+          throw new CliUsageError(
+            [
+              "That catalog flag needs compiled plugin refs (optional).",
+              `Missing: ${result.surfaceDir}`,
+              "List live slugs: `prism workflow models --worker cursor --query opus`",
+              "Scaffold: `prism workflow scaffold hello`",
+              "Compile refs only if you want agents.*: `prism refresh <plugin-path>`",
+            ].join("\n"),
+          );
+        }
+        const models = buildWorkflowModelCatalog({ query: options.query });
+        if (options.json === true) {
+          await writeStdout(`${JSON.stringify({
+            surfaceDir: result.surfaceDir,
+            present: false,
+            pluginRefs: false,
+            workers: [...WORKFLOW_WORKERS],
+            snapshotPresent: models.snapshotPresent,
+            harnesses: models.catalogs,
+            query: options.query,
+          }, null, 2)}\n`);
+          return;
+        }
+        const body = options.query !== undefined
+          ? renderWorkerModelCatalogHuman(models.catalogs, {
+            query: options.query,
+            missingSnapshot: !models.snapshotPresent,
+          })
+          : [
+            renderCatalogHuman(result),
+            "",
+            models.snapshotPresent
+              ? renderWorkerModelCountsHuman(models.catalogs)
+              : renderWorkerModelCatalogHuman(models.catalogs, { missingSnapshot: true }),
+          ].join("\n");
+        await writeStdout(`${body}\n`);
         return;
       }
       const catalog = result.catalog;
@@ -421,6 +468,85 @@ workflow
   });
 
 workflow
+  .command("skill")
+  .description("Print the embedded workflow-authoring skill (plugin-free)")
+  .option("--write", "Write SKILL.md under PRISM_HOME/runtime/workflow-authoring/")
+  .action(async (options: { readonly write?: boolean }) => {
+    try {
+      if (options.write === true) {
+        const result = await writeWorkflowAuthoringSkill(resolvePrismHome());
+        await writeStdout(`Wrote ${result.path}\n`);
+        return;
+      }
+      await writeStdout(`${renderWorkflowAuthoringSkillMarkdown()}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow skill failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflow
+  .command("models")
+  .description("List live harness model slugs (plugin-free). Family-grouped; filter with --worker and --query")
+  .option("--json", "Emit machine-readable JSON")
+  .option("--worker <id>", "One workflow worker (cursor, amp-code, ...)")
+  .option("--query <text>", "Case-insensitive substring over family ids and slugs")
+  .action(async (options: {
+    readonly json?: boolean;
+    readonly worker?: string;
+    readonly query?: string;
+  }) => {
+    try {
+      const worker = options.worker === undefined ? undefined : parseWorkflowWorkerId(options.worker);
+      const result = buildWorkflowModelCatalog({ worker, query: options.query });
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify({
+          snapshotPresent: result.snapshotPresent,
+          query: options.query,
+          worker,
+          harnesses: result.catalogs,
+        }, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`${renderWorkerModelCatalogHuman(result.catalogs, {
+        query: options.query,
+        missingSnapshot: !result.snapshotPresent,
+      })}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow models failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflow
+  .command("refresh-harness-types")
+  .description("Discover installed harness models and write global typed unions for plugin-free workflow authoring")
+  .option("--json", "Emit machine-readable JSON")
+  .action(async (options: { readonly json?: boolean }) => {
+    try {
+      const prismHome = resolvePrismHome();
+      const result = await refreshHarnessTypes(prismHome);
+      const { key } = deriveProjectKey();
+      const refsDir = projectGeneratedRefsDir(prismHome, key);
+      await generateWorkflowTsconfig({
+        prismHome,
+        refsDir: existsSync(refsDir) ? refsDir : undefined,
+        workflowDir: prismWorkflowsSourceDir(prismHome),
+        harnessTypesPath: result.modelsPath,
+      });
+      const skill = await writeWorkflowAuthoringSkill(prismHome);
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify({ ...result, skillPath: skill.path }, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`${renderHarnessTypesRefreshHuman(result)}\nSkill: ${skill.path}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow refresh-harness-types failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+workflow
   .command("refs")
   .description("Show the generated workflow refs surface for this project and its freshness")
   .option("--json", "Emit machine-readable JSON")
@@ -436,7 +562,7 @@ workflow
 
 workflow
   .command("scaffold <name>")
-  .description("Write a validating starter workflow that uses a real discovered agent ref")
+  .description("Write a validating starter workflow (compiled agent ref when present, otherwise plugin-free)")
   .option("--print", "Print to stdout instead of writing a file")
   .option(
     "--out <path>",
@@ -444,28 +570,33 @@ workflow
   )
   .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
     try {
+      const prismHome = resolvePrismHome();
       const result = await buildWorkflowCatalog();
-      if (result.catalog === null) {
-        printCliError(
-          new Error(`no compiled surface at ${result.surfaceDir} — run \`prism refresh <plugin-path>\` first`),
-          "Workflow scaffold failed",
-        );
-        exitWith(EXIT_CODES.domainFailure);
-        return;
-      }
-      const agent = pickDefaultAgent(result.catalog);
-      const agentRef = agent?.ref;
-      const workers = pickDefaultWorkers(result.catalog);
-      const source = scaffoldWorkflowSource(name, agentRef, workers);
+      const pluginFreePins = pickPluginFreeScaffoldPins(loadHarnessTypesSnapshot(prismHome));
+      const source =
+        result.catalog === null
+          ? scaffoldPluginFreeWorkflowSource(name, pluginFreePins)
+          : scaffoldWorkflowSource(
+            name,
+            pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer",
+            pickDefaultWorkers(result.catalog, pickDefaultAgent(result.catalog)),
+          );
+      const agentRef = result.catalog === null
+        ? "anonymousWorkflowAgent"
+        : pickDefaultAgent(result.catalog)?.ref ?? "agents.forge.explorer";
+      const workers = result.catalog === null
+        ? pluginFreePins.map((pin) => pin.worker)
+        : pickDefaultWorkers(result.catalog, pickDefaultAgent(result.catalog));
       if (options.print === true) {
         await writeStdout(source);
         return;
       }
-      const outPath = options.out ?? join(prismWorkflowsSourceDir(resolvePrismHome()), `${name}.workflow.ts`);
+      const skill = await writeWorkflowAuthoringSkill(prismHome);
+      const outPath = options.out ?? join(prismWorkflowsSourceDir(prismHome), `${name}.workflow.ts`);
       await ensureDir(dirname(outPath));
       await writeFile(outPath, source, "utf8");
       await writeStdout(
-        `Wrote ${outPath} (agent: ${agentRef ?? "(none)"}; workers: ${workers.join(", ")}).\nNext: prism workflow validate ${outPath}\n`,
+        `Wrote ${outPath} (agent: ${agentRef}; workers: ${workers.join(", ")}).\nSkill: ${skill.path}\nNext: prism workflow validate ${outPath}\n`,
       );
     } catch (error) {
       printCliError(error, "Workflow scaffold failed");

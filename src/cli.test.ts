@@ -186,6 +186,130 @@ test("workflow scaffold writes to ~/.prism/workflows by default and never instru
   expect(run.exitCode).toBe(0);
 }, 60_000);
 
+test("workflow refresh-harness-types writes a global cache and plugin-free scaffold works", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const env = { PRISM_HOME: prismHome };
+
+  const refresh = await runCli(["workflow", "refresh-harness-types"], env, { cwd: root });
+  expect(refresh.exitCode).toBe(0);
+  expect(refresh.stdout).toContain(join(prismHome, "state", "harness-types", "harness-models.ts"));
+  expect(refresh.stdout).toContain("amp-code:");
+  const models = await readFile(join(prismHome, "state", "harness-types", "harness-models.ts"), "utf8");
+  expect(models).toContain("ampCodeModelSlugs");
+  expect(models).not.toContain("projects/");
+
+  const catalog = await runCli(["workflow", "catalog"], env, { cwd: root });
+  expect(catalog.exitCode).toBe(0);
+  expect(catalog.stdout).toContain("plugin-free");
+  expect(catalog.stdout).toContain("prism workflow models");
+  expect(catalog.stdout).toContain("Installed harness slugs:");
+
+  const listed = await runCli(["workflow", "models", "--worker", "amp-code", "--json"], env, { cwd: root });
+  expect(listed.exitCode).toBe(0);
+  const listedJson = JSON.parse(listed.stdout) as {
+    snapshotPresent: boolean;
+    harnesses: ReadonlyArray<{ worker: string; modelCount: number }>;
+  };
+  expect(listedJson.snapshotPresent).toBe(true);
+  expect(listedJson.harnesses).toHaveLength(1);
+  expect(listedJson.harnesses[0]?.worker).toBe("amp-code");
+  expect(listedJson.harnesses[0]?.modelCount).toBeGreaterThan(0);
+
+  const queried = await runCli(["workflow", "catalog", "--query", "low"], env, { cwd: root });
+  expect(queried.exitCode).toBe(0);
+  expect(queried.stdout).toMatch(/low/i);
+
+  const unknownWorker = await runCli(["workflow", "models", "--worker", "not-a-worker"], env, { cwd: root });
+  expect(unknownWorker.exitCode).not.toBe(0);
+  expect(unknownWorker.stderr).toContain("Unknown worker");
+
+  const skill = await runCli(["workflow", "skill"], env, { cwd: root });
+  expect(skill.exitCode).toBe(0);
+  expect(skill.stdout).toContain("Plugins are optional");
+  expect(skill.stdout).toContain("prism workflow models");
+
+  const skillWrite = await runCli(["workflow", "skill", "--write"], env, { cwd: root });
+  expect(skillWrite.exitCode).toBe(0);
+  expect(skillWrite.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "SKILL.md"));
+
+  const scaffold = await runCli(["workflow", "scaffold", "plugin-free"], env, { cwd: root });
+  expect(scaffold.exitCode).toBe(0);
+  expect(scaffold.stdout).toContain("anonymousWorkflowAgent");
+  expect(scaffold.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "SKILL.md"));
+  const source = await readFile(join(prismHome, "workflows", "plugin-free.workflow.ts"), "utf8");
+  expect(source).toContain("anonymousWorkflowAgent");
+  expect(source).not.toContain('from "prism/refs"');
+
+  const workflowPath = join(root, "typed-harness.workflow.ts");
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "prism",
+  name: "anonymous",
+  description: "Plugin-free workflow worker",
+  sourceHash: "${"0".repeat(64)}",
+  manifestHash: "${"0".repeat(64)}",
+  installs: [],
+} as const satisfies WorkflowAgentRef;
+
+export const workflow = defineWorkflow({
+  name: "typed-harness",
+  tasks: [defineTask({
+    id: "amp",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    worker: { worker: "amp-code", model: "low" },
+  })],
+});
+`);
+  const scaffoldTypecheck = await runCli(
+    ["workflow", "typecheck", join(prismHome, "workflows", "plugin-free.workflow.ts")],
+    env,
+    { cwd: root },
+  );
+  expect(scaffoldTypecheck.exitCode).toBe(0);
+  expect(scaffoldTypecheck.stderr).toBe("");
+
+  const typecheck = await runCli(["workflow", "typecheck", workflowPath], env, { cwd: root });
+  expect(typecheck.exitCode).toBe(0);
+  expect(typecheck.stderr).toBe("");
+
+  const badPath = join(root, "bad-harness.workflow.ts");
+  await writeFile(badPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "prism",
+  name: "anonymous",
+  description: "Plugin-free workflow worker",
+  sourceHash: "${"0".repeat(64)}",
+  manifestHash: "${"0".repeat(64)}",
+  installs: [],
+} as const satisfies WorkflowAgentRef;
+
+export const workflow = defineWorkflow({
+  name: "bad-harness",
+  tasks: [defineTask({
+    id: "amp",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    worker: { worker: "amp-code", model: "not-a-mode" },
+  })],
+});
+`);
+  const bad = await runCli(["workflow", "typecheck", badPath], env, { cwd: root });
+  expect(bad.exitCode).not.toBe(0);
+  expect(bad.stderr + bad.stdout).toContain("not-a-mode");
+}, 30_000);
+
 test("workflow typecheck accepts a workflow against shipped Prism declarations", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
@@ -1517,7 +1641,7 @@ test("validate rejects agent targets for harnesses without compile lowerers", as
       {
         name: "unsupported-agent-target",
         version: "0.1.0",
-        targets: { agents: ["opencode", "cursor"] },
+        targets: { agents: ["opencode", "openclaw"] },
       },
       null,
       2,

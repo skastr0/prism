@@ -235,7 +235,7 @@ const councilTasks: Record<Harness, ReturnType<typeof councilTask>> = {
     ...(hermesProfile !== undefined && hermesProfile.length > 0 ? { profile: hermesProfile } : {}),
   }),
   "kimi-code": councilTask("kimi-code", agents.prismHarnessQa.qaTester, { worker: "kimi-code" }),
-  "amp-code": councilTask("amp-code", agents.prismHarnessQa.qaTester, { worker: "amp-code", model: "deep" }),
+  "amp-code": councilTask("amp-code", agents.prismHarnessQa.qaTester, { worker: "amp-code", model: "high" }),
 };
 
 // ---------------------------------------------------------------------------

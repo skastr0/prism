@@ -2,8 +2,8 @@ import type { HarnessCatalog } from "./types.js";
 
 /**
  * Oh My Pi (omp) settings catalogue.
- * Researched 2026-08-13 from live ~/.omp/agent/config.yml, oh-my-pi SETTINGS_SCHEMA,
- * harness registry, lowerer capabilities, and workflow worker flags.
+ * Researched 2026-09-09 from live ~/.omp/agent/config.yml, `omp models --json`,
+ * oh-my-pi SETTINGS_SCHEMA, harness registry, lowerer capabilities, and workflow worker flags.
  */
 export const ompCatalog: HarnessCatalog = {
   harness: "omp",
@@ -359,9 +359,10 @@ export const ompCatalog: HarnessCatalog = {
     },
   ],
   refresh: {
-    lastResearched: "2026-08-13",
+    lastResearched: "2026-09-09",
     procedure: [
-      "Run `omp --help` (and scripting flags: --mode json, --approval-mode, --model, --thinking, --profile, --resume)",
+      "Run `omp --help` (and scripting flags: --mode json, --print, --approval-mode, --model, --thinking, --profile, --resume)",
+      "Run `omp models --json` and pin `selector` (`provider/id`), not a bare id",
       "Read ~/.omp/agent/config.yml top-level keys (redact auth.broker.token and any secrets)",
       "Diff against oh-my-pi packages/coding-agent/src/config/settings-schema.ts SETTINGS_SCHEMA",
       "List ~/.omp/agent/extensions/prism-generated-* and agents/, skills/ for install layout",
@@ -370,6 +371,7 @@ export const ompCatalog: HarnessCatalog = {
     ],
     sources: [
       "omp --help",
+      "omp models --json",
       "~/.omp/agent/config.yml",
       "~/.omp/agent/mcp.json",
       "oh-my-pi packages/coding-agent/src/config/settings-schema.ts",
@@ -387,7 +389,9 @@ export const ompCatalog: HarnessCatalog = {
     "Prism does not whole-file own or region-patch config.yml; lowerer returns regions: [].",
     "Install layout: agents/<name>.md, skills/<name>/, extensions/prism-generated-<plugin>/index.ts (+ hooks/).",
     "Rules/commands are declared compile-managed in refresh.ts and lowerer-capabilities, but omp.ts currently does not plan rules/ or commands/ writes — treat as capability claim until lowerer gains them.",
-    "Workflow worker: PRISM_WORKFLOW_OMP_BIN || omp; --mode json --append-system-prompt <agent.md> --approval-mode yolo (permissive/full-access).",
+    "Workflow worker: PRISM_WORKFLOW_OMP_BIN || omp; --mode json --print --append-system-prompt <agent.md> --approval-mode yolo (permissive/full-access).",
+    "Workflow model pins are `omp models --json` selectors (`provider/id`). Default is config.yml modelRoles.default with :thinking stripped; last-resort spec is opencode-go/gpt-5.6-luna.",
+    "opencode-go/* is Console Go and 400s in workflow --print (MissingSessionID). Validate and run fail closed; pin google/ or another non-go selector.",
     "Profiles live under ~/.omp/profiles/<name>/agent/ and are selected via --profile.",
     "Agent skill permission surface is unsupported; permission-only skill access fails closed at compile.",
     "memory.backend default off. local backend writes ~/.omp/agent/memories/<encoded-cwd>/; project .omp/ is config, not the memory store.",

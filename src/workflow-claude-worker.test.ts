@@ -3,8 +3,8 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
-import { buildClaudeArgs, ClaudeWorkflowWorkerError, runClaudeWorkflowTask } from "./workflow-claude-worker.js";
-import type { WorkflowAgentRef } from "./workflows.js";
+import { ClaudeWorkflowWorkerError, runClaudeWorkflowTask } from "./workflow-claude-worker.js";
+import { anonymousWorkflowAgent, type WorkflowAgentRef } from "./workflows.js";
 
 const agent = {
   kind: "agent-ref",
@@ -23,6 +23,40 @@ const task = {
   prompt: "Do the thing.",
   output: Schema.Struct({ summary: Schema.String }),
 };
+
+describe("runClaudeWorkflowTask plugin-free dispatch", () => {
+  test("omits --agent for anonymousWorkflowAgent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-claude-anonymous-"));
+    try {
+      const fakeClaude = join(root, "fake-claude-anonymous.mjs");
+      const callsFile = join(root, "calls.jsonl");
+      await writeFile(fakeClaude, [
+        "#!/usr/bin/env node",
+        "import { appendFileSync } from 'node:fs';",
+        `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(process.argv.slice(2)) + '\\n');`,
+        "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: 'ok' }) }));",
+        "",
+      ].join("\n"));
+      await chmod(fakeClaude, 0o755);
+
+      const result = await runClaudeWorkflowTask({
+        ...task,
+        agent: anonymousWorkflowAgent,
+      }, {
+        cwd: root,
+        bin: fakeClaude,
+        resolvedPermission: "legacy",
+      });
+
+      expect(result.output).toEqual({ summary: "ok" });
+      const args = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
+      expect(args).not.toContain("--agent");
+      expect(args).not.toContain("anonymous");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("runClaudeWorkflowTask session persistence", () => {
   test("passes --no-session-persistence and never exposes the transient Claude session id", async () => {
@@ -152,56 +186,6 @@ describe("runClaudeWorkflowTask failure metadata (OBS-006)", () => {
       const metadata = (failure as ClaudeWorkflowWorkerError).metadata;
       expect(metadata?.adapter).toBe("claude-code");
       expect(metadata?.sessionId).toBe("claude-no-result-session");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("agent-less Claude workflow tasks", () => {
-  test("buildClaudeArgs omits --agent and --plugin-dir when the task has no agent", () => {
-    const args = buildClaudeArgs({
-      prompt: "Bare worker prompt.",
-      permission: "legacy",
-      generatedPlugin: {},
-    });
-    expect(args).not.toContain("--agent");
-    expect(args).not.toContain("--plugin-dir");
-    expect(args).toContain("--print");
-    expect(args.at(-1)).toBe("Bare worker prompt.");
-  });
-
-  test("runClaudeWorkflowTask runs agent-less and omits nativeAgent metadata", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-claude-agentless-"));
-    try {
-      const fakeClaude = join(root, "fake-claude-agentless.mjs");
-      const callsFile = join(root, "calls.jsonl");
-      await writeFile(fakeClaude, [
-        "#!/usr/bin/env node",
-        "import { appendFileSync } from 'node:fs';",
-        `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(process.argv.slice(2)) + '\\n');`,
-        "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: 'ok' }), session_id: 's' }));",
-        "",
-      ].join("\n"));
-      await chmod(fakeClaude, 0o755);
-
-      const agentLessTask = {
-        kind: "workflow-task" as const,
-        id: "bare",
-        prompt: "Do the thing without an agent.",
-        output: Schema.Struct({ summary: Schema.String }),
-      };
-      const result = await runClaudeWorkflowTask(agentLessTask, {
-        cwd: root,
-        bin: fakeClaude,
-        resolvedPermission: "legacy",
-      });
-
-      const args = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
-      expect(args).not.toContain("--agent");
-      expect(args).not.toContain("--plugin-dir");
-      expect(result.output).toEqual({ summary: "ok" });
-      expect(result.metadata).not.toHaveProperty("nativeAgent");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

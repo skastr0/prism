@@ -32,7 +32,7 @@ export class WorkflowWorkerError extends Error {
 }
 
 interface GrokWorkflowRuntime {
-  readonly agent?: string;
+  readonly agent: string;
   readonly env: Record<string, string>;
   readonly temporaryRoot?: string;
   readonly agentSourceBytes?: number;
@@ -97,6 +97,8 @@ const prepareGrokWorkflowRuntime = async (
   maxAgentBytes: number,
 ): Promise<GrokWorkflowRuntime> => {
   const home = grokHome();
+  const pluginId = generatedPluginIdForOwner(task.agent.plugin);
+  const sourceAgentPath = join(home, "plugins", pluginId, "agents", `${task.agent.name}.md`);
   // Pin GROK_HOME to the hardcoded home so grok cannot drift to an ambient one, and suppress
   // grok's Cursor/Claude MCP auto-import so a workflow run does not inherit host MCP servers.
   const env: Record<string, string> = {
@@ -104,9 +106,6 @@ const prepareGrokWorkflowRuntime = async (
     GROK_CURSOR_MCPS_ENABLED: "false",
     GROK_CLAUDE_MCPS_ENABLED: "false",
   };
-  if (task.agent === undefined) return { env };
-  const pluginId = generatedPluginIdForOwner(task.agent.plugin);
-  const sourceAgentPath = join(home, "plugins", pluginId, "agents", `${task.agent.name}.md`);
   if (!(await pathExists(sourceAgentPath))) return { agent: task.agent.name, env };
   const source = await readFile(sourceAgentPath, "utf8");
   const sanitized = sanitizeGrokWorkflowAgentSource(source);
@@ -173,7 +172,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export const buildGrokArgs = (input: {
   readonly cwd: string;
-  readonly agent?: string;
+  readonly agent: string;
   readonly model?: string;
   readonly effort?: string;
   readonly prompt: string;
@@ -191,7 +190,8 @@ export const buildGrokArgs = (input: {
     // (workflow-harness-detection.ts). This fallback only fires when
     // buildGrokArgs is called directly without going through model resolution.
     input.model ?? "grok-4.5",
-    ...(input.agent !== undefined ? ["--agent", input.agent] : []),
+    "--agent",
+    input.agent,
     "--cwd",
     input.cwd,
     ...(input.sessionId !== undefined ? ["-r", input.sessionId] : []),
@@ -307,7 +307,7 @@ export const runGrokWorkflowTask = async (
   });
   const processMetadata = {
     adapter: "grok-cli",
-    ...(task.agent !== undefined ? { nativeAgent: task.agent.name } : {}),
+    nativeAgent: task.agent.name,
     model: options.model ?? "grok-4.5",
     durationMs,
     sessionId,
@@ -372,7 +372,7 @@ export const runGrokWorkflowTask = async (
     const message = error instanceof Error ? error.message : String(error);
     throw new WorkflowWorkerError(message, {
       adapter: "grok-cli",
-      ...(task.agent !== undefined ? { nativeAgent: task.agent.name } : {}),
+      nativeAgent: task.agent.name,
       model: options.model ?? "grok-4.5",
       durationMs: Date.now() - startedAt,
       sessionId,

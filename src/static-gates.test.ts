@@ -310,6 +310,7 @@ test("process.exit is confined to exit helper and tool-runtime / lowerer strings
     "exit.ts",
     "compile/tool-runtime-bundle.ts",
     "compile/lowerers/claude-code.ts",
+    "compile/lowerers/cursor.ts",
     "compile/lowerers/factory-droid.ts",
     "compile/lowerers/grok.ts",
     "compile/lowerers/kimi-code.ts",

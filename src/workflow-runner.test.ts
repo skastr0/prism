@@ -2698,8 +2698,8 @@ console.log(JSON.stringify(result));
   });
 });
 
-describe("agent-less workflow tasks", () => {
-  test("runs a bare worker task and records no agent identity", async () => {
+describe("agent-less workflow tasks normalize to the anonymous sentinel", () => {
+  test("runs a bare worker task under the sentinel identity", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-agentless-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
@@ -2716,26 +2716,24 @@ describe("agent-less workflow tasks", () => {
       });
 
       expect(result.tasks[0]?.output).toEqual({ summary: "bare output" });
-      expect(result.tasks[0]?.agent).toBeUndefined();
+      expect(result.tasks[0]?.agent).toEqual({ plugin: "prism", name: "anonymous" });
 
       const attempts = store.listRunTaskAttempts(result.runId!);
       expect(attempts).toHaveLength(1);
-      // The store column is NULL for an agent-less attempt; the record
-      // projection omits the key, so read it as null.
-      expect(attempts[0]?.nativeAgent ?? null).toBeNull();
+      expect(attempts[0]?.nativeAgent).toBe("anonymous");
 
       const persisted = store.listRunTasks(result.runId!)[0];
-      expect(persisted?.agent).toBeUndefined();
+      expect(persisted?.agent).toEqual({ plugin: "prism", name: "anonymous" });
 
       const snapshots = store.listRunTaskSnapshots(result.runId!);
-      expect(snapshots[0]?.agent).toBeUndefined();
+      expect(snapshots[0]?.agent?.name).toBe("anonymous");
     } finally {
       store.close();
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  test("resolves an agent-less task model from worker.model and cli fallback", () => {
+  test("resolves a sentinel task model from worker.model and cli fallback", () => {
     const bare = defineTask({
       id: "bare",
       prompt: "Do the work.",
@@ -2767,7 +2765,7 @@ describe("agent-less workflow tasks", () => {
       },
     });
     expect(() => resolveWorkflowTaskModel(bareResolver)).toThrow(
-      /modelResolver but no agent/,
+      /has no model target for worker/,
     );
   });
 });

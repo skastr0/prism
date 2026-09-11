@@ -99,7 +99,9 @@ test("doctor includes shared workflow harness detection data without creating fi
   });
 
   expect(report.findings).toEqual([]);
-  expect(report.workflowHarnesses?.map((item) => item.harness)).toEqual(["opencode"]);
+  // Cursor became a first-class workflow worker upstream; detection returns
+  // one entry per requested worker harness.
+  expect(report.workflowHarnesses?.map((item) => item.harness)).toEqual(["opencode", "cursor"]);
   expect(report.workflowHarnesses?.[0]?.schema).toBe("prism.workflow-harness-detection.v1");
 });
 

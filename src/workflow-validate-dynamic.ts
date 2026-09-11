@@ -69,25 +69,39 @@ export const phaseStampedBindingsFromTasks = (
  * tasks without running harness workers. Uses the real `wf.phase` / `runTask`
  * DSL path so stamped phases come from the loaded workflow graph.
  */
-export const probeDynamicWorkflowPhaseTasks = async (
+export interface DynamicWorkflowProbeResult {
+  readonly tasks: ReadonlyArray<AnyWorkflowTask>;
+  readonly phaseBindings: ReadonlyArray<PhaseStampedTaskBinding>;
+  readonly failed: boolean;
+}
+
+/** Probe a dynamic `run:` graph: record every dispatched task without launching workers. */
+export const probeDynamicWorkflowTasks = async (
   workflow: DynamicWorkflowDefinition<string>,
-): Promise<ReadonlyArray<PhaseStampedTaskBinding>> => {
-  const captured: PhaseStampedTaskBinding[] = [];
+): Promise<DynamicWorkflowProbeResult> => {
+  const tasks: AnyWorkflowTask[] = [];
+  const phaseBindings: PhaseStampedTaskBinding[] = [];
   const runtime: WorkflowRuntime = {
     runTask: <Task extends AnyWorkflowTask>(
       task: Task,
     ): Effect.Effect<WorkflowTaskOutput<Task>, WorkflowRuntimeError> =>
       Effect.sync(() => {
+        tasks.push(task);
         if (task.phase !== undefined) {
-          captured.push({ taskId: task.id, phase: task.phase });
+          phaseBindings.push({ taskId: task.id, phase: task.phase });
         }
         return {} as WorkflowTaskOutput<Task>;
       }),
     phase: (contract, fn) => phase(runtime, contract, fn),
   };
-  await Effect.runPromiseExit(workflow.run(runtime));
-  return captured;
+  const exit = await Effect.runPromiseExit(workflow.run(runtime));
+  return { tasks, phaseBindings, failed: exit._tag === "Failure" };
 };
+
+export const probeDynamicWorkflowPhaseTasks = async (
+  workflow: DynamicWorkflowDefinition<string>,
+): Promise<ReadonlyArray<PhaseStampedTaskBinding>> =>
+  (await probeDynamicWorkflowTasks(workflow)).phaseBindings;
 
 const findingForBinding = (
   binding: PhaseStampedTaskBinding,

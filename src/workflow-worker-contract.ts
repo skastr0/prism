@@ -24,7 +24,8 @@ export const workflowWorkerJsonInstruction = (task: AnyWorkflowTask): string => 
 You are running inside a Prism workflow task.
 
 Task id: ${task.id}
-${task.agent !== undefined ? `Agent identity: ${task.agent.plugin}.${task.agent.name}\n` : ""}Contract version: ${WORKFLOW_WORKER_JSON_CONTRACT_VERSION}
+Agent identity: ${task.agent.plugin}.${task.agent.name}
+Contract version: ${WORKFLOW_WORKER_JSON_CONTRACT_VERSION}
 
 Return exactly one JSON value and nothing else. The Prism workflow runtime will parse
 that JSON and validate it with the task's Effect Schema before any downstream task can

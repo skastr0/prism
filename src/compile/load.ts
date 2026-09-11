@@ -69,8 +69,10 @@ import {
   SourceParseError,
   type CompileError,
 } from "./errors.js";
+import { existsSync } from "node:fs";
 import { PluginManifestError } from "../errors.js";
 import { validateSkillName } from "../manifest.js";
+import { harnessModelsModulePath } from "../harness-types.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { deriveProjectKey, projectGeneratedAgentsPath, projectGeneratedRefsDir } from "../project-key.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
@@ -170,10 +172,10 @@ export default effect;
 
 /**
  * The workflow DSL runtime. Off-repo workflow files import { defineTask,
- * defineWorkflow } from "prism"; this module supplies those builders with
- * behavior identical to src/workflows.ts. Schema is read from the binary's
- * embedded Effect (globalThis.__prism_effect) so Schema.isSchema and
- * decodeTaskOutput operate on the binary's Effect instance.
+ * defineWorkflow, anonymousWorkflowAgent } from "prism"; this module supplies
+ * those builders with behavior identical to src/workflows.ts. Schema is read
+ * from the binary's embedded Effect (globalThis.__prism_effect) so
+ * Schema.isSchema and decodeTaskOutput operate on the binary's Effect instance.
  */
 const WORKFLOW_DSL_RUNTIME_JS = `
 const effect = globalThis.__prism_effect;
@@ -181,6 +183,16 @@ if (!effect) {
   throw new Error("prism Effect runtime bridge was not initialized");
 }
 const Schema = effect.Schema;
+
+export const anonymousWorkflowAgent = {
+  kind: "agent-ref",
+  plugin: "prism",
+  name: "anonymous",
+  description: "Plugin-free workflow worker (no compiled Prism agent).",
+  sourceHash: "${"0".repeat(64)}",
+  manifestHash: "${"0".repeat(64)}",
+  installs: [],
+};
 
 export const defineTask = (definition) => ({
   kind: "workflow-task",
@@ -322,6 +334,8 @@ interface LoadSpecifierOverrides {
   readonly prismRefs?: string;
   /** Targets for `prism/refs/<module>` imports; absent when not applicable. */
   readonly prismRefsModules?: Readonly<Record<string, string>>;
+  /** Target for bare `prism/harnesses` imports (global harness model types). */
+  readonly prismHarnesses?: string;
   /**
    * Optional absolute path to the local Prism source entry. When provided,
    * absolute imports pointing at this path are rewritten to bare `prism` so
@@ -372,6 +386,9 @@ const rewriteImportSpecifiers = async (
       rewritten = replaceBareSpecifier(rewritten, specifier, target);
     }
     rewritten = replaceBareSpecifier(rewritten, "prism/refs", overrides.prismRefs);
+  }
+  if (overrides.prismHarnesses !== undefined) {
+    rewritten = replaceBareSpecifier(rewritten, "prism/harnesses", overrides.prismHarnesses);
   }
   rewritten = replaceBareSpecifier(rewritten, "prism", overrides.prism);
   rewritten = replaceBareSpecifier(rewritten, "effect", overrides.effect);
@@ -613,11 +630,15 @@ const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> =>
 const workflowSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
   const runtimePaths = await getImportRuntimePaths();
   const cacheBust = `?t=${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const harnessTypesPath = harnessModelsModulePath(resolvePrismHome());
   return {
     prism: toFileSpecifier(runtimePaths.workflowDsl),
     effect: toFileSpecifier(runtimePaths.effect),
     prismRefs: `${toFileSpecifier(workflowRefsTargetPath())}${cacheBust}`,
     prismRefsModules: workflowRefsModuleTargets(cacheBust),
+    ...(existsSync(harnessTypesPath)
+      ? { prismHarnesses: `${toFileSpecifier(harnessTypesPath)}${cacheBust}` }
+      : {}),
   };
 };
 

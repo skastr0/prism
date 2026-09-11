@@ -27,7 +27,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Kimi Code | generated plugin `prism-context` skill | generated plugin command skills | generated plugin role skills | generated plugin skills |
 | Amp Code | `~/.config/amp/AGENTS.md` | generated plugin `registerCommand` | generated role skills | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
-| Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | - | `~/.cursor/skills/` |
+| Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | generated local plugin `agents/` | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
 | Pi | generated package extension context | generated package `prompts/` | pi-agents markdown discovery | generated package `skills/` |
 | Oh My Pi | native extension context | `~/.omp/agent/commands/` | native agent discovery | `~/.omp/agent/skills/` |
@@ -48,13 +48,13 @@ Kimi Code is part of the `coding-harness` preset with compile-phase generated pl
 
 Amp Code is part of the `coding-harness` preset with compile-phase native TypeScript plugin support. Prism emits one generated plugin under `.amp/plugins/prism-generated-<source-plugin>.ts` for project scope or `<amp-root>/plugins/prism-generated-<source-plugin>.ts` for global/system scope, lowers markdown commands with Amp's `registerCommand` API by appending the command prompt to the active thread, registers canonical tools with Amp's `registerTool` API, and lowers supported Prism hooks through Amp's `amp.on(...)` plugin events. Prism maps `tool.before -> tool.call`, `tool.after -> tool.result`, and `session.start -> session.start`; `session.end` fails closed because Amp does not expose a native session-end event. Compiled agents still lower as generated role skills rather than experimental custom Amp agent modes.
 
-Cursor is part of the `coding-harness` preset with tools-only compile support. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts lower into a generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json` and `commands/` component discovery. Cursor Agent Skills are docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into Prism's CLI tool runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); invoke with `prism tools invoke`. Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
+Cursor is part of the `coding-harness` preset with compile-phase plugin-bundle support plus a workflow worker. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts, compiled agents, concrete orbit skills, and Prism hooks lower into one generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json`, `commands/`, `agents/`, `skills/`, and `hooks/hooks.json`. Compiled agents are Cursor plugin subagents (`name` / `description` / optional `model`); the Agent CLI has no `--agent` selector, so the workflow worker still prompt-injects identity. Cursor plugin hooks are Claude-shaped command scripts, not an SDK. Cursor Agent Skills stay docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Canonical tools lower into Prism's CLI tool runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`. The workflow worker runs `agent --print --output-format stream-json --trust` (default model `composer-2.5-fast`) and resumes via `--resume`. Per-agent skill permission visibility remains unsupported.
 
-Devin CLI is part of the `coding-harness` preset. Install-phase rules append to `~/.config/devin/AGENTS.md` (project: root/project `AGENTS.md` via Devin's native discovery). Shared skills install into `~/.config/devin/skills/` or project `.devin/skills/`. Compile-phase concrete orbit skills lower as skills; hooks lower to Claude-compatible `hooks.v1.json` plus Prism-owned wrapper scripts under `hooks/`. Prism does **not** whole-file own `~/.config/devin/config.json` (user prefs and herdr hooks live there). PR1 does not manage primary agents or `devin plugins install`. Workflow worker runs `devin -p` with `--model` (default `swe-1-7`), `--permission-mode`, optional `--agent-config`, `--export` ATIF session capture, and `-r` resume.
+Devin CLI is part of the `coding-harness` preset. Install-phase rules append to `~/.config/devin/AGENTS.md` (project: root/project `AGENTS.md` via Devin's native discovery). Shared skills install into `~/.config/devin/skills/` or project `.devin/skills/`. Compile-phase concrete orbit skills lower as skills; hooks lower to Claude-compatible `hooks.v1.json` plus Prism-owned wrapper scripts under `hooks/`. Prism does **not** whole-file own `~/.config/devin/config.json` (user prefs and herdr hooks live there). PR1 does not manage primary agents or `devin plugins install`. Workflow worker runs `devin -p` with `--model` (default `swe-1-7`), `--permission-mode`, `--prompt-file`, `--export` ATIF session capture, and `-r` resume. Devin CLI has no `--agent-config`; identity stays in the prompt file.
 
 Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
-Oh My Pi (`omp`) is a distinct `coding-harness` target, not an alias for Pi. Global outputs live under `~/.omp/agent/`; project outputs live under `<project>/.omp/`. Prism writes rules, commands, compiled agents, managed skills, and concrete orbit skills to OMP's native discovery paths, and emits canonical tools plus hook wrappers through one generated TypeScript extension under `extensions/prism-generated-<source-plugin>/`. Workflow tasks invoke OMP scripting mode with `--mode json`, inject the compiled agent through `--append-system-prompt`, preserve harness-bound provider/model/thinking fields, map Prism permissions to OMP approval/tool flags, and resume only the exact captured OMP session during structured-output repair.
+Oh My Pi (`omp`) is a distinct `coding-harness` target, not an alias for Pi. Global outputs live under `~/.omp/agent/`; project outputs live under `<project>/.omp/`. Prism writes rules, commands, compiled agents, managed skills, and concrete orbit skills to OMP's native discovery paths, and emits canonical tools plus hook wrappers through one generated TypeScript extension under `extensions/prism-generated-<source-plugin>/`. Workflow tasks invoke OMP scripting mode with `--mode json --print`, inject the compiled agent through `--append-system-prompt` (plugin-free tasks use a temp system prompt), pin `worker.model` as an `omp models --json` selector (`provider/id`), preserve harness-bound provider/thinking fields, map Prism permissions to OMP approval/tool flags, and resume only the exact captured OMP session during structured-output repair.
 
 ## Architecture invariants (owner doctrine — binding on all agents working in this repo)
 
@@ -63,7 +63,7 @@ These are settled owner rulings, not suggestions. Do not re-litigate them; when 
 1. **Shape in core, data in userland.** Prism core owns the *contract* (types/schema) of every artifact kind — agents, skills, tools, rules, commands, hooks, modelspaces, workflows. The *data* is user-aligned and lives in 0..n plugins in the dependency graph. Core ships no default data.
 2. **Merge-or-crash, declared per kind.** Multiple plugins may carry the same artifact kind only where that kind's contract declares a dedupe-and-merge law (e.g. modelspaces merge by (modelspace, profile, harness) cell; shared-file regions merge by fence key). Where no merge law is sensible — duplicated agents, duplicated tools — the law is **crash**: a plan/validate-time hard error naming both plugins. Never silent last-writer-wins.
 3. **One representation per artifact, across all consumers.** Within a plugin, harness lowering and workflow type generation must speak the same representation of the same artifact. Two stacks addressing the same concept differently is a bug (see: amp workflow mode vs modelspaces, closed by PQ-154).
-4. **Model identifiers are harness-bound.** There is no transcendent model value. Each harness owns its addressing shape (opencode slug; codex slug+effort; pi provider+model; amp `mode: deep|rush`). Profile cells are typed with each harness's own shape. Never introduce a shared "model" type; the only shared thing is the record structure.
+4. **Model identifiers are harness-bound.** There is no transcendent model value. Each harness owns its addressing shape (opencode slug; codex slug+effort; pi provider+model; amp `--mode` low|medium|high|ultra or a plugin mode key). Profile cells are typed with each harness's own shape. Never introduce a shared "model" type; the only shared thing is the record structure.
 5. **Demand follows capability.** A resolver may only require data that some consuming surface actually uses. Do not demand a model target for a harness whose compiled agent surface cannot carry one. Capability truth lives in the lowerer-capabilities registry — the single harness enumeration; all other harness lists derive from it or are gated against it.
 6. **No warnings.** A warning is a deferred error: it accumulates until a real error is buried in it, and in AI-era economics fixes are near-instant. Every state is either declared-valid (silent) or invalid (hard error). Errors carry their remediation verbatim — file, line, and the exact one-line edits — so any agent fixes them in one shot (error-as-prompt). Batch isolation is kept: one plugin's error never aborts its neighbors' convergence.
 7. **No adopt, ever.** Prism never takes ownership of a file it cannot deterministically prove it owns (namespace, fence, or ledger). A persistent `blocked` means the *claim* is wrong (e.g. a whole-file claim on a shared user file), not that adoption machinery is missing. Shared user files (AGENTS.md, config.toml, settings) take fenced regions only — never whole-file ownership.
@@ -150,6 +150,15 @@ prism validate <plugin-path>
 
 # List supported harness IDs
 prism harnesses
+
+# Discover installed harness models into a global typed cache
+prism workflow refresh-harness-types
+
+# List live harness slugs (plugin-free)
+prism workflow models --worker cursor --query opus
+
+# Embedded workflow authoring skill
+prism workflow skill
 ```
 
 ### Prism home and managed state
@@ -159,6 +168,7 @@ Prism stores cross-harness state in Prism home, defaulting to `~/.prism` and ove
 - `~/.prism/config.json` controls managed behavior. The current config shape is `{ "version": 1, "backup": { "mode": "always" | "never", "retentionPerTarget": 3 } }`.
 - `~/.prism/backups/` stores managed backups outside harness config trees. Prism preserves original filenames and does not create sibling `.bak` files.
 - `~/.prism/state/roots/*.json` records files and rule sections Prism owns for each harness root.
+- `~/.prism/state/harness-types/` is the machine-wide discovered harness model cache (`prism workflow refresh-harness-types`). It is not project-keyed.
 - Re-running `prism refresh` is the sync operation. It compiles first where relevant, writes desired outputs, skips unchanged content, fails closed on drift, and prunes stale Prism-owned outputs.
 - Existing files that Prism does not own are not silently adopted. Use `--overwrite` when deliberately replacing an unmanaged whole-file artifact.
 
@@ -602,11 +612,12 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
-    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
+    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
     "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
-    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"]
+    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "hooks": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"]
   }
 }
 ```
@@ -723,10 +734,14 @@ prism plan ./my-plugin --harness claude-code
 
 #### Cursor
 
+- Writes one generated local plugin per compiled source plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/`
+- Writes compiled agents into the generated plugin's `agents/<name>.md` as Cursor subagents (`name`, `description`, optional `model`)
+- Writes concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Installs command artifacts through the same generated plugin's `commands/`
+- Emits `hooks/hooks.json` plus bundled hook wrappers using Cursor plugin hook event names (`preToolUse`, `sessionStart`, …). These are command scripts, not an SDK.
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); invoke via `prism tools invoke`
-- Installs command artifacts through generated local Cursor plugins under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/commands/`
 - Keeps install-phase skills direct because Cursor documents Agent Skills under `.cursor/skills/` and `~/.cursor/skills/`
-- Fails closed for compiled agents, orbits, hooks, and per-agent skill permission visibility
+- Fails closed for per-agent skill permission visibility. The workflow worker still prompt-injects identity because `agent` has no `--agent` selector.
 
 #### Pi
 

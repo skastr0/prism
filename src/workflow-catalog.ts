@@ -400,11 +400,15 @@ export const buildWorkflowCatalog = async (
 
 const renderMissingSurfaceHuman = (surfaceDir: string): string =>
   [
-    `No compiled workflow surface found for this project at:`,
+    `Workflows are plugin-free. No compiled plugin refs at:`,
     `  ${surfaceDir}`,
     ``,
-    `Compile this project first: \`prism refresh <plugin-path>\`,`,
-    `then re-run \`prism workflow catalog\`.`,
+    `List live harness slugs:  \`prism workflow models\``,
+    `Query one worker:         \`prism workflow models --worker cursor --query opus\``,
+    `Refresh the snapshot:     \`prism workflow refresh-harness-types\``,
+    `Scaffold a starter:       \`prism workflow scaffold hello\``,
+    ``,
+    `Plugin refs (agents.* / orbits.*) are optional. Compile a plugin only if you want them.`,
   ].join("\n");
 
 /** Human-readable full-detail catalog rendering (used by `--full` and `--orbit <ns>`). */
@@ -514,7 +518,8 @@ export const renderCompactIndexHuman = (index: CompactCatalogIndex): string => {
   }
   lines.push(``);
   lines.push(`workers: ${index.workers.join(", ")}`);
-  lines.push(`model profiles: ${index.modelProfileCount}`);
+  lines.push(`model profiles: ${index.modelProfileCount}  (plugin modelspaces — optional)`);
+  lines.push(`harness models: \`prism workflow models\`  (plugin-free live slugs)`);
   lines.push(``);
   lines.push(
     `Drill down: --orbit <ns> (one namespace) | --ref <ref> (one entity) | --query <text> (search) | --full (complete dump)`,
@@ -821,7 +826,9 @@ export const renderRefsStatus = (status: RefsStatus): string => {
   if (!status.present) {
     return [
       `refs:      ${status.surfaceDir}`,
-      `freshness: missing — compile this project first (\`prism refresh <plugin-path>\`)`,
+      `freshness: missing — no compiled plugin refs (optional)`,
+      `  List slugs:  \`prism workflow models\``,
+      `  Compile refs only if you want agents.*: \`prism refresh <plugin-path>\``,
     ].join("\n");
   }
   const detail =
@@ -852,39 +859,33 @@ export const pickDefaultAgentRef = (catalog: WorkflowCatalog): string =>
   pickDefaultAgent(catalog)?.ref ?? "agents.forge.explorer";
 
 /**
- * Pick 1-2 workers for the scaffold's example tasks from the catalog's
- * workflow-worker set — never a harness the generated workflow can't run
- * against out of the box (PQ-176 footgun #2). Agent installs are no longer
- * consulted: tasks are agent-optional, so the workers are the dispatch
- * surface. Two workers reproduce the illustrative cross-harness fan-out; a
- * one-worker catalog degrades to a single task. Falls back to "claude-code"
- * alone when the catalog lists no workers (e.g. an empty/minimal catalog)
- * since it's the most commonly available workflow worker.
+ * Pick 1-2 workers for the scaffold's example tasks, restricted to harnesses
+ * the chosen agent is actually compiled for (`agent.installs`) that also have
+ * a Prism workflow-worker module (`catalog.workers`) — never a harness the
+ * generated workflow can't run against out of the box (PQ-176 footgun #2).
+ * Two workers reproduce the illustrative cross-harness fan-out; one worker
+ * degrades to a single task when the agent is installed on only one workflow
+ * harness. Falls back to "claude-code" alone when the agent has no recorded
+ * installs (e.g. an empty/minimal catalog) since it's the most commonly
+ * available workflow worker.
  */
 export const pickDefaultWorkers = (
   catalog: WorkflowCatalog,
+  agent: CatalogAgent | undefined,
 ): readonly [string] | readonly [string, string] => {
-  if (catalog.workers.length === 0) return ["claude-code"];
-  // Prefer claude-code first when it's available — the most broadly
+  const workerSet = new Set(catalog.workers);
+  const runnable = (agent?.installs ?? []).filter((harness) => workerSet.has(harness));
+  if (runnable.length === 0) return ["claude-code"];
+  // Prefer claude-code first when it's installed — the most broadly
   // authenticated default harness — so fan-out order reads predictably
-  // instead of drifting with the (alphabetical) workers list.
-  const ordered = catalog.workers.includes("claude-code")
-    ? ["claude-code", ...catalog.workers.filter((harness) => harness !== "claude-code")]
-    : [...catalog.workers];
+  // instead of drifting with the (alphabetical) installs list.
+  const ordered = runnable.includes("claude-code")
+    ? ["claude-code", ...runnable.filter((harness) => harness !== "claude-code")]
+    : runnable;
   return ordered.length >= 2 ? [ordered[0]!, ordered[1]!] : [ordered[0]!];
 };
 
-/**
- * A complete, validating starter workflow source. Tasks are agent-less by
- * default (a bare worker + prompt + model); when an `agentRef` is supplied the
- * scaffold keeps the agent-bound form.
- */
-export const scaffoldWorkflowSource = (
-  name: string,
-  agentRef: string | undefined,
-  workers: readonly [string] | readonly [string, string],
-): string => {
-  const header = `/**
+const scaffoldWorkflowHeader = (name: string, pluginFree: boolean): string => `/**
  * ${name} — scaffolded by \`prism workflow scaffold\`.
  * Lives at ~/.prism/workflows/${name}.workflow.ts by convention — never inside
  * (or git-added to) the project repo it drives; tasks reference their target
@@ -893,11 +894,91 @@ export const scaffoldWorkflowSource = (
  *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
  *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts --max-concurrent-tasks 2
  *
- * Discover agents, SOP phases, and model profiles with: prism workflow catalog
- */
+ * Discover harness models: prism workflow models --worker cursor --query opus
+ * Refresh slugs:           prism workflow refresh-harness-types
+ * Authoring skill:         prism workflow skill
+${pluginFree ? " * Plugin-free — using anonymousWorkflowAgent. Plugins are optional.\n" : " * Plugin refs: prism workflow catalog --ref <ref>\n"} */`;
+
+const renderScaffoldWorker = (pin: { readonly worker: string; readonly model?: string }): string =>
+  pin.model === undefined
+    ? `{ worker: ${JSON.stringify(pin.worker)} }`
+    : `{ worker: ${JSON.stringify(pin.worker)}, model: ${JSON.stringify(pin.model)} }`;
+
+const renderScaffoldTask = (
+  name: string,
+  id: string,
+  pin: { readonly worker: string; readonly model?: string },
+  agentExpr: string,
+): string => `      const ${id} = defineTask({
+        id: ${JSON.stringify(id)},
+        agent: ${agentExpr},
+        prompt: ${JSON.stringify(`Run under the ${pin.worker} harness and return a one-line summary in "summary". Set worker="${pin.worker}".`)},
+        output: Result,
+        cacheKey: ${JSON.stringify(`${name}-${pin.worker}-v1`)},
+        worker: ${renderScaffoldWorker(pin)},
+      });`;
+
+const renderScaffoldRun = (
+  name: string,
+  pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>],
+  agentExpr: string,
+): string => {
+  const ids = pins.map((_, index) => (index === 0 ? "a" : "b"));
+  const tasks = pins.map((pin, index) => renderScaffoldTask(name, ids[index]!, pin, agentExpr)).join("\n");
+  if (pins.length === 1) {
+    return `export const workflow = defineWorkflow({
+  name: "${name}",
+  run: (wf) =>
+    Effect.gen(function* () {
+${tasks}
+      const result = yield* wf.runTask(a);
+      return { results: [result] };
+    }),
+});
+`;
+  }
+  return `export const workflow = defineWorkflow({
+  name: "${name}",
+  run: (wf) =>
+    Effect.gen(function* () {
+${tasks}
+      const results = yield* Effect.all([wf.runTask(a), wf.runTask(b)], { concurrency: "unbounded" });
+      return { results };
+    }),
+});
+`;
+};
+
+/** Plugin-free starter when no compiled refs surface exists. */
+export const scaffoldPluginFreeWorkflowSource = (
+  name: string,
+  pins: readonly [{ readonly worker: string; readonly model?: string }, ...Array<{ readonly worker: string; readonly model?: string }>] = [
+    { worker: "claude-code" },
+  ],
+): string => {
+  const header = `${scaffoldWorkflowHeader(name, true)}
+import { Effect, Schema } from "effect";
+import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+
+const Result = Schema.Struct({
+  worker: Schema.String,
+  summary: Schema.String,
+});
+`;
+  return `${header}\n${renderScaffoldRun(name, pins, "anonymousWorkflowAgent")}`;
+};
+
+/** A complete, validating starter workflow source that uses a real discovered agent ref and installed workers. */
+export const scaffoldWorkflowSource = (
+  name: string,
+  agentRef: string,
+  workers: readonly [string] | readonly [string, string],
+): string => {
+  const header = `${scaffoldWorkflowHeader(name, false)}
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
-${agentRef !== undefined ? `import { agents } from "prism/refs";\n` : ""}
+import { agents } from "prism/refs";
+
 const Result = Schema.Struct({
   worker: Schema.String,
   summary: Schema.String,
@@ -908,7 +989,8 @@ const Result = Schema.Struct({
   const probe = `const probe = (id: string, worker: ${workerUnion}) =>
   defineTask({
     id,
-${agentRef !== undefined ? `    agent: ${agentRef},\n` : ""}    prompt: \`Run under the \${worker} harness and return a one-line summary in "summary". Set worker="\${worker}".\`,
+    agent: ${agentRef},
+    prompt: \`Run under the \${worker} harness and return a one-line summary in "summary". Set worker="\${worker}".\`,
     output: Result,
     cacheKey: \`${name}-\${worker}-v1\`,
     worker: { worker },

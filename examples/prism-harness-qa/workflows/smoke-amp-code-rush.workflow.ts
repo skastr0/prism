@@ -10,7 +10,7 @@ const verifyChallenge = defineTask({
   prompt: challengePrompt(challenge),
   output: challengeOutput,
   finish: challengeFinish(challenge),
-  worker: { worker: "amp-code", model: "rush" },
+  worker: { worker: "amp-code", model: "low" },
 });
 
 export default defineWorkflow({

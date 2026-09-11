@@ -13,6 +13,7 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
+  scaffoldPluginFreeWorkflowSource,
   scaffoldWorkflowSource,
   searchCatalog,
   WORKFLOW_WORKERS,
@@ -146,6 +147,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
         "antigravity-cli",
         "claude-code",
         "codex-cli",
+        "cursor",
         "devin",
         "grok",
         "hermes",
@@ -160,7 +162,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
     const unflagged = Object.values(LOWERER_CAPABILITIES)
       .filter((profile) => !profile.workflowWorker)
       .map((profile): string => profile.harness);
-    expect(unflagged.sort()).toEqual(["cursor", "factory-droid", "openclaw", "pi"].sort());
+    expect(unflagged.sort()).toEqual(["factory-droid", "openclaw", "pi"].sort());
     for (const harness of unflagged) {
       expect(WORKFLOW_WORKERS as readonly string[]).not.toContain(harness);
     }
@@ -257,33 +259,66 @@ const catalogWithInstalls = (installs: ReadonlyArray<string>, workers: ReadonlyA
 });
 
 describe("pickDefaultWorkers", () => {
-  test("picks the first two catalog workers, claude-code first when present", () => {
-    const catalog = catalogWithInstalls(["claude-code", "grok", "cursor"], ["claude-code", "grok", "codex-cli"]);
-    expect(pickDefaultWorkers(catalog)).toEqual(["claude-code", "grok"]);
+  test("picks two workers when the agent is installed on 2+ workflow-worker harnesses", () => {
+    const catalog = catalogWithInstalls(["claude-code", "grok", "factory-droid"], ["claude-code", "grok", "codex-cli"]);
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "grok"]);
   });
 
-  test("degrades to one worker when the catalog lists one worker module", () => {
-    const catalog = catalogWithInstalls(["claude-code", "cursor"], ["claude-code"]);
-    expect(pickDefaultWorkers(catalog)).toEqual(["claude-code"]);
+  test("picks cursor when it is an installed workflow worker", () => {
+    const catalog = catalogWithInstalls(["cursor", "factory-droid"], ["claude-code", "cursor"]);
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["cursor"]);
   });
 
-  test("never picks a harness with no workflow-worker module", () => {
+  test("degrades to one worker when only one install is a workflow-worker harness (PQ-176 footgun #2)", () => {
+    // factory-droid is a real harness but has no workflow-worker module — it must
+    // never be picked, and the agent isn't installed on any other worker.
+    const catalog = catalogWithInstalls(["claude-code", "factory-droid"], ["claude-code", "grok", "codex-cli"]);
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code"]);
+  });
+
+  test("never picks a worker the agent has no install for", () => {
     const catalog = catalogWithInstalls(["claude-code"], ["claude-code", "grok", "codex-cli"]);
-    const workers = pickDefaultWorkers(catalog);
-    expect(workers).toEqual(["claude-code", "grok"]);
-    expect(workers).not.toContain("cursor");
+    const agent = pickDefaultAgent(catalog);
+    const workers = pickDefaultWorkers(catalog, agent);
+    expect(workers).toEqual(["claude-code"]);
+    expect(workers).not.toContain("grok");
   });
 
-  test("falls back to claude-code when the catalog lists no workers", () => {
-    expect(pickDefaultWorkers(catalogWithInstalls([], []))).toEqual(["claude-code"]);
+  test("falls back to claude-code when the agent has no recorded installs", () => {
+    expect(pickDefaultWorkers(catalogWithInstalls([], ["grok"]), undefined)).toEqual(["claude-code"]);
   });
 
-  test("prefers claude-code first even when it sorts later in the worker list", () => {
+  test("prefers claude-code first even when it sorts later in installs", () => {
     const catalog = catalogWithInstalls(
       ["amp-code", "claude-code", "codex-cli"],
       ["amp-code", "claude-code", "codex-cli"],
     );
-    expect(pickDefaultWorkers(catalog)).toEqual(["claude-code", "amp-code"]);
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "amp-code"]);
+  });
+});
+
+describe("scaffoldPluginFreeWorkflowSource", () => {
+  test("uses anonymousWorkflowAgent and does not import prism/refs", () => {
+    const src = scaffoldPluginFreeWorkflowSource("bare");
+    expect(src).toContain("anonymousWorkflowAgent");
+    expect(src).toContain("refresh-harness-types");
+    expect(src).toContain("workflow models");
+    expect(src).toContain("workflow skill");
+    expect(src).not.toContain('from "prism/refs"');
+  });
+
+  test("pins a typed worker.model per task", () => {
+    const src = scaffoldPluginFreeWorkflowSource("typed", [
+      { worker: "cursor", model: "composer-2.5-fast" },
+      { worker: "amp-code", model: "low" },
+    ]);
+    expect(src).toContain('worker: { worker: "cursor", model: "composer-2.5-fast" }');
+    expect(src).toContain('worker: { worker: "amp-code", model: "low" }');
+    expect(src).not.toContain("const probe");
   });
 });
 
@@ -293,13 +328,6 @@ describe("scaffoldWorkflowSource", () => {
     expect(src).toContain(`name: "my-flow"`);
     expect(src).toContain("agent: agents.forge.explorer,");
     expect(src).toContain('from "prism/refs"');
-  });
-
-  test("agent-less scaffold omits the agent and the refs import", () => {
-    const agentLess = scaffoldWorkflowSource("bare-flow", undefined, ["claude-code"]);
-    expect(agentLess).not.toContain("agent:");
-    expect(agentLess).not.toContain('from "prism/refs"');
-    expect(agentLess).toContain('probe("a", "claude-code")');
   });
 
   test("never instructs git add — workflows live outside the project repo", () => {
@@ -318,6 +346,8 @@ describe("renderRefsStatus", () => {
   test("missing surface explains how to compile", () => {
     const out = renderRefsStatus({ surfaceDir: "/d", present: false, refsManifestHash: null, compileManifestHash: null, freshness: "missing" });
     expect(out).toContain("missing");
+    expect(out).toContain("optional");
+    expect(out).toContain("workflow models");
   });
   test("stale shows both manifest hashes", () => {
     const out = renderRefsStatus({ surfaceDir: "/d", present: true, refsManifestHash: "aaaaaaaaaaaa1", compileManifestHash: "bbbbbbbbbbbb2", freshness: "stale" });
@@ -366,6 +396,7 @@ describe("renderCompactIndexHuman", () => {
     expect(out).toContain("--ref <ref>");
     expect(out).toContain("--query <text>");
     expect(out).toContain("--full");
+    expect(out).toContain("prism workflow models");
   });
 
   test("stays compact — well under a context-bomb line count", () => {

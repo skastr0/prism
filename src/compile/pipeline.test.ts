@@ -1419,7 +1419,7 @@ test("artifact target resolution filters unsupported preset members", async () =
   expect(manifestHasCompileTargets(manifest, "cursor")).toBe(true);
 });
 
-test("Cursor compile support is tools-only", async () => {
+test("Cursor compile support includes tools, agents, and hooks", async () => {
   const root = await createTempRoot();
   const toolOnlyRoot = join(root, "cursor-tools-only");
   await writeText(
@@ -1434,19 +1434,86 @@ test("Cursor compile support is tools-only", async () => {
   const manifest = await readManifest(toolOnlyRoot);
   expect(manifestHasCompileTargets(manifest, "cursor")).toBe(true);
 
-  const agentRoot = join(root, "cursor-agent-unsupported");
+  const agentRoot = join(root, "cursor-agent-supported");
   await writeText(
     join(agentRoot, "plugin.json"),
     `${JSON.stringify({
-      name: "cursor-agent-unsupported",
+      name: "cursor-agent-supported",
       version: "0.1.0",
       targets: { agents: ["cursor"] },
     })}\n`,
   );
 
-  await expect(readManifest(agentRoot)).rejects.toThrow(
-    "targets.agents resolves to unsupported compile harnesses: cursor",
+  const agentManifest = await readManifest(agentRoot);
+  expect(getManifestArtifactTargets(agentManifest, "agents")).toContain("cursor");
+});
+
+test("compilePluginForTarget lowers Cursor agents and plugin hooks", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cursor-compile-demo");
+  const cursorRoot = join(root, "cursor-home");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-compile-demo",
+      version: "0.1.0",
+      targets: {
+        agents: ["cursor"],
+        hooks: ["cursor"],
+      },
+    })}\n`,
   );
+  await writeText(
+    join(pluginRoot, "identities", "reviewer.identity.md"),
+    `---\ndescription: Reviewer identity\n---\n\n# Reviewer\n\nReview carefully.\n`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "reviewer.agent.ts"),
+    `export default {
+  name: "reviewer",
+  description: "Cursor plugin reviewer",
+  identity: "reviewer",
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "session-start.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "session-start",
+  event: hookEvent.sessionStart,
+  handle: () => Effect.succeed({ decision: "continue" as const }),
+};
+`,
+  );
+
+  const previousHome = process.env.HOME;
+  process.env.HOME = join(root, "home");
+  try {
+    const result = await Effect.runPromise(
+      compilePluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target: "cursor",
+        scope: "global",
+        dryRun: true,
+        root: cursorRoot,
+      }),
+    );
+    const targets = result.operations
+      .map((operation) => ("targetPath" in operation ? operation.targetPath : ""))
+      .filter((path) => path.length > 0);
+    const pluginDir = join(cursorRoot, "plugins", "local", "prism-generated-cursor-compile-demo");
+    expect(targets).toContain(join(pluginDir, ".cursor-plugin", "plugin.json"));
+    expect(targets).toContain(join(pluginDir, "agents", "reviewer.md"));
+    expect(targets).toContain(join(pluginDir, "hooks", "hooks.json"));
+    expect(targets).toContain(join(pluginDir, "hooks", "session-start.mjs"));
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
 });
 
 test("direct unsupported Grok command targets are rejected", async () => {
@@ -4241,7 +4308,7 @@ export default {
         name: "hermes-hook-demo",
         version: "0.1.0",
         targets: {
-          hooks: ["cursor"],
+          hooks: ["openclaw"],
         },
       },
       null,

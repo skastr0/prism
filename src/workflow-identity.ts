@@ -46,7 +46,7 @@ export interface WorkflowRunTaskSnapshot {
   readonly cacheKey: string;
   readonly promptHash: string;
   readonly agentManifestHash: string;
-  readonly agent?: {
+  readonly agent: {
     readonly plugin: string;
     readonly name: string;
     readonly description: string;
@@ -131,8 +131,7 @@ export const workflowTaskIdentity = (
         })) ?? [],
       },
     } as StableJsonValue),
-    // Empty sentinel: an agent-less task still occupies a stable cache slot.
-    agentManifestHash: task.agent?.manifestHash ?? "",
+    agentManifestHash: task.agent.manifestHash,
   };
 };
 
@@ -186,17 +185,13 @@ export const workflowRunTaskSnapshotForTask = (input: {
     cacheKey: identity.cacheKey,
     promptHash: identity.promptHash,
     agentManifestHash: identity.agentManifestHash,
-    ...(input.task.agent !== undefined
-      ? {
-        agent: {
-          plugin: input.task.agent.plugin,
-          name: input.task.agent.name,
-          description: input.task.agent.description,
-          sourceHash: input.task.agent.sourceHash,
-          manifestHash: input.task.agent.manifestHash,
-        },
-      }
-      : {}),
+    agent: {
+      plugin: input.task.agent.plugin,
+      name: input.task.agent.name,
+      description: input.task.agent.description,
+      sourceHash: input.task.agent.sourceHash,
+      manifestHash: input.task.agent.manifestHash,
+    },
     ...(worker !== undefined ? { worker } : {}),
     outputSchema: taskOutputSchemaSnapshot(input.task),
     finishCriteria: taskFinishCriteria(input.task),

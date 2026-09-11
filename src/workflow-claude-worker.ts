@@ -2,10 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
-import type {
-  AnyWorkflowTask,
-  WorkflowPermissionMode,
-  WorkflowSessionPersistence,
+import {
+  isAnonymousWorkflowAgent,
+  type AnyWorkflowTask,
+  type WorkflowPermissionMode,
+  type WorkflowSessionPersistence,
 } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import {
@@ -130,7 +131,6 @@ const claudeRoot = (): string => join(homedir(), ".claude");
 export const discoverClaudeGeneratedPlugin = (
   task: AnyWorkflowTask,
 ): ClaudeGeneratedPluginDiscovery => {
-  if (task.agent === undefined) return {};
   const pluginDir = join(claudeRoot(), "skills", generatedPluginIdForOwner(task.agent.plugin));
   if (!existsSync(pluginDir)) return {};
   return { pluginDir };
@@ -248,7 +248,7 @@ export const runClaudeWorkflowTask = async (
   const generatedPlugin = discoverClaudeGeneratedPlugin(task);
   const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
   const args = buildClaudeArgs({
-    ...(task.agent !== undefined ? { agent: task.agent.name } : {}),
+    agent: isAnonymousWorkflowAgent(task.agent) ? undefined : task.agent.name,
     model: options.model,
     generatedPlugin,
     outputSchema,
@@ -321,7 +321,7 @@ export const runClaudeWorkflowTask = async (
     output: claudeEnvelopeOutput(envelope),
     metadata: {
       adapter: "claude-code",
-      ...(task.agent !== undefined ? { nativeAgent: task.agent.name } : {}),
+      nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
       sessionPersistence,

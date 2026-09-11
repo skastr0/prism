@@ -94,7 +94,7 @@ export const ampCodeCatalog: HarnessCatalog = {
       type: "string",
       file: "settings.json",
       prismTouch: "none",
-      description: "e.g. anthropic:claude-haiku-4-5-20251001. Workflow models use CLI --mode deep|rush instead.",
+      description: "e.g. anthropic:claude-haiku-4-5-20251001. Workflow models use CLI --mode (low|medium|high|ultra or a plugin mode key).",
       cousin: "modelspace",
     },
     {
@@ -103,7 +103,7 @@ export const ampCodeCatalog: HarnessCatalog = {
       type: "array",
       file: "settings.json",
       prismTouch: "none",
-      description: "UI mode list (e.g. rush, free-next2). Workflow CLI accepts --mode deep|rush only.",
+      description: "UI mode list. Workflow CLI passes worker.model as --mode (low|medium|high|ultra or a plugin mode key).",
       cousin: "modelspace",
     },
     {
@@ -184,7 +184,7 @@ export const ampCodeCatalog: HarnessCatalog = {
     "Compiled agents lower as skills/prism-agent-<name>/SKILL.md (role skills); no native Amp agent config surface.",
     "Harness projectConfigPath is .agents/ (skills + AGENTS.md routing); native Amp workspace settings/plugins also use .amp/ at the project root.",
     "commands/ under the Amp root holds native markdown commands (user/legacy); Prism-managed commands register via generated plugins, not that directory.",
-    "Workflow models: deep | rush via --mode (assertAmpWorkflowMode). Default detection model: rush.",
+    "Workflow Amp inventory: --mode dial + plugin mode keys type worker.model. Curated provider/model IDs type worker.catalogModel (ampCodeCatalogSlugs); efforts type worker.effort. The worker pins catalog/effort through a one-shot .amp/plugins/prism-workflow-catalog-pin.ts mode. Default detection model: low.",
     "Managed/enterprise override path (outside Prism): macOS /Library/Application Support/ampcode/managed-settings.json.",
   ],
 };

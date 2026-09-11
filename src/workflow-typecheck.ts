@@ -12,12 +12,14 @@ import {
   projectGeneratedAgentsPath,
   projectGeneratedRefsDir,
 } from "./project-key.js";
+import { harnessModelsModulePath, harnessTypesExist } from "./harness-types.js";
 import {
   buildWorkflowPaths,
   generateWorkflowTsconfig,
   resolveWorkflowTypeDirs,
   WORKFLOW_TSCONFIG_FILENAME,
 } from "./workflow-tsconfig.js";
+import { loadHarnessTypesSnapshot, projectWorkerModelCatalog, enrichHarnessModelTypeError } from "./workflow-models.js";
 
 const ts = createRequire(import.meta.url)(typescriptBundleImportPath()) as typeof TypeScript;
 
@@ -140,9 +142,12 @@ const resolveWorkflowTypeEnvironment = (
   const refsPath = workflowRefsFilePath(prismHome);
   const hasRefs = existsSync(refsPath);
 
+  const harnessTypesPath = harnessTypesExist(prismHome) ? harnessModelsModulePath(prismHome) : undefined;
+
   const paths = buildWorkflowPaths({
     typeDirs,
     refsDir: hasRefs ? dirname(refsPath) : undefined,
+    harnessTypesPath,
   });
 
   const onDiskBase = readOnDiskWorkflowCompilerOptions(prismHome);
@@ -205,8 +210,8 @@ export const typecheckWorkflowFile = (
   const environment = resolveWorkflowTypeEnvironment(prismHome);
   if (environment === null) {
     const message =
-      `workflow type environment unavailable (no generated refs or ` +
-      `shipped declarations for this project). Run \`prism refresh <plugin-path>\` to enable typechecking.`;
+      `workflow type environment unavailable (no shipped declarations). ` +
+      `Run \`prism workflow refresh-harness-types\` for live slugs. Plugin refs are optional (\`prism refresh <plugin-path>\`).`;
     if (options.strictEnvironment === true) {
       throw new WorkflowTypecheckError(filePath, [
         { file: filePath, line: null, character: null, message },
@@ -220,7 +225,9 @@ export const typecheckWorkflowFile = (
 
   const compilerOptions = environment.compilerOptions;
   const host = ts.createCompilerHost(compilerOptions);
-  const program = ts.createProgram([filePath], compilerOptions, host);
+  const harnessTypesPath = harnessTypesExist(prismHome) ? harnessModelsModulePath(prismHome) : undefined;
+  const rootFiles = harnessTypesPath === undefined ? [filePath] : [filePath, harnessTypesPath];
+  const program = ts.createProgram(rootFiles, compilerOptions, host);
   const allDiagnostics = ts.getPreEmitDiagnostics(program);
 
   const normalizedFilePath = filePath.replace(/\\/g, "/");
@@ -269,7 +276,15 @@ export const typecheckWorkflowFile = (
     return;
   }
 
-  throw new WorkflowTypecheckError(filePath, realErrors.map(toStructured));
+  const source = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+  const catalogs = projectWorkerModelCatalog(loadHarnessTypesSnapshot(prismHome));
+  throw new WorkflowTypecheckError(
+    filePath,
+    realErrors.map((diagnostic) => {
+      const structured = toStructured(diagnostic);
+      return { ...structured, message: enrichHarnessModelTypeError(structured.message, source, catalogs) };
+    }),
+  );
 };
 
 export const runWorkflowTypecheck = async (
@@ -282,6 +297,7 @@ export const runWorkflowTypecheck = async (
     prismHome,
     refsDir: workflowRefsDirectory(prismHome),
     workflowDir: dirname(resolved),
+    harnessTypesPath: harnessTypesExist(prismHome) ? harnessModelsModulePath(prismHome) : undefined,
   });
   typecheckWorkflowFile(resolved, {
     prismHome,

@@ -6,8 +6,12 @@ import { loadGeneratedSurface, type GeneratedSurface } from "./workflow-catalog.
 import {
   collectDynamicPhaseFindings,
   phaseStampedBindingsFromTasks,
+  probeDynamicWorkflowTasks,
   validatePhaseBindings,
 } from "./workflow-validate-dynamic.js";
+import { ampWorkerPins, validateAmpCatalogPins } from "./workflow-amp-worker.js";
+import { assertOmpWorkflowModel } from "./workflow-omp-worker.js";
+import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
 // (globalThis.__prism_effect) as a module side-effect, so the workflow DSL
 // runtime and the file's `from "effect"` rewrite resolve to the binary's
@@ -28,7 +32,12 @@ import {
   type WorkflowTaskModelResolutionSource,
   type WorkflowValidationSummary,
 } from "./workflows.js";
-import { supportedWorkflowWorkers, UnsupportedWorkflowWorkerError } from "./workflow-workers.js";
+import {
+  assertWorkflowWorkerPermission,
+  resolveWorkflowTaskPermission,
+  supportedWorkflowWorkers,
+  UnsupportedWorkflowWorkerError,
+} from "./workflow-workers.js";
 
 export {
   checkWorkflowRefsFreshness,
@@ -51,6 +60,8 @@ export interface WorkflowTaskModelResolutionRow {
   readonly id: string;
   readonly worker?: string;
   readonly model?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
   readonly source?: WorkflowTaskModelResolutionSource;
   readonly error?: string;
 }
@@ -70,10 +81,8 @@ export interface WorkflowValidationResult extends WorkflowValidationSummary {
 }
 
 const DYNAMIC_WORKFLOW_NOTE =
-  "dynamic workflow: tasks are constructed at runtime inside `run`, so per-task (worker, model) " +
-  "resolution can't be determined by validate. Worker ids found by a static scan of the source are " +
-  "listed under staticWorkers with their harness registry default model — the actual per-task model " +
-  "may differ if a task overrides it. Run `prism workflow run` to see live per-task resolution.";
+  "dynamic workflow: tasks are constructed inside `run`. Validate probes that graph and lists every " +
+  "dispatched pin. Branches the probe did not execute are omitted. staticWorkers is the source-scan fallback.";
 
 const staticallyReferencedWorkers = (source: string): ReadonlyArray<WorkflowStaticWorkerReference> =>
   supportedWorkflowWorkers()
@@ -88,26 +97,66 @@ const staticallyReferencedWorkers = (source: string): ReadonlyArray<WorkflowStat
  * (WorkflowModelResolutionError), are real configuration errors and surface
  * as `.error` so the caller can fail the whole validate loudly.
  */
-const resolveTaskModelRow = (task: AnyWorkflowTask): WorkflowTaskModelResolutionRow => {
+const resolveTaskModelRow = (
+  task: AnyWorkflowTask,
+  snapshot?: ReturnType<typeof loadHarnessTypesSnapshot>,
+): WorkflowTaskModelResolutionRow => {
+  const pins = ampWorkerPins(task);
+  const pinFields = {
+    ...(pins.catalogModel !== undefined ? { catalogModel: pins.catalogModel } : {}),
+    ...(pins.effort !== undefined ? { effort: pins.effort } : {}),
+  };
   const worker = task.worker?.worker;
-  if (worker === undefined) return { id: task.id };
+  if (worker === undefined) return { id: task.id, ...pinFields };
 
   const supported = supportedWorkflowWorkers();
   if (!supported.includes(worker)) {
-    return { id: task.id, worker, error: new UnsupportedWorkflowWorkerError(worker, supported).message };
+    return {
+      id: task.id,
+      worker,
+      ...pinFields,
+      error: new UnsupportedWorkflowWorkerError(worker, supported).message,
+    };
+  }
+
+  const ampError = validateAmpCatalogPins(task, snapshot);
+  if (ampError !== undefined) {
+    return { id: task.id, worker, ...pinFields, error: ampError };
+  }
+
+  try {
+    assertWorkflowWorkerPermission(
+      worker,
+      resolveWorkflowTaskPermission(task),
+      task.worker?.restrictedTools,
+    );
+  } catch (error) {
+    return {
+      id: task.id,
+      worker,
+      ...pinFields,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 
   try {
     const resolution = resolveWorkflowTaskModelResolution(task, { worker });
-    if (resolution === undefined) {
-      // No task/profile/agent model info and no CLI --model at validate time.
-      // Not an error: several harness CLIs (e.g. opencode) tolerate an omitted
-      // --model flag and fall back to their own default at run time.
-      return { id: task.id, worker };
-    }
-    return { id: task.id, worker, model: resolution.model, source: resolution.source };
+    const row = resolution === undefined
+      ? (() => {
+        const defaultModel = workflowHarnessDefaultModel(worker);
+        if (defaultModel === undefined) return { id: task.id, worker, ...pinFields };
+        return { id: task.id, worker, model: defaultModel, source: "default" as const, ...pinFields };
+      })()
+      : { id: task.id, worker, model: resolution.model, source: resolution.source, ...pinFields };
+    if (worker === "omp" && "model" in row) assertOmpWorkflowModel(row.model);
+    return row;
   } catch (error) {
-    return { id: task.id, worker, error: error instanceof Error ? error.message : String(error) };
+    return {
+      id: task.id,
+      worker,
+      ...pinFields,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 };
 
@@ -129,12 +178,14 @@ export const paddedTableColumns = (
 export const renderWorkflowModelResolutionTable = (
   rows: ReadonlyArray<WorkflowTaskModelResolutionRow>,
 ): string => {
-  if (rows.length === 0) return "(no statically-declared tasks)";
-  const header = ["task", "worker", "model", "source"] as const;
+  if (rows.length === 0) return "(no probed or statically-declared tasks)";
+  const header = ["task", "worker", "model", "catalog", "effort", "source"] as const;
   const cells = rows.map((row) => [
     row.id,
     row.worker ?? "-",
     row.error !== undefined ? "UNRESOLVED" : row.model ?? "-",
+    row.catalogModel ?? "-",
+    row.effort ?? "-",
     row.error ?? row.source ?? "-",
   ]);
   const { widths, formatRow } = paddedTableColumns(header, cells);
@@ -202,6 +253,7 @@ export const validateWorkflowFile = async (
   const workflow = await loadWorkflowFile(resolved, options);
   const summary = workflowSummary(resolved, workflow);
   const surface = await loadCompiledWorkflowSurface(options.prismHome, options.cwd);
+  const snapshot = loadHarnessTypesSnapshot(options.prismHome ?? resolvePrismHome());
 
   if (summary.dynamic) {
     const source = await readFile(resolved, "utf8");
@@ -216,11 +268,25 @@ export const validateWorkflowFile = async (
         `workflow '${summary.name}' failed SOP phase graph validation for ${findings.length} task binding(s):\n${detail}`,
       );
     }
+    const probed = await probeDynamicWorkflowTasks(workflow as DynamicWorkflowDefinition<string>);
+    const modelResolution = probed.tasks.map((task) => resolveTaskModelRow(task, snapshot));
+    const unresolved = modelResolution.filter((row) => row.error !== undefined);
+    if (unresolved.length > 0) {
+      const detail = unresolved
+        .map((row) => `  - task '${row.id}' (worker '${row.worker ?? "<missing>"}'): ${row.error}`)
+        .join("\n");
+      throw new WorkflowValidationError(
+        `workflow '${summary.name}' failed model resolution for ${unresolved.length} of ${modelResolution.length} probed task(s):\n${detail}\n\n` +
+          renderWorkflowModelResolutionTable(modelResolution),
+      );
+    }
     return {
       ...summary,
-      modelResolution: [],
+      modelResolution,
       staticWorkers: staticallyReferencedWorkers(source),
-      note: DYNAMIC_WORKFLOW_NOTE,
+      note: probed.failed
+        ? `${DYNAMIC_WORKFLOW_NOTE} Probe exited early; listed pins are tasks dispatched before the failure.`
+        : DYNAMIC_WORKFLOW_NOTE,
     };
   }
 
@@ -232,7 +298,7 @@ export const validateWorkflowFile = async (
       `workflow '${summary.name}' failed SOP phase graph validation for ${findings.length} task binding(s):\n${detail}`,
     );
   }
-  const modelResolution = tasks.map(resolveTaskModelRow);
+  const modelResolution = tasks.map((task) => resolveTaskModelRow(task, snapshot));
   const unresolved = modelResolution.filter((row) => row.error !== undefined);
   if (unresolved.length > 0) {
     const detail = unresolved

@@ -424,11 +424,9 @@ export const LOWERER_CAPABILITIES = {
   cursor: {
     harness: "cursor",
     family: "coding-harness",
-    workflowWorker: false,
+    workflowWorker: true,
     compile: compileSupported({
-      agents: "unsupported",
       agentModelBindings: "ignored",
-      hooks: "unsupported",
       skillPermissions: "unsupported",
     }),
     surfaces: {
@@ -447,25 +445,35 @@ export const LOWERER_CAPABILITIES = {
         path: "<generated-plugin>/commands/",
         summary: "Install writes Cursor commands inside the generated local plugin bundle.",
       },
-      agents: unsupported(),
+      agents: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/agents/",
+        summary: "Compiled agents lower as Cursor plugin subagent markdown (name/description/model).",
+      },
       skills: {
         kind: "direct-file",
         path: "<cursor-root>/skills/",
-        summary: "Install writes Agent Skill folders.",
+        summary: "Install writes Agent Skill folders; concrete orbit skills also bundle into the generated plugin.",
       },
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
         summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
-      hooks: unsupported(),
+      hooks: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/hooks/hooks.json",
+        summary: "Prism hooks lower to Cursor plugin command hooks (hooks.json + wrappers), not an SDK.",
+      },
       agentConfig: unsupported(),
     },
     notes: [
-      "Cursor compile support is tools-only for now; compiled agents, orbits, hooks, and skill permission visibility remain unsupported.",
-      "Cursor command artifacts install through a local plugin bundle under ~/.cursor/plugins/local so Prism uses Cursor's native command discovery instead of direct command files.",
-      "Cursor Agent Skills are docs-backed under .cursor/skills and ~/.cursor/skills, so Prism keeps install-phase skills direct.",
-      "Cursor canonical tools are CLI-only (`prism tools invoke`); no mcp.json patch is emitted.",
+      "Compiled Cursor agents are plugin subagents under plugins/local/prism-generated-<plugin>/agents/. The Agent CLI has no --agent selector, so the workflow worker still prompt-injects identity.",
+      "Cursor plugin hooks are Claude-shaped command scripts: hooks/hooks.json plus hooks/*.mjs, loaded from the generated plugin and --plugin-dir. Do not whole-file own ~/.cursor/hooks.json.",
+      "Workflow worker dispatches `agent --print --output-format stream-json --trust`; default model composer-2.5-fast; resume via --resume.",
+      "Cursor command artifacts install through the same local plugin bundle so Prism uses Cursor's native command discovery instead of direct command files.",
+      "Cursor Agent Skills stay install-phase direct under .cursor/skills and ~/.cursor/skills. Concrete orbit skills bundle into the generated plugin.",
+      "Per-agent skill permission visibility remains unsupported. Canonical tools stay CLI-only (`prism tools invoke`); no mcp.json patch is emitted.",
     ],
   },
   "factory-droid": {
@@ -702,12 +710,9 @@ export const LOWERER_CAPABILITIES = {
         summary:
           "Project scope writes hooks.v1.json; global scope upserts Prism entries into config.json hooks without whole-file adopt. Wrappers under hooks/.",
       },
-      agentConfig: {
-        kind: "direct-file",
-        path: "ephemeral --agent-config for workflow runs",
-        summary:
-          "Workflow worker writes temporary agent-config (system_instructions, allowed_tools); not a durable install surface.",
-      },
+      agentConfig: unsupported(
+        "Devin CLI has no --agent-config. Workflow identity is injected in the prompt file.",
+      ),
     },
     notes: [
       "Never whole-file adopt ~/.config/devin/config.json — herdr hooks and user prefs live there.",

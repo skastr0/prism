@@ -55,6 +55,13 @@ describe("workflow harness detection", () => {
     expect(result.available).toBe(true);
     expect(result.reason.command).toBe("/opt/harnesses/claude");
     expect(result.reason.executablePath).toBe("/opt/harnesses/claude");
+
+    const cursor = await detectWorkflowHarness("cursor", {
+      env: { PRISM_WORKFLOW_CURSOR_BIN: "/opt/harnesses/agent" },
+      resolveExecutable: (command) => command,
+    });
+    expect(cursor.available).toBe(true);
+    expect(cursor.reason.command).toBe("/opt/harnesses/agent");
   });
 
   test("reports verified executables as available when the probe succeeds", async () => {
@@ -117,13 +124,14 @@ describe("workflow harness detection", () => {
   });
 
   test("rejects unsupported runtime harness ids explicitly", async () => {
-    await expect(detectWorkflowHarness("cursor" as never)).rejects.toThrow(WorkflowUnsupportedHarnessError);
+    await expect(detectWorkflowHarness("factory-droid" as never)).rejects.toThrow(WorkflowUnsupportedHarnessError);
   });
 
   test("filters general harness ids down to workflow harness ids", () => {
-    expect(workflowHarnessIdsForHarnesses(["cursor", "opencode", "pi", "codex-cli"])).toEqual([
+    expect(workflowHarnessIdsForHarnesses(["factory-droid", "opencode", "pi", "codex-cli", "cursor"])).toEqual([
       "opencode",
       "codex-cli",
+      "cursor",
     ]);
   });
 

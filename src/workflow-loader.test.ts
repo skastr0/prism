@@ -294,10 +294,10 @@ const output = Schema.Struct({ summary: Schema.String });
 const build = defineTask({
   id: "build",
   agent: builder,
-  prompt: "Build with Amp deep mode.",
+  prompt: "Build with Amp high mode.",
   output,
   cacheKey: "amp-model-build",
-  worker: { worker: "amp-code", model: "deep" },
+  worker: { worker: "amp-code", model: "high" },
 });
 const review = defineTask({
   id: "review",
@@ -750,6 +750,44 @@ export default defineWorkflow({
     ]);
   });
 
+  test("validate fails closed when claude-code is pinned to sandbox-read-only", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const builder = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["claude-code"],
+};
+
+export default defineWorkflow({
+  name: "claude-sandbox-pin",
+  tasks: [defineTask({
+    id: "claude",
+    agent: builder,
+    prompt: "go",
+    output: Schema.Struct({ ok: Schema.Boolean }),
+    worker: { worker: "claude-code", permission: "sandbox-read-only" },
+  })],
+});
+`);
+
+    await expect(validateWorkflowFile(file, { skipTypecheck: true })).rejects.toThrow(WorkflowValidationError);
+    await expect(validateWorkflowFile(file, { skipTypecheck: true })).rejects.toThrow(
+      /Claude Code exposes no built-in sandbox flag/,
+    );
+    await expect(validateWorkflowFile(file, { skipTypecheck: true })).rejects.toThrow(
+      /Choose 'permissive' or 'legacy' instead/,
+    );
+  });
+
   test("validate fails with the allowed worker id list for an unknown worker (WDX-009)", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
@@ -757,7 +795,7 @@ export default defineWorkflow({
 
     await expect(validateWorkflowFile(file)).rejects.toThrow(WorkflowValidationError);
     await expect(validateWorkflowFile(file)).rejects.toThrow(
-      /unsupported workflow worker 'not-a-real-worker'\. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, devin, grok, hermes, kimi-code, omp, opencode/,
+      /unsupported workflow worker 'not-a-real-worker'\. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, cursor, devin, grok, hermes, kimi-code, omp, opencode/,
     );
   });
 
@@ -780,7 +818,10 @@ export default defineWorkflow({
 
     expect(summary.dynamic).toBe(true);
     expect(summary.tasks).toEqual([]);
-    expect(summary.modelResolution).toEqual([]);
+    expect(summary.modelResolution).toEqual([
+      { id: "a", worker: "claude-code", model: "claude-haiku-4-5", source: "default" },
+      { id: "b", worker: "grok", model: "grok-4.5", source: "default" },
+    ]);
     expect(summary.note).toBeDefined();
     expect(summary.note?.length ?? 0).toBeGreaterThan(0);
     expect(summary.staticWorkers).toEqual([
@@ -797,6 +838,7 @@ export default defineWorkflow({
     const processHandle = Bun.spawn({
       cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), "workflow", "validate", file, "--table"],
       cwd: process.cwd(),
+      env: workflowTestEnv(),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1462,7 +1504,7 @@ export default defineWorkflow({
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, devin, grok, hermes, kimi-code, omp, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, cursor, devin, grok, hermes, kimi-code, omp, opencode");
   });
 
   test("CLI runs a workflow through the Antigravity worker adapter", async () => {
@@ -1569,7 +1611,7 @@ export default defineWorkflow({
           "--store",
           storeFile,
           "--model",
-          "rush",
+          "low",
         ],
         cwd: root,
         env: { ...process.env, PRISM_WORKFLOW_AMP_BIN: fakeAmp },
@@ -1590,9 +1632,9 @@ export default defineWorkflow({
 
     const result = await run();
     const cachedResult = await run();
-    expect(result.tasks.map((task) => task.output.summary)).toEqual(["deep", "rush"]);
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["high", "low"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["amp-code", "amp-code"]);
-    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["deep", "rush"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["high", "low"]);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
 
     const expectedCwd = await realpath(root);
@@ -1606,8 +1648,8 @@ export default defineWorkflow({
       cwd: string;
     });
     expect(calls).toEqual([
-      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "deep", cwd: expectedCwd },
-      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "rush", cwd: expectedCwd },
+      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "high", cwd: expectedCwd },
+      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "low", cwd: expectedCwd },
     ]);
   });
 

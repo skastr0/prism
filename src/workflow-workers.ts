@@ -6,16 +6,17 @@ import {
   type WorkflowPermissionMode,
   type WorkflowWorkerId,
 } from "./workflows.js";
-import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
+import { assertAmpPermission, runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { resolveAntigravityPermission, runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
-import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
-import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
-import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
-import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
-import { runDevinWorkflowTask } from "./workflow-devin-worker.js";
-import { runKimiWorkflowTask } from "./workflow-kimi-worker.js";
-import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
-import { runOmpWorkflowTask } from "./workflow-omp-worker.js";
+import { buildClaudeArgs, runClaudeWorkflowTask } from "./workflow-claude-worker.js";
+import { buildCodexArgs, runCodexWorkflowTask } from "./workflow-codex-worker.js";
+import { buildCursorArgs, runCursorWorkflowTask } from "./workflow-cursor-worker.js";
+import { buildGrokArgs, runGrokWorkflowTask } from "./workflow-grok-worker.js";
+import { buildHermesArgs, runHermesWorkflowTask } from "./workflow-hermes-worker.js";
+import { mapDevinPermissionMode, runDevinWorkflowTask } from "./workflow-devin-worker.js";
+import { buildKimiArgs, runKimiWorkflowTask } from "./workflow-kimi-worker.js";
+import { buildOpenCodeArgs, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
+import { buildOmpArgs, runOmpWorkflowTask } from "./workflow-omp-worker.js";
 import type {
   WorkflowTaskExecution,
   WorkflowTaskExecutionContext,
@@ -81,6 +82,8 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runAmpWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "amp-code", fallbackModel: options.model }),
+      catalogModel: task.worker?.worker === "amp-code" ? task.worker.catalogModel : undefined,
+      effort: task.worker?.worker === "amp-code" ? task.worker.effort : undefined,
       resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
@@ -129,6 +132,17 @@ const workflowWorkerAdapters = {
         repair: options.context?.repair,
       });
     },
+  },
+  cursor: {
+    id: "cursor",
+    runTask: (task, options) => runCursorWorkflowTask(task, {
+      cwd: options.cwd,
+      model: resolveWorkflowTaskModel(task, { worker: "cursor", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
+      abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
+      repair: options.context?.repair,
+    }),
   },
   grok: {
     id: "grok",
@@ -232,6 +246,57 @@ export const resolveWorkflowTaskPermission = (
   fallbackPermission?: WorkflowPermissionMode,
 ): WorkflowPermissionMode =>
   task.worker?.permission ?? fallbackPermission ?? "permissive";
+
+/** Same argv interpreters run uses. Validate calls this so illegal pins fail before spend. */
+export const assertWorkflowWorkerPermission = (
+  worker: string,
+  mode: WorkflowPermissionMode,
+  restrictedTools?: readonly string[],
+): void => {
+  switch (worker) {
+    case "amp-code":
+      assertAmpPermission(mode);
+      return;
+    case "antigravity-cli":
+      resolveAntigravityPermission(mode);
+      return;
+    case "claude-code":
+      buildClaudeArgs({ prompt: "p", permission: mode, restrictedTools });
+      return;
+    case "codex-cli":
+      buildCodexArgs({ cwd: "/", outputPath: "/tmp/o", prompt: "p", permission: mode });
+      return;
+    case "cursor":
+      buildCursorArgs({ cwd: "/", prompt: "p", permission: mode });
+      return;
+    case "devin":
+      mapDevinPermissionMode(mode);
+      return;
+    case "grok":
+      buildGrokArgs({ cwd: "/", agent: "anonymous", prompt: "p", permission: mode });
+      return;
+    case "hermes":
+      buildHermesArgs({ prompt: "p", permission: mode });
+      return;
+    case "kimi-code":
+      buildKimiArgs({ prompt: "p", skillsDir: "/", permission: mode });
+      return;
+    case "omp":
+      buildOmpArgs({
+        cwd: "/",
+        systemPromptPath: "/anonymous.md",
+        prompt: "p",
+        permission: mode,
+        restrictedTools,
+      });
+      return;
+    case "opencode":
+      buildOpenCodeArgs({ cwd: "/", agent: "anonymous", prompt: "p", permission: mode });
+      return;
+    default:
+      return;
+  }
+};
 
 export const createWorkflowWorkerExecutor = (input: {
   readonly worker?: string;

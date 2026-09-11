@@ -1,6 +1,8 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import type { HarnessTypesSnapshot } from "./harness-types.js";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
@@ -9,10 +11,19 @@ import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./wo
 import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
+export const AMP_WORKFLOW_DIAL_MODES = ["low", "medium", "high", "ultra"] as const;
+export type AmpWorkflowDialMode = (typeof AMP_WORKFLOW_DIAL_MODES)[number];
+export const AMP_WORKFLOW_CATALOG_PIN_MODE = "prism-pin";
+export const AMP_WORKFLOW_CATALOG_PIN_FILENAME = "prism-workflow-catalog-pin.ts";
+
+const AMP_WORKFLOW_DIAL_MODE_SET = new Set<string>(AMP_WORKFLOW_DIAL_MODES);
+
 export type AmpWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
@@ -28,15 +39,225 @@ export class AmpWorkflowWorkerError extends Error {
   }
 }
 
-export type AmpWorkflowMode = "deep" | "rush";
-
-export const assertAmpWorkflowMode = (mode: string | undefined): AmpWorkflowMode | undefined => {
-  if (mode === undefined) return undefined;
-  if (mode === "deep" || mode === "rush") return mode;
-  throw new AmpWorkflowWorkerError(`unsupported Amp workflow mode '${mode}'. Supported modes: deep, rush`);
+const assertAmpNonEmpty = (value: string | undefined, field: string): string | undefined => {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new AmpWorkflowWorkerError(`Amp workflow ${field} must be a non-empty string`);
+  }
+  return trimmed;
 };
 
-const assertAmpPermission = (mode: WorkflowPermissionMode): void => {
+export const assertAmpWorkflowMode = (mode: string | undefined): string | undefined =>
+  assertAmpNonEmpty(mode, "mode");
+
+export const isAmpWorkflowDialMode = (mode: string | undefined): mode is AmpWorkflowDialMode =>
+  mode !== undefined && AMP_WORKFLOW_DIAL_MODE_SET.has(mode);
+
+export type AmpCatalogPinPlan =
+  | { readonly kind: "mode"; readonly mode?: string }
+  | {
+    readonly kind: "pin";
+    readonly mode: typeof AMP_WORKFLOW_CATALOG_PIN_MODE;
+    readonly catalogModel?: string;
+    readonly effort?: string;
+    readonly extendsMode?: AmpWorkflowDialMode;
+  };
+
+export const resolveAmpCatalogPinPlan = (input: {
+  readonly mode?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+}): AmpCatalogPinPlan => {
+  const mode = assertAmpWorkflowMode(input.mode);
+  const catalogModel = assertAmpNonEmpty(input.catalogModel, "catalogModel");
+  const effort = assertAmpNonEmpty(input.effort, "effort");
+  if (catalogModel === undefined && effort === undefined) {
+    return { kind: "mode", mode };
+  }
+  if (mode !== undefined && !isAmpWorkflowDialMode(mode)) {
+    throw new AmpWorkflowWorkerError(
+      `Amp catalogModel/effort cannot combine with plugin mode '${mode}'. Use a dial (low|medium|high|ultra) as worker.model to extend that mode, or omit worker.model.`,
+    );
+  }
+  const extendsMode: AmpWorkflowDialMode | undefined = isAmpWorkflowDialMode(mode)
+    ? mode
+    : catalogModel === undefined
+      ? "medium"
+      : undefined;
+  return {
+    kind: "pin",
+    mode: AMP_WORKFLOW_CATALOG_PIN_MODE,
+    ...(catalogModel !== undefined ? { catalogModel } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    ...(extendsMode !== undefined ? { extendsMode } : {}),
+  };
+};
+
+export const ampCatalogPinPluginPath = (cwd: string): string =>
+  join(cwd, ".amp", "plugins", AMP_WORKFLOW_CATALOG_PIN_FILENAME);
+
+const AMP_PLUGIN_MODE_KEY = /(?:registerAgentMode\(\s*\{\s*key:\s*|@amp-agent-mode\s*\{\s*"key"\s*:\s*)["']([^"']+)["']/u;
+
+/** Reuse a project plugin mode that already pins this catalog slug (and effort, if set). */
+export const findExistingAmpCatalogMode = async (
+  cwd: string,
+  input: { readonly catalogModel?: string; readonly effort?: string },
+): Promise<string | undefined> => {
+  if (input.catalogModel === undefined) return undefined;
+  const pluginsDir = join(cwd, ".amp", "plugins");
+  if (!existsSync(pluginsDir)) return undefined;
+  const files = await readdir(pluginsDir);
+  for (const file of files) {
+    if (!file.endsWith(".ts") || file === AMP_WORKFLOW_CATALOG_PIN_FILENAME) continue;
+    const source = await readFile(join(pluginsDir, file), "utf8");
+    if (!source.includes(`model: ${JSON.stringify(input.catalogModel)}`)) continue;
+    if (input.effort !== undefined && !source.includes(`reasoningEffort: ${JSON.stringify(input.effort)}`)) {
+      continue;
+    }
+    const key = AMP_PLUGIN_MODE_KEY.exec(source)?.[1];
+    if (key !== undefined && key !== AMP_WORKFLOW_CATALOG_PIN_MODE) return key;
+  }
+  return undefined;
+};
+
+export const ampWorkerPins = (
+  task: AnyWorkflowTask,
+): { readonly catalogModel?: string; readonly effort?: string } => {
+  const worker = task.worker;
+  if (worker === undefined || worker.worker !== "amp-code") return {};
+  return {
+    ...("catalogModel" in worker && typeof worker.catalogModel === "string"
+      ? { catalogModel: worker.catalogModel }
+      : {}),
+    ...("effort" in worker && typeof worker.effort === "string" ? { effort: worker.effort } : {}),
+  };
+};
+
+/** Fail closed when a snapshot lists the catalog row and effort is not on that row. */
+export const validateAmpCatalogPins = (
+  task: AnyWorkflowTask,
+  snapshot: HarnessTypesSnapshot | undefined,
+): string | undefined => {
+  if (snapshot === undefined) return undefined;
+  const pins = ampWorkerPins(task);
+  if (pins.catalogModel === undefined && pins.effort === undefined) return undefined;
+  const amp = snapshot.harnesses.find((entry) => entry.harness === "amp-code");
+  if (amp === undefined) return undefined;
+  if (pins.catalogModel !== undefined) {
+    const row = amp.models.find((model) => model.kind === "model" && model.id === pins.catalogModel);
+    if (row === undefined) {
+      const suggestions = amp.models
+        .filter((model) => model.kind === "model" && model.id.includes(pins.catalogModel!.split("/")[1] ?? pins.catalogModel!))
+        .map((model) => model.id)
+        .slice(0, 5);
+      return [
+        `Unknown Amp catalogModel ${JSON.stringify(pins.catalogModel)}.`,
+        suggestions.length > 0 ? `Nearby: ${suggestions.join(", ")}` : "List slugs: `prism workflow models --worker amp-code`",
+        "Fix: set worker.catalogModel to a catalog slug from `prism workflow models --worker amp-code`.",
+      ].join(" ");
+    }
+    if (pins.effort !== undefined && row.efforts !== undefined && row.efforts.length > 0 && !row.efforts.includes(pins.effort)) {
+      return [
+        `Amp catalogModel ${JSON.stringify(pins.catalogModel)} does not support effort ${JSON.stringify(pins.effort)}.`,
+        `Supported: ${row.efforts.join(", ")}`,
+        `Fix: worker.effort: ${JSON.stringify(row.efforts[0])}`,
+      ].join(" ");
+    }
+  }
+  return undefined;
+};
+
+/** User-facing Amp pin fields. Never report the transport mode `prism-pin` as the model. */
+export const ampWorkflowHonestMetadata = (input: {
+  readonly pin: AmpCatalogPinPlan;
+  readonly authoredModel?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+}): {
+  readonly model?: string;
+  readonly ampMode?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+} => {
+  const model = input.catalogModel
+    ?? input.authoredModel
+    ?? (input.pin.kind === "mode" ? input.pin.mode : input.pin.extendsMode);
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(input.authoredModel !== undefined ? { ampMode: input.authoredModel } : {}),
+    ...(input.catalogModel !== undefined ? { catalogModel: input.catalogModel } : {}),
+    ...(input.effort !== undefined ? { effort: input.effort } : {}),
+  };
+};
+
+export const renderAmpCatalogPinPlugin = (input: {
+  readonly catalogModel?: string;
+  readonly effort?: string;
+  readonly extendsMode?: AmpWorkflowDialMode;
+}): string => {
+  const catalogModel = assertAmpNonEmpty(input.catalogModel, "catalogModel");
+  const effort = assertAmpNonEmpty(input.effort, "effort");
+  const extendsMode = input.extendsMode;
+  if (catalogModel === undefined && effort === undefined) {
+    throw new AmpWorkflowWorkerError("Amp catalog pin requires catalogModel or effort");
+  }
+  const config: string[] = [];
+  if (extendsMode !== undefined) {
+    config.push(`    extends: ${JSON.stringify(extendsMode)},`);
+  } else {
+    config.push(`    name: ${JSON.stringify(AMP_WORKFLOW_CATALOG_PIN_MODE)},`);
+    config.push("    instructions: \"You are Amp. Help the user complete software engineering tasks.\",");
+    config.push("    tools: \"all\",");
+  }
+  if (catalogModel !== undefined) config.push(`    model: ${JSON.stringify(catalogModel)},`);
+  if (effort !== undefined) config.push(`    reasoningEffort: ${JSON.stringify(effort)},`);
+  return `// Generated by Prism for one workflow invoke. Do not edit.
+// @amp-agent-mode ${JSON.stringify({ key: AMP_WORKFLOW_CATALOG_PIN_MODE, label: "Prism catalog pin" })}
+
+import type { PluginAPI } from "@ampcode/plugin"
+
+export default function (amp: PluginAPI) {
+  const createAgent = amp.createAgent ?? amp.experimental?.createAgent
+  const registerAgentMode = amp.registerAgentMode ?? amp.experimental?.registerAgentMode
+  if (!createAgent || !registerAgentMode) {
+    throw new Error("Amp catalog pin requires createAgent and registerAgentMode")
+  }
+  const agent = createAgent({
+${config.join("\n")}
+  })
+  registerAgentMode({
+    key: ${JSON.stringify(AMP_WORKFLOW_CATALOG_PIN_MODE)},
+    label: "Prism catalog pin",
+    description: "Prism workflow catalog-model pin",
+    agent: agent.definition,
+  })
+}
+`;
+};
+
+const prepareAmpCatalogPin = async (
+  cwd: string,
+  plan: AmpCatalogPinPlan,
+): Promise<{ readonly cleanup: () => Promise<void> }> => {
+  if (plan.kind !== "pin") return { cleanup: async () => undefined };
+  const pluginPath = ampCatalogPinPluginPath(cwd);
+  const pluginsDir = dirname(pluginPath);
+  const ampDir = dirname(pluginsDir);
+  const createdAmpDir = !existsSync(ampDir);
+  const createdPluginsDir = !existsSync(pluginsDir);
+  await mkdir(pluginsDir, { recursive: true });
+  await writeFile(pluginPath, renderAmpCatalogPinPlugin(plan));
+  return {
+    cleanup: async () => {
+      await rm(pluginPath, { force: true });
+      if (createdPluginsDir) await rm(pluginsDir, { recursive: true, force: true });
+      if (createdAmpDir) await rm(ampDir, { recursive: true, force: true });
+    },
+  };
+};
+
+export const assertAmpPermission = (mode: WorkflowPermissionMode): void => {
   switch (mode) {
     case "legacy":
     case "permissive":
@@ -113,6 +334,8 @@ export const buildAmpArgs = (input: {
    * settings file with amp.dangerouslyAllowAll enabled before invoking this.
    */
   readonly settingsFile?: string;
+  /** Wait for the catalog-pin plugin to register before execute starts. */
+  readonly pluginReadyTimeout?: boolean;
 }): ReadonlyArray<string> => {
   const mode = assertAmpWorkflowMode(input.mode);
   const resolvedPermission = input.permission ?? "permissive";
@@ -130,6 +353,7 @@ export const buildAmpArgs = (input: {
     "--no-color",
     "--no-archive-after-execute",
     ...(mode !== undefined ? ["--mode", mode] : []),
+    ...(input.pluginReadyTimeout === true ? ["--plugin-ready-timeout"] : []),
     "--execute",
     input.prompt,
     "--stream-json",
@@ -157,6 +381,23 @@ const parseAmpStreamJsonResult = (stdout: string): string | undefined => {
   return undefined;
 };
 
+export const parseAmpStreamJsonError = (stdout: string): string | undefined => {
+  for (const line of stdout.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed !== "object" || parsed === null) continue;
+      const rec = parsed as { readonly type?: unknown; readonly is_error?: unknown; readonly error?: unknown };
+      if (rec.type !== "result" || rec.is_error !== true) continue;
+      if (typeof rec.error === "string" && rec.error.length > 0) return rec.error;
+    } catch {
+      // Ignore non-JSON progress output.
+    }
+  }
+  return undefined;
+};
+
 export const ampSessionId = (stdout: string, stderr: string): string | undefined =>
   stableSessionIdFromJsonLines(`${stdout}\n${stderr}`, ["session_id", "sessionId", "sessionID", "threadId", "thread_id"])
     ?? stableSessionIdFromRegex(`${stdout}\n${stderr}`, [
@@ -174,13 +415,29 @@ export const runAmpWorkflowTask = async (
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   assertAmpPermission(options.resolvedPermission);
-  const permissionSettings = await prepareAmpPermissionSettings(options.resolvedPermission);
-  const args = buildAmpArgs({
+  let pin = resolveAmpCatalogPinPlan({
     mode: options.model,
+    catalogModel: options.catalogModel,
+    effort: options.effort,
+  });
+  if (pin.kind === "pin") {
+    const existing = await findExistingAmpCatalogMode(options.cwd, {
+      catalogModel: pin.catalogModel,
+      effort: pin.effort,
+    });
+    if (existing !== undefined) {
+      pin = { kind: "mode", mode: existing };
+    }
+  }
+  const permissionSettings = await prepareAmpPermissionSettings(options.resolvedPermission);
+  const catalogPin = await prepareAmpCatalogPin(options.cwd, pin);
+  const args = buildAmpArgs({
+    mode: pin.mode,
     prompt,
     sessionId,
     permission: options.resolvedPermission,
     settingsFile: permissionSettings.settingsFile,
+    pluginReadyTimeout: pin.kind === "pin",
   });
 
   const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
@@ -189,16 +446,20 @@ export const runAmpWorkflowTask = async (
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
-  }).finally(() => permissionSettings.cleanup());
+  }).finally(async () => {
+    await catalogPin.cleanup();
+    await permissionSettings.cleanup();
+  });
   if (aborted) {
     throw new AmpWorkflowWorkerError(
       "amp was aborted by Prism workflow stop",
       workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
     );
   }
-  if (exitCode !== 0) {
+  const streamError = parseAmpStreamJsonError(stdout);
+  if (exitCode !== 0 || streamError !== undefined) {
     throw new AmpWorkflowWorkerError(
-      `amp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      `amp exited with ${exitCode}: ${streamError ?? (stderr.trim() || stdout.trim())}`,
       workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
     );
   }
@@ -207,7 +468,12 @@ export const runAmpWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(outputText),
     metadata: {
       adapter: "amp-code",
-      model: options.model,
+      ...ampWorkflowHonestMetadata({
+        pin,
+        authoredModel: options.model,
+        catalogModel: options.catalogModel,
+        effort: options.effort,
+      }),
       durationMs,
       sessionId: ampSessionId(stdout, stderr) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),

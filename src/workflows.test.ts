@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Either, Schema } from "effect";
 import {
+  anonymousWorkflowAgent,
   decodeTaskOutput,
   defineTask,
   defineWorkflow,
@@ -54,7 +55,7 @@ const modelProfile = {
     grok: { model: "grok-build-fast" },
     hermes: { model: "openai/gpt-5.1-mini" },
     "kimi-code": { model: "moonshot/kimi-k2" },
-    "amp-code": { model: "deep" },
+    "amp-code": { model: "high" },
     "antigravity-cli": { model: "Gemini 3.5 Flash (Low)" },
   },
 } as const satisfies WorkflowModelProfileRef;
@@ -96,6 +97,12 @@ describe("workflow authoring primitives", () => {
     const worker = "antigravity-cli";
     const liveWorker: WorkflowWorkerId = worker;
     expect(liveWorker).toBe("antigravity-cli");
+  });
+
+  test("workflow worker id includes cursor", () => {
+    const worker = "cursor";
+    const liveWorker: WorkflowWorkerId = worker;
+    expect(liveWorker).toBe("cursor");
   });
 
   test("antigravity worker options reject unsupported permissions at type level", () => {
@@ -269,7 +276,7 @@ describe("workflow authoring primitives", () => {
       prompt: amp.prompt,
       permission: "legacy",
     });
-    expect(ampArgs.slice(ampArgs.indexOf("--mode"), ampArgs.indexOf("--mode") + 2)).toEqual(["--mode", "deep"]);
+    expect(ampArgs.slice(ampArgs.indexOf("--mode"), ampArgs.indexOf("--mode") + 2)).toEqual(["--mode", "high"]);
 
     const antigravity = taskFor("antigravity-cli");
     const antigravityModel = resolveWorkflowTaskModel(antigravity);
@@ -456,6 +463,20 @@ describe("workflow authoring primitives", () => {
     // @ts-expect-error decoded output must match the Effect Schema, not prose.
     const invalid: WorkflowTaskOutput<typeof build> = { summary: "typed" };
     expect(invalid).toBeDefined();
+  });
+
+  test("claude-code rejects sandbox-read-only at the type", () => {
+    defineTask({
+      id: "claude-sandbox-type",
+      agent: builder,
+      prompt: "test",
+      output: PatchReport,
+      worker: {
+        worker: "claude-code",
+        // @ts-expect-error Claude Code has no sandbox permission flag
+        permission: "sandbox-read-only",
+      },
+    });
   });
 
   test("workflow permission mode type includes all expected values", () => {
@@ -702,33 +723,34 @@ describe("workflow phase DSL", () => {
   });
 });
 
-describe("agent-less tasks", () => {
-  test("isWorkflowTask accepts a missing agent and rejects a malformed one", () => {
+describe("agent-less tasks normalize to the anonymous sentinel", () => {
+  test("defineTask accepts a missing agent and normalizes it to anonymousWorkflowAgent", () => {
     const bare = defineTask({
       id: "bare",
       prompt: "Do the work.",
       output: PatchReport,
     });
+    expect(bare.agent).toEqual(anonymousWorkflowAgent);
     expect(isWorkflowTask(bare)).toBe(true);
-    expect(isWorkflowTask({ ...bare, agent: undefined })).toBe(true);
+    expect(isWorkflowTask({ ...bare, agent: undefined })).toBe(false);
     expect(isWorkflowTask({ ...bare, agent: { plugin: "forge" } })).toBe(false);
   });
 
-  test("workflowSummary omits the agent key for agent-less tasks", () => {
+  test("workflowSummary reports the normalized sentinel agent", () => {
     const bare = defineTask({ id: "bare", prompt: "Do the work.", output: PatchReport });
     const bound = defineTask({ id: "bound", agent: builder, prompt: "Do the work.", output: PatchReport });
     const summary = workflowSummary("/tmp/wf.ts", defineWorkflow({
       name: "mixed",
       tasks: [bare, bound] as const,
     }));
-    expect(summary.tasks[0]).toEqual({ id: "bare" });
+    expect(summary.tasks[0]?.agent).toEqual({ plugin: "prism", name: "anonymous" });
     expect(summary.tasks[1]?.agent).toEqual({ plugin: "forge", name: "builder" });
   });
 
-  test("workflowWorkerJsonInstruction omits the agent identity line when no agent is present", () => {
+  test("workflowWorkerJsonInstruction carries the sentinel identity for agent-less tasks", () => {
     const bare = defineTask({ id: "bare", prompt: "Do the work.", output: PatchReport });
     const instruction = workflowWorkerJsonInstruction(bare);
-    expect(instruction).not.toContain("Agent identity:");
+    expect(instruction).toContain("Agent identity: prism.anonymous");
     const boundInstruction = workflowWorkerJsonInstruction(
       defineTask({ id: "bound", agent: builder, prompt: "Do the work.", output: PatchReport }),
     );

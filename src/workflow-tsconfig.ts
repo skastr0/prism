@@ -4,9 +4,10 @@
  * The generated tsconfig maps the three virtual specifiers a workflow author
  * uses to their shipped type declarations:
  *
- *   "prism"      → <platform-package>/types/index.d.ts  (the emitted prism.d.ts)
- *   "prism/refs" → ~/.prism/state/projects/<key>/generated/agents.ts  (per-project refs)
- *   "effect"     → <platform-package>/node_modules/effect/dist/dts/index.d.ts
+ *   "prism"           → <platform-package>/types/index.d.ts  (the emitted prism.d.ts)
+ *   "prism/refs"      → ~/.prism/state/projects/<key>/generated/agents.ts  (per-project refs)
+ *   "prism/harnesses" → ~/.prism/state/harness-types/harness-models.ts  (global, not project-keyed)
+ *   "effect"          → <platform-package>/node_modules/effect/dist/dts/index.d.ts
  *
  * Resolution strategy:
  *
@@ -31,6 +32,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { harnessModelsModulePath } from "./harness-types.js";
 
 // ---------------------------------------------------------------------------
 // Platform package root resolution
@@ -162,17 +164,27 @@ const platformPackageRootFromSource = (): string | undefined => {
 
 /**
  * Find the prism.d.ts directory. Resolution order:
- *   1. Binary heuristic: platformPackageRootFromBinary() returns the platform
- *      package root (handles both npm-installed and dev-symlink layouts).
- *      Check <pkg-root>/types/index.d.ts.
- *   2. Source-checkout fallback: the freshly-emitted dist/dts-tmp/.
+ *   1. Source checkout with dist/dts-tmp/ (`bun run build` / `install:dev` emit this).
+ *   2. Installed platform package types/ (npm layout).
+ *   3. In-repo packages/npm/<platform>/types when dts-tmp is absent.
  *
  * Returns undefined when none resolve — callers then warn + proceed rather than
  * pointing "prism" at a nonexistent file (which would surface as a misleading
  * "Cannot find module 'prism'" type error on every valid workflow).
  */
 const resolvePrismTypesDir = (): string | undefined => {
-  // 1. Platform package root (npm-installed or dev-symlink via binary heuristic).
+  // Dev checkout first: prism-dev is a symlink to dist/prism-<platform>, and
+  // the in-repo packages/npm/*/types are last-publish snapshots. Prefer the
+  // just-emitted authoring dts so `prism-dev workflow typecheck` matches source.
+  const repoRoot = platformPackageRootFromSource();
+  if (repoRoot && existsSync(join(repoRoot, "packages", "npm"))) {
+    const tmp = join(repoRoot, "dist", "dts-tmp");
+    if (existsSync(join(tmp, "index.d.ts"))) {
+      return tmp;
+    }
+  }
+
+  // Installed binary: platform package root (npm layout or leftover npm types).
   const pkgRoot = platformPackageRootFromBinary();
   if (pkgRoot) {
     const candidate = join(pkgRoot, "types");
@@ -181,17 +193,10 @@ const resolvePrismTypesDir = (): string | undefined => {
     }
   }
 
-  // 2. Source-checkout fallback: the freshly-emitted dist/dts-tmp/.
-  const repoRoot = platformPackageRootFromSource();
   if (repoRoot) {
-    const tmp = join(repoRoot, "dist", "dts-tmp");
-    if (existsSync(join(tmp, "index.d.ts"))) {
-      return tmp;
-    }
 
-    // 3. Source-checkout fallback: pre-built platform package types under
-    // packages/npm/. This covers `bun run src/cli.ts` workflows when the
-    // lightweight build:cli target has not yet emitted dist/dts-tmp/.
+    // Source-checkout fallback: pre-built platform package types under
+    // packages/npm/. Covers `bun run src/cli.ts` when dist/dts-tmp/ is absent.
     if (existsSync(join(repoRoot, "packages", "npm"))) {
       for (const name of platformPackageDirNames()) {
         const candidate = join(repoRoot, "packages", "npm", name, "types");
@@ -313,6 +318,8 @@ export const buildWorkflowPaths = (options: {
   readonly typeDirs: WorkflowTypeDirs;
   /** Absolute path to the generated refs directory (~/.../generated/). */
   readonly refsDir?: string;
+  /** Absolute path to the global harness-models.ts (`prism/harnesses`). */
+  readonly harnessTypesPath?: string;
 }): Record<string, string[]> => {
   const paths: Record<string, string[]> = {};
   const { prismTypesDir, effectDtsDir } = options.typeDirs;
@@ -323,6 +330,9 @@ export const buildWorkflowPaths = (options: {
   }
   if (options.refsDir) {
     Object.assign(paths, buildWorkflowRefsPaths(options.refsDir));
+  }
+  if (options.harnessTypesPath) {
+    paths["prism/harnesses"] = [options.harnessTypesPath];
   }
   if (effectDtsDir) {
     paths["effect"] = [join(effectDtsDir, "index.d.ts")];
@@ -353,6 +363,11 @@ export interface WorkflowTsconfigOptions {
    * Added to tsconfig `include` so the IDE and tsc pick them up automatically.
    */
   readonly workflowDir?: string;
+  /**
+   * Absolute path to the global generated harness-models.ts.
+   * Wires `prism/harnesses` and pulls module augmentation into the program.
+   */
+  readonly harnessTypesPath?: string;
 }
 
 export interface GeneratedWorkflowTsconfig {
@@ -387,11 +402,24 @@ export const generateWorkflowTsconfig = async (
   // paths — the typecheck pre-step detects a missing prism/effect surface and
   // warns+proceeds rather than reporting a misleading "Cannot find module".
   //
-  const paths = buildWorkflowPaths({ typeDirs, refsDir: options.refsDir });
+  const harnessTypesPath =
+    options.harnessTypesPath ??
+    (existsSync(harnessModelsModulePath(options.prismHome))
+      ? harnessModelsModulePath(options.prismHome)
+      : undefined);
+
+  const paths = buildWorkflowPaths({
+    typeDirs,
+    refsDir: options.refsDir,
+    harnessTypesPath,
+  });
 
   const include: string[] = [];
   if (options.workflowDir) {
     include.push(join(options.workflowDir, "**", "*.ts"));
+  }
+  if (harnessTypesPath) {
+    include.push(harnessTypesPath);
   }
 
   const tsconfig = {

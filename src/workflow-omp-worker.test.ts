@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Schema } from "effect";
 import {
+  assertOmpWorkflowModel,
   buildOmpArgs,
   OmpWorkflowWorkerError,
   parseOmpJsonStream,
@@ -12,7 +13,7 @@ import {
 import { WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
 import type { StableSessionId } from "./workflow-session.js";
-import { defineTask, type WorkflowAgentRef } from "./workflows.js";
+import { anonymousWorkflowAgent, defineTask, type WorkflowAgentRef } from "./workflows.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
 
 const agent = {
@@ -49,6 +50,13 @@ const fakeOmpEventStream = (callsFile: string, sessionId: string): string => [
   "",
 ].join("\n");
 
+describe("OMP Console Go pins", () => {
+  test("rejects opencode-go selectors before spawn", () => {
+    expect(() => assertOmpWorkflowModel("opencode-go/glm-5.3-flash")).toThrow(/MissingSessionID/);
+    expect(() => assertOmpWorkflowModel("google/gemini-3.8-flash")).not.toThrow();
+  });
+});
+
 describe("OMP workflow argv", () => {
   test("uses scripting, model, profile, permission, tool, and exact-resume flags", () => {
     const args = buildOmpArgs({
@@ -66,6 +74,7 @@ describe("OMP workflow argv", () => {
 
     expect(args).toEqual([
       "--mode", "json",
+      "--print",
       "--cwd", "/repo",
       "--append-system-prompt", "/repo/.omp/agents/builder.md",
       "--no-title",
@@ -123,6 +132,20 @@ describe("OMP JSON event stream", () => {
       sessionId: "019f-own-session",
       text: JSON.stringify({ summary: "final" }),
     });
+  });
+
+  test("surfaces assistant provider errors instead of empty output", () => {
+    const parsed = parseOmpJsonStream(JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "400 Error from provider (Console Go): Request is missing x-opencode-session",
+      },
+    }));
+    expect(parsed.text).toBe("");
+    expect(parsed.error).toContain("missing x-opencode-session");
   });
 
   test("uses the last assistant message from agent_end as a bounded fallback", () => {
@@ -317,6 +340,37 @@ describe("OMP workflow execution", () => {
     }
   });
 
+  test("plugin-free anonymous agent uses a temp system prompt instead of requiring refresh", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-omp-anonymous-"));
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = join(root, "empty-home");
+      const callsFile = join(root, "calls.jsonl");
+      const fakeOmp = join(root, "fake-omp.mjs");
+      await writeFile(fakeOmp, fakeOmpEventStream(callsFile, "019f-anonymous-session"));
+      await chmod(fakeOmp, 0o755);
+
+      const result = await runOmpWorkflowTask({
+        ...task,
+        agent: anonymousWorkflowAgent,
+      }, {
+        cwd: root,
+        bin: fakeOmp,
+        resolvedPermission: "legacy",
+      });
+
+      expect(result.output).toEqual({ summary: "ok" });
+      const argv = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
+      const promptPath = argv[argv.indexOf("--append-system-prompt") + 1];
+      expect(promptPath).toContain("prism-omp-anonymous-");
+      expect(promptPath).toEndWith("anonymous.md");
+      expect(argv).toContain("--print");
+    } finally {
+      process.env.HOME = previousHome;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("fails closed before spawn when the compiled OMP agent is absent", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-worker-"));
     const previousHome = process.env.HOME;
@@ -334,6 +388,32 @@ describe("OMP workflow execution", () => {
       })).rejects.toThrow("Run prism refresh <plugin> --harness omp");
     } finally {
       process.env.HOME = previousHome;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runOmpWorkflowTask provider errors", () => {
+  test("fails closed with the assistant errorMessage instead of empty output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-omp-provider-error-"));
+    try {
+      const projectAgent = join(root, ".omp", "agents", "builder.md");
+      await writeText(projectAgent, "project compiled agent\n");
+      const fakeOmp = join(root, "fake-omp-provider-error.mjs");
+      await writeFile(fakeOmp, [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ type: 'session', id: 'omp-error-session' }) + '\\n');",
+        "process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '400 missing x-opencode-session' } }) + '\\n');",
+        "",
+      ].join("\n"));
+      await chmod(fakeOmp, 0o755);
+
+      await expect(runOmpWorkflowTask(task, {
+        cwd: root,
+        bin: fakeOmp,
+        resolvedPermission: "legacy",
+      })).rejects.toThrow("omp provider error: 400 missing x-opencode-session");
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });

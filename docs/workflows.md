@@ -20,32 +20,35 @@ For the product tour, start at the [root README](../README.md#workflows-typed-ta
 
 ## The mental model
 
-A **task** binds five things: an *agent* (a compiled Prism agent ref), a *worker* (which harness CLI executes it), a *prompt*, an *output schema* (Effect Schema the worker's final answer must decode into), and *finish criteria* (checks the decoded output must pass). A **workflow** composes tasks — statically as a list, or dynamically as an Effect program with full control flow. Every run persists to a SQLite ledger; every completed task result is cached content-addressed.
+A **task** binds five things: an *agent* (a compiled Prism agent ref, or `anonymousWorkflowAgent` when you have no plugin), a *worker* (which harness CLI executes it), a *prompt*, an *output schema* (Effect Schema the worker's final answer must decode into), and *finish criteria* (checks the decoded output must pass). A **workflow** composes tasks — statically as a list, or dynamically as an Effect program with full control flow. Every run persists to a SQLite ledger; every completed task result is cached content-addressed.
 
 The worker is a real harness process — `claude-code`, `codex-cli`, `grok`, `kimi-code`, `opencode`, … — launched with a pinned model and permission mode, using that harness's own local installation and auth. **A live run spends real tokens on your accounts.** Validate, typecheck, and mock first; pin budgets when you dispatch.
 
 ## The generated environment
 
-Workflows import from `prism` (the DSL) and `prism/refs` (typed refs to your compiled agents, models, skills, traits, orbits, and tools):
+Workflows import from `prism` (the DSL). Compiled plugins add `prism/refs` (typed agents, modelspaces, skills, traits, orbits, and tools). Installed harnesses add `prism/harnesses` (live model slugs):
 
 ```ts
-import { defineTask, defineWorkflow } from "prism";
-import { agents } from "prism/refs";
+import { anonymousWorkflowAgent, defineTask, defineWorkflow } from "prism";
+import { ampCodeModelSlugs } from "prism/harnesses";
 ```
 
 These imports resolve through a **generated tsconfig**, not your project's own module resolution:
 
-- `prism refresh <plugin-path>` compiles the project and writes the refs surface (`generated/{agents,models,skills,traits,orbits,tools}.ts`) plus a workflow tsconfig under `PRISM_HOME/state/` that path-maps `prism`, `prism/refs`, and `effect`.
-- `prism workflow scaffold <name>` writes a validating starter into `~/.prism/workflows/` (never inside the repo it drives) already wired to a real discovered agent ref.
+- `prism workflow refresh-harness-types` discovers models from local harness caches/CLIs and writes a **global** cache at `~/.prism/state/harness-types/` (not project-keyed). That file path-maps `prism/harnesses` and augments `worker.model` so plugin-free workflows typecheck against what is actually installed.
+- `prism refresh <plugin-path>` is optional. When you have a plugin it writes the refs surface (`generated/{agents,models,skills,traits,orbits,tools}.ts`) and path-maps `prism/refs`.
+- `prism workflow scaffold <name>` writes a validating starter into `~/.prism/workflows/` (never inside the repo it drives). With no compiled refs it uses `anonymousWorkflowAgent`.
 - `prism workflow typecheck <file>` and `prism workflow validate <file>` use that generated environment automatically.
 
-Workflow commands are **project-scoped**: they resolve the refs surface and run store from the current working directory's project. From a directory that was never compiled, `prism workflow catalog` and `prism workflow refs` tell you to run `prism refresh <plugin-path>` first, and `prism/refs` will not resolve. Discover what is available with:
+Workflow **store and refs** are project-scoped. Harness model types are not — they follow the machine. From a directory that was never compiled, `prism/refs` will not resolve. That is fine — workflows are the flagship and plugins are optional. Discover what is available with:
 
 ```bash
-prism workflow catalog                 # compact index of agents.* / orbits.* / models.*
-prism workflow catalog --orbit forge   # one namespace
-prism workflow catalog --query review  # search
-prism workflow refs                    # refs surface location + freshness
+prism workflow refresh-harness-types   # global live model unions (no plugin)
+prism workflow models --worker cursor --query opus
+prism workflow skill                   # embedded authoring guide (also written on scaffold)
+prism workflow catalog                 # workers + live slug counts; plugin refs if compiled
+prism workflow catalog --query opus    # searches harness models when no plugin
+prism workflow refs                    # optional plugin refs location + freshness
 ```
 
 ## defineTask
@@ -103,7 +106,9 @@ interface WorkflowAgentRef {
 }
 ```
 
-You almost never write one by hand — import it from `prism/refs` (`agents.<plugin>.<agentName>`, camel-cased), or copy the literal that `prism workflow catalog --ref <ref>` prints. The hashes make provenance checkable: a workflow run records exactly which compiled agent version produced each output.
+With a compiled plugin, import it from `prism/refs` (`agents.<plugin>.<agentName>`, camel-cased), or copy the literal that `prism workflow catalog --ref <ref>` prints. The hashes make provenance checkable: a workflow run records exactly which compiled agent version produced each output.
+
+With no plugin, use `anonymousWorkflowAgent` from `prism`. It is a stub ref so a task can still pin a worker and a live harness model.
 
 Agents may also carry an agent-level modelspace ref (`agent.model`), which participates in model resolution below.
 
@@ -111,14 +116,14 @@ Agents may also carry an agent-level modelspace ref (`agent.model`), which parti
 
 ```ts
 type WorkflowWorkerId =
-  | "amp-code" | "antigravity-cli" | "claude-code" | "codex-cli" | "devin"
-  | "grok" | "hermes" | "kimi-code" | "opencode" | "omp";
+  | "amp-code" | "antigravity-cli" | "claude-code" | "codex-cli" | "cursor"
+  | "devin" | "grok" | "hermes" | "kimi-code" | "opencode" | "omp";
 ```
 
 ```ts
 worker: {
   worker?: WorkflowWorkerId;         // which harness CLI executes this task
-  model?: string | WorkflowModelProfileRef;
+  model?: string | live harness slug | WorkflowModelProfileRef;
   modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   profile?: string;
   permission?: WorkflowPermissionMode;
@@ -128,7 +133,7 @@ worker: {
 }
 ```
 
-**Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own sandbox/approval flags. `antigravity-cli` accepts only `legacy` / `permissive` / `full-access` — the type system enforces it.
+**Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own flags. The type is per-worker: Codex may use `sandbox-read-only`; Claude, Grok, Amp, and OMP may not. `prism workflow validate` fails closed with the same remediation as run. Do not copy a Codex sandbox pin onto another harness.
 
 **Retry** (executor-level, WFE-009): only *classified-transient* executor failures retry — an unclassified non-zero worker exit. Config/load errors and cancellation-barrier outcomes never retry. `maxAttempts` counts total attempts (default 2, i.e. one retry); `backoffMs` spaces them.
 
@@ -148,7 +153,7 @@ Tasks without a `worker` fall back to the CLI: `prism workflow run --worker <id>
 
 `model` resolves through an exact precedence chain (`resolveWorkflowTaskModelResolution`):
 
-1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`.
+1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`. After `prism workflow refresh-harness-types`, that string is checked against the installed harness's discovered slugs. OMP pins are `provider/id` selectors from `omp models --json` (example: `ollama-cloud/glm-5.3-flash`); unpinned OMP tasks prefer `~/.omp/agent/config.yml` `modelRoles.default` with the `:thinking` suffix stripped. `opencode-go/*` is Console Go and 400s in workflow `--print` (`MissingSessionID`). Amp inventories three surfaces: the `--mode` dial (`low | medium | high | ultra`), plugin mode keys (both valid `worker.model` / `--mode` values), and the curated `provider/model` catalog from `amp plugins show-agent-options --json`. Catalog slugs are `worker.catalogModel` (`AmpCodeCatalogSlug`); reasoning effort is `worker.effort` (`AmpCodeEffort`). Amp has no `--model` flag, so Prism pins catalog/effort through a one-shot project plugin mode when no existing plugin mode already binds that slug. Run metadata reports `model` as the catalog slug (or dial), plus `ampMode`, `catalogModel`, and `effort` — never the transport key `prism-pin`. A dial in `worker.model` can `extends` that pin; a plugin mode key cannot combine with `catalogModel` / `effort`. `prism workflow validate` fail-closes when the snapshot lists the catalog row and `worker.effort` is not on that row. Modelspaces stay optional policy, not the inventory.
 2. **Task modelspace profile ref** — `worker.model: { kind: "model-profile-ref", plugin, modelspace, profile }` resolves the profile's target for the task's worker; the first concrete `{ model, provider?, variant? }` entry wins. No entry for that worker → `WorkflowModelResolutionError`.
 3. **`modelResolver`** — a function receiving the agent's resolved model target for this worker (keyed by camel-cased model identity, e.g. `{ gpt56Terra: { model: "gpt-5.6-terra" } }`) and returning the chosen model string. The agent must have a model target for the worker.
 4. **Agent modelspace profile** — the agent's own `model` ref, resolved for this worker. Source: `profile`. If the ref exists but has no entry for this worker, Prism falls back to the CLI `--model` (source: `cli-fallback`) or the harness registry's cheap-fast default (source: `default`) instead of crashing.
@@ -365,8 +370,10 @@ Traces interleave engine spans (task attempts, repairs, cache hits) with your ow
 ## Testing a graph without spending tokens
 
 ```bash
-prism workflow typecheck <file>     # generated tsconfig + shipped declarations
-prism workflow validate <file>      # loads the module, resolves each task's (worker, model)
+prism workflow refresh-harness-types   # optional: live worker.model unions, no plugin
+prism workflow models --worker cursor --query opus
+prism workflow typecheck <file>        # generated tsconfig + shipped declarations
+prism workflow validate <file>         # loads the module, resolves each task's (worker, model)
 prism workflow run <file> --mock-output mocks.json
 ```
 

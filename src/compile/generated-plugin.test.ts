@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   GENERATED_EXTERNAL_TOOL_NAME_MAX_LENGTH,
+  generatedCursorPluginId,
+  generatedPluginIdForOwner,
   generatedSyntheticToolName,
 } from "./generated-plugin.js";
 
@@ -28,4 +30,10 @@ test("generated synthetic tool names compact over the portable length boundary",
   expect(toolName).not.toBe(original);
   expect(toolName.length).toBe(GENERATED_EXTERNAL_TOOL_NAME_MAX_LENGTH);
   expect(toolName).toMatch(/^p_a+_[0-9a-f]{8}$/u);
+});
+
+test("Cursor generated plugin ids kebabize underscores", () => {
+  expect(generatedPluginIdForOwner("agent_core")).toBe("prism-generated-agent_core");
+  expect(generatedCursorPluginId("agent_core")).toBe("prism-generated-agent-core");
+  expect(generatedCursorPluginId("my-plugin")).toBe("prism-generated-my-plugin");
 });

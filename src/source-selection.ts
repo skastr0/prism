@@ -50,6 +50,7 @@ const COMPILE_SOURCE_HARNESSES = [
   "pi",
   "omp",
   "kimi-code",
+  "cursor",
   "devin",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
@@ -123,11 +124,16 @@ const targetSupportsCompileSourceNoun = (
     case "hooks":
       return capabilities.hooks === "supported";
     case "orbits":
-    case "sops":
     case "toolspaces":
     case "modelspaces":
     case "skillspaces":
       return (COMPILE_SOURCE_HARNESSES as readonly HarnessId[]).includes(harnessId);
+    case "sops":
+      // SOPs lower into skill folders; Cursor has no Prism-managed skill
+      // compile surface (its skills stay docs-backed/direct), so a
+      // targets.sops cursor binding would silently lower nothing.
+      return harnessId !== "cursor"
+        && (COMPILE_SOURCE_HARNESSES as readonly HarnessId[]).includes(harnessId);
     case "rules":
     case "commands":
     case "skills":

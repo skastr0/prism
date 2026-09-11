@@ -16,6 +16,7 @@ import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { buildHermesArgs } from "./workflow-hermes-worker.js";
 import { buildCodexArgs } from "./workflow-codex-worker.js";
 import { buildOmpArgs } from "./workflow-omp-worker.js";
+import { buildCursorArgs } from "./workflow-cursor-worker.js";
 import { supportedWorkflowWorkers, getWorkflowWorkerAdapter, WorkflowPermissionError, type WorkflowWorkerAdapterOptionsForCapability } from "./workflow-workers.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
 
@@ -81,11 +82,14 @@ describe("workflow worker argument builders", () => {
     expect(args).not.toContain("subagent");
   });
 
-  test("amp accepts only deep and rush workflow modes", () => {
-    expect(assertAmpWorkflowMode("deep")).toBe("deep");
-    expect(assertAmpWorkflowMode("rush")).toBe("rush");
-    expect(() => assertAmpWorkflowMode("smart")).toThrow("unsupported Amp workflow mode");
-    expect(buildAmpArgs({ mode: "deep", prompt: "return json", permission: "legacy" })).toContain("deep");
+  test("amp passes --mode through as a live Amp mode key", () => {
+    expect(assertAmpWorkflowMode("low")).toBe("low");
+    expect(assertAmpWorkflowMode("ultra")).toBe("ultra");
+    expect(assertAmpWorkflowMode("grok45")).toBe("grok45");
+    expect(() => assertAmpWorkflowMode("")).toThrow("non-empty");
+    expect(buildAmpArgs({ mode: "high", prompt: "return json", permission: "legacy" })).toEqual(
+      expect.arrayContaining(["--mode", "high"]),
+    );
   });
 
   test("antigravity-cli is a supported workflow worker", () => {
@@ -94,7 +98,7 @@ describe("workflow worker argument builders", () => {
   });
 
   test("workflow workers expose one task execution entrypoint", () => {
-    for (const worker of ["amp-code", "antigravity-cli", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "opencode"]) {
+    for (const worker of ["amp-code", "antigravity-cli", "claude-code", "codex-cli", "cursor", "grok", "hermes", "kimi-code", "opencode"]) {
       const adapter = getWorkflowWorkerAdapter(worker);
       expect(typeof adapter.runTask).toBe("function");
       expect("continueTask" in adapter).toBe(false);
@@ -177,6 +181,15 @@ describe("workflow worker continuation arg mapping", () => {
     expect(args).toContain("--no-session");
     expect(args).not.toContain("--resume");
     expect(args.at(-1)).toBe("p");
+  });
+
+  test("cursor uses exact session resume only", () => {
+    const args = buildCursorArgs({ cwd: "/r", prompt: "p", resumeSessionId: "s1" });
+    expect(args.slice(args.indexOf("--resume"), args.indexOf("--resume") + 2)).toEqual(["--resume", "s1"]);
+    expect(args).toContain("--print");
+    expect(args).toContain("--trust");
+    expect(args).not.toContain("--continue");
+    expect(args).not.toContain("--auto-review");
   });
 
   test("amp maps continuation to exact thread id", () => {
@@ -341,6 +354,11 @@ describe("claude-code permission arg mapping", () => {
     const args = buildClaudeArgs({ agent: "a", prompt: "p", permission: "legacy" });
     expect(args).toContain("--print");
     expect(args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  test("omits --agent when no compiled Claude agent is selected", () => {
+    const args = buildClaudeArgs({ prompt: "p", permission: "legacy" });
+    expect(args).not.toContain("--agent");
   });
 
   test("permissive emits --dangerously-skip-permissions --print --output-format stream-json", () => {
@@ -648,6 +666,18 @@ describe("amp-code permission arg mapping", () => {
   test("legacy emits no settings override", () => {
     const args = buildAmpArgs({ prompt: "p", permission: "legacy" });
     expect(args).not.toContain("--settings-file");
+    expect(args).not.toContain("--plugin-ready-timeout");
+  });
+
+  test("catalog pin waits for the plugin mode to register", () => {
+    const args = buildAmpArgs({
+      prompt: "p",
+      permission: "legacy",
+      mode: "prism-pin",
+      pluginReadyTimeout: true,
+    });
+    expect(args.slice(args.indexOf("--mode"), args.indexOf("--mode") + 2)).toEqual(["--mode", "prism-pin"]);
+    expect(args).toContain("--plugin-ready-timeout");
   });
 
   test("permissive uses a settings file override when provided", () => {
@@ -683,5 +713,71 @@ describe("amp-code permission arg mapping", () => {
   test("full-access uses a settings file override when provided", () => {
     const args = buildAmpArgs({ prompt: "p", permission: "full-access", settingsFile: "/tmp/amp-settings.json" });
     expect(args.slice(args.indexOf("--settings-file"), args.indexOf("--settings-file") + 2)).toEqual(["--settings-file", "/tmp/amp-settings.json"]);
+  });
+});
+
+describe("cursor permission arg mapping", () => {
+  test("legacy emits print + trust without --force", () => {
+    const args = buildCursorArgs({ cwd: "/r", prompt: "p", permission: "legacy" });
+    expect(args).toContain("--print");
+    expect(args).toContain("--trust");
+    expect(args).not.toContain("--force");
+    expect(args).not.toContain("--approve-mcps");
+    expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual([
+      "--output-format",
+      "stream-json",
+    ]);
+  });
+
+  test("permissive emits --force", () => {
+    const args = buildCursorArgs({ cwd: "/r", prompt: "p", permission: "permissive" });
+    expect(args).toContain("--force");
+    expect(args).not.toContain("--approve-mcps");
+  });
+
+  test("default emits permissive --force", () => {
+    const args = buildCursorArgs({ cwd: "/r", prompt: "p" });
+    expect(args).toContain("--force");
+  });
+
+  test("full-access emits --force and --approve-mcps", () => {
+    const args = buildCursorArgs({ cwd: "/r", prompt: "p", permission: "full-access" });
+    expect(args).toContain("--force");
+    expect(args).toContain("--approve-mcps");
+  });
+
+  test("sandbox-read-only throws", () => {
+    expect(() => buildCursorArgs({ cwd: "/r", prompt: "p", permission: "sandbox-read-only" }))
+      .toThrow(WorkflowPermissionError);
+  });
+
+  test("plugin-dir is forwarded when discovery finds a generated plugin", () => {
+    const args = buildCursorArgs({
+      cwd: "/r",
+      prompt: "p",
+      generatedPlugin: { pluginDir: "/tmp/.cursor/plugins/local/prism-generated-agent-core" },
+    });
+    expect(args.slice(args.indexOf("--plugin-dir"), args.indexOf("--plugin-dir") + 2)).toEqual([
+      "--plugin-dir",
+      "/tmp/.cursor/plugins/local/prism-generated-agent-core",
+    ]);
+    expect(args).not.toContain("--agent");
+  });
+
+  test("sandbox-workspace-write emits sandbox + --force", () => {
+    const args = buildCursorArgs({ cwd: "/r", prompt: "p", permission: "sandbox-workspace-write" });
+    expect(args.slice(args.indexOf("--sandbox"), args.indexOf("--sandbox") + 2)).toEqual(["--sandbox", "enabled"]);
+    expect(args).toContain("--force");
+    expect(args).not.toContain("--mode");
+  });
+
+  test("restricted throws", () => {
+    expect(() => buildCursorArgs({ cwd: "/r", prompt: "p", permission: "restricted" }))
+      .toThrow(WorkflowPermissionError);
+  });
+
+  test("interactive throws", () => {
+    expect(() => buildCursorArgs({ cwd: "/r", prompt: "p", permission: "interactive" }))
+      .toThrow(WorkflowPermissionError);
   });
 });

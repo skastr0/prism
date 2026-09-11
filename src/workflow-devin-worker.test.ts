@@ -66,7 +66,6 @@ describe("workflow-devin-worker", () => {
       model: "swe-1-7",
       permission: "permissive",
       sessionId: "magenta-answer",
-      agentConfigPath: "/tmp/agent.yaml",
       promptFilePath: "/tmp/prompt.md",
       exportPath: "/tmp/out.json",
     });
@@ -78,13 +77,12 @@ describe("workflow-devin-worker", () => {
       "accept-edits",
       "-r",
       "magenta-answer",
-      "--agent-config",
-      "/tmp/agent.yaml",
       "--prompt-file",
       "/tmp/prompt.md",
       "--export",
       "/tmp/out.json",
     ]);
+    expect(args).not.toContain("--agent-config");
   });
 
   test("detects auth-required output", () => {

@@ -49,7 +49,7 @@ export type WorkflowTaskOutputSource = "mock-output";
 
 export interface CompletedWorkflowTaskRecord {
   readonly identity: WorkflowTaskIdentity;
-  readonly agent?: {
+  readonly agent: {
     readonly plugin: string;
     readonly name: string;
   };
@@ -95,7 +95,7 @@ export interface WorkflowRunTaskRecord {
   readonly cacheKey: string;
   readonly status: WorkflowRunTaskStatus;
   readonly cached: boolean;
-  readonly agent?: {
+  readonly agent: {
     readonly plugin: string;
     readonly name: string;
   };
@@ -2141,14 +2141,10 @@ export class WorkflowStore {
         promptHash: row.prompt_hash,
         agentManifestHash: row.agent_manifest_hash,
       },
-      ...(row.agent_plugin.length > 0 || row.agent_name.length > 0
-        ? {
-          agent: {
-            plugin: row.agent_plugin,
-            name: row.agent_name,
-          },
-        }
-        : {}),
+      agent: {
+        plugin: row.agent_plugin,
+        name: row.agent_name,
+      },
       output: JSON.parse(row.output_json) as unknown,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
       ...(row.output_source === "mock-output" ? { outputSource: "mock-output" as WorkflowTaskOutputSource } : {}),
@@ -2301,14 +2297,10 @@ export class WorkflowStore {
           promptHash: row.prompt_hash,
           agentManifestHash: row.agent_manifest_hash,
         },
-        ...(row.agent_plugin.length > 0 || row.agent_name.length > 0
-          ? {
-            agent: {
-              plugin: row.agent_plugin,
-              name: row.agent_name,
-            },
-          }
-          : {}),
+        agent: {
+          plugin: row.agent_plugin,
+          name: row.agent_name,
+        },
         status: row.status,
         output: JSON.parse(row.output_json) as unknown,
         ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
@@ -2317,6 +2309,7 @@ export class WorkflowStore {
         updatedAt: row.updated_at,
       }));
   }
+
   createRun(workflow: string, runId: string = randomUUID()): string {
     const persistedWorkflow = redactWorkflowText(workflow);
     this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, persistedWorkflow);
@@ -2391,10 +2384,10 @@ export class WorkflowStore {
       input.cacheKey,
       input.promptHash,
       input.agentManifestHash,
-      input.agent?.plugin ?? "",
-      input.agent?.name ?? "",
-      input.agent?.description === undefined ? "" : redactWorkflowText(input.agent.description),
-      input.agent?.sourceHash ?? "",
+      input.agent.plugin,
+      input.agent.name,
+      redactWorkflowText(input.agent.description),
+      input.agent.sourceHash,
       input.worker === undefined ? null : redactedJson(input.worker),
       input.outputSchema === undefined ? null : redactedJson(input.outputSchema),
       redactedJson(input.finishCriteria),
@@ -2420,17 +2413,13 @@ export class WorkflowStore {
       cacheKey: row.cache_key,
       promptHash: row.prompt_hash,
       agentManifestHash: row.agent_manifest_hash,
-      ...(row.agent_plugin.length > 0 || row.agent_name.length > 0
-        ? {
-          agent: {
-            plugin: row.agent_plugin,
-            name: row.agent_name,
-            description: row.agent_description,
-            sourceHash: row.agent_source_hash,
-            manifestHash: row.agent_manifest_hash,
-          },
-        }
-        : {}),
+      agent: {
+        plugin: row.agent_plugin,
+        name: row.agent_name,
+        description: row.agent_description,
+        sourceHash: row.agent_source_hash,
+        manifestHash: row.agent_manifest_hash,
+      },
       ...(row.worker_json !== null ? { worker: JSON.parse(row.worker_json) as WorkflowRunTaskSnapshot["worker"] } : {}),
       ...(row.output_schema_json !== null ? { outputSchema: JSON.parse(row.output_schema_json) as unknown } : {}),
       finishCriteria: JSON.parse(row.finish_criteria_json) as string[],
@@ -3062,7 +3051,7 @@ export class WorkflowStore {
     readonly runId: string;
     readonly ordinal: number;
     readonly identity: WorkflowTaskIdentity;
-    readonly agent?: { readonly plugin: string; readonly name: string };
+    readonly agent: { readonly plugin: string; readonly name: string };
     readonly status: WorkflowRunTaskStatus;
     readonly cached: boolean;
     readonly output: unknown;
@@ -3089,8 +3078,8 @@ export class WorkflowStore {
         input.identity.cacheKey,
         input.identity.promptHash,
         input.identity.agentManifestHash,
-        input.agent?.plugin ?? "",
-        input.agent?.name ?? "",
+        input.agent.plugin,
+        input.agent.name,
         input.status,
         input.cached ? 1 : 0,
         redactedJson(input.output),
@@ -3135,14 +3124,10 @@ export class WorkflowStore {
       cacheKey: row.cache_key,
       status: row.status,
       cached: row.cached === 1,
-      ...(row.agent_plugin.length > 0 || row.agent_name.length > 0
-        ? {
-          agent: {
-            plugin: row.agent_plugin,
-            name: row.agent_name,
-          },
-        }
-        : {}),
+      agent: {
+        plugin: row.agent_plugin,
+        name: row.agent_name,
+      },
       output: JSON.parse(row.output_json) as unknown,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
     }));
@@ -3532,7 +3517,7 @@ export class WorkflowStore {
 
   recordCompleted(input: {
     readonly identity: WorkflowTaskIdentity;
-    readonly agent?: { readonly plugin: string; readonly name: string };
+    readonly agent: { readonly plugin: string; readonly name: string };
     readonly output: unknown;
     readonly metadata?: Record<string, unknown>;
     readonly outputSource?: WorkflowTaskOutputSource;
@@ -3579,8 +3564,8 @@ export class WorkflowStore {
       input.identity.cacheKey,
       input.identity.promptHash,
       input.identity.agentManifestHash,
-      input.agent?.plugin ?? "",
-      input.agent?.name ?? "",
+      input.agent.plugin,
+      input.agent.name,
       JSON.stringify(persisted.output),
       persisted.metadata === undefined ? null : JSON.stringify(persisted.metadata),
       input.outputSource ?? null,

@@ -29,5 +29,18 @@ describe("workflow tsconfig paths", () => {
     expect(paths["prism"]).toEqual(["/tmp/prism-types/index.d.ts"]);
     expect(paths["effect"]).toEqual(["/tmp/effect-dts/index.d.ts"]);
     expect(paths["prism/refs/tools"]).toEqual(["/tmp/generated/tools.ts"]);
+    expect(paths["prism/harnesses"]).toBeUndefined();
+  });
+
+  test("maps global prism/harnesses when a harness-types path is supplied", () => {
+    const paths = buildWorkflowPaths({
+      typeDirs: {
+        prismTypesDir: "/tmp/prism-types",
+        effectDtsDir: "/tmp/effect-dts",
+      },
+      harnessTypesPath: "/tmp/state/harness-types/harness-models.ts",
+    });
+    expect(paths["prism/harnesses"]).toEqual(["/tmp/state/harness-types/harness-models.ts"]);
+    expect(paths["prism/refs"]).toBeUndefined();
   });
 });

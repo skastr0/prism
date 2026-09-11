@@ -212,15 +212,11 @@ const antigravityMetadata = (input: {
   adapter: "antigravity-cli",
   prompted: true,
   agentSelection: "prompted-contract",
-  ...(input.task.agent !== undefined
-    ? {
-      agent: {
-        plugin: input.task.agent.plugin,
-        name: input.task.agent.name,
-        manifestHash: input.task.agent.manifestHash,
-      },
-    }
-    : {}),
+  agent: {
+    plugin: input.task.agent.plugin,
+    name: input.task.agent.name,
+    manifestHash: input.task.agent.manifestHash,
+  },
   model: input.model,
   durationMs: input.durationMs,
   printTimeout: input.printTimeout,

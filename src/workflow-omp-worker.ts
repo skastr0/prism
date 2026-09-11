@@ -1,9 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exists, expandPath } from "./fs.js";
-import type {
-  AnyWorkflowTask,
-  WorkflowPermissionMode,
-  WorkflowSessionPersistence,
+import {
+  isAnonymousWorkflowAgent,
+  type AnyWorkflowTask,
+  type WorkflowPermissionMode,
+  type WorkflowSessionPersistence,
 } from "./workflows.js";
 import {
   parseWorkflowWorkerJsonOutput,
@@ -51,6 +54,17 @@ export class OmpWorkflowWorkerError extends Error {
   }
 }
 
+/** Console Go selectors 400 in workflow `--print` (no `x-opencode-session`). */
+export const OMP_CONSOLE_GO_PREFIX = "opencode-go/";
+
+export const ompConsoleGoPinError = (model: string): string =>
+  `OMP worker.model ${JSON.stringify(model)} is Console Go. Workflow --print has no x-opencode-session and the provider returns 400 MissingSessionID. Pin a non-opencode-go selector from \`prism workflow models --worker omp\`.`;
+
+export const assertOmpWorkflowModel = (model: string | undefined): void => {
+  if (model === undefined || !model.startsWith(OMP_CONSOLE_GO_PREFIX)) return;
+  throw new OmpWorkflowWorkerError(ompConsoleGoPinError(model), { adapter: "omp-cli" });
+};
+
 const assertOmpPermission = (mode: WorkflowPermissionMode): void => {
   switch (mode) {
     case "legacy":
@@ -92,7 +106,7 @@ type OmpWorkflowSessionArgs =
 
 export const buildOmpArgs = (input: {
   readonly cwd: string;
-  readonly systemPromptPath?: string;
+  readonly systemPromptPath: string;
   readonly model?: string;
   readonly provider?: string;
   readonly profile?: string;
@@ -115,11 +129,11 @@ export const buildOmpArgs = (input: {
   return [
     "--mode",
     "json",
+    "--print",
     "--cwd",
     input.cwd,
-    ...(input.systemPromptPath !== undefined
-      ? ["--append-system-prompt", input.systemPromptPath]
-      : []),
+    "--append-system-prompt",
+    input.systemPromptPath,
     "--no-title",
     ...(input.sessionPersistence === "ephemeral" ? ["--no-session"] : []),
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
@@ -150,15 +164,25 @@ const textFromMessage = (value: unknown): string | undefined => {
   return parts.length > 0 ? parts.join("") : undefined;
 };
 
+const errorFromMessage = (value: unknown): string | undefined => {
+  if (!isRecord(value) || value.role !== "assistant") return undefined;
+  if (typeof value.errorMessage === "string" && value.errorMessage.trim().length > 0) {
+    return value.errorMessage.trim();
+  }
+  return undefined;
+};
+
 export interface OmpJsonStreamResult {
   readonly sessionId?: string;
   readonly text: string;
+  readonly error?: string;
 }
 
 export const parseOmpJsonStream = (stdout: string): OmpJsonStreamResult => {
   let sessionId: string | undefined;
   let finalText: string | undefined;
   let fallbackText: string | undefined;
+  let error: string | undefined;
   let sawEvent = false;
 
   for (const line of stdout.split(/\r?\n/u)) {
@@ -184,18 +208,30 @@ export const parseOmpJsonStream = (stdout: string): OmpJsonStreamResult => {
     if (event.type === "message_end") {
       const messageText = textFromMessage(event.message);
       if (messageText !== undefined) finalText = messageText;
+      error = errorFromMessage(event.message) ?? error;
     }
     if (event.type === "agent_end" && Array.isArray(event.messages)) {
       for (const message of event.messages) {
         const messageText = textFromMessage(message);
         if (messageText !== undefined) fallbackText = messageText;
+        error = errorFromMessage(message) ?? error;
       }
     }
   }
 
   const text = finalText ?? fallbackText ?? (sawEvent ? "" : stdout);
-  return sessionId !== undefined ? { sessionId, text } : { text };
+  return {
+    text,
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(error !== undefined ? { error } : {}),
+  };
 };
+
+const ANONYMOUS_OMP_SYSTEM_PROMPT = [
+  "You are executing a Prism workflow task.",
+  "Plugins are optional. There is no compiled OMP agent for this run.",
+  "Follow the user prompt exactly. Prefer structured JSON when instructed.",
+].join("\n");
 
 const resolveInstalledAgentPrompt = async (
   cwd: string,
@@ -213,10 +249,29 @@ const resolveInstalledAgentPrompt = async (
   );
 };
 
+const resolveOmpSystemPrompt = async (
+  cwd: string,
+  task: AnyWorkflowTask,
+): Promise<{ readonly path: string; readonly cleanup?: () => Promise<void> }> => {
+  if (!isAnonymousWorkflowAgent(task.agent)) {
+    return { path: await resolveInstalledAgentPrompt(cwd, task.agent.name) };
+  }
+  const workDir = await mkdtemp(join(tmpdir(), "prism-omp-anonymous-"));
+  const path = join(workDir, "anonymous.md");
+  await writeFile(path, ANONYMOUS_OMP_SYSTEM_PROMPT, "utf8");
+  return {
+    path,
+    cleanup: async () => {
+      await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+    },
+  };
+};
+
 export const runOmpWorkflowTask = async (
   task: AnyWorkflowTask,
   options: OmpWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
+  assertOmpWorkflowModel(options.model);
   const sessionPersistence = options.sessionPersistence ?? "persistent";
   if (sessionPersistence === "ephemeral" && options.repair?.mode === "native-continuation") {
     throw new OmpWorkflowWorkerError(
@@ -232,68 +287,82 @@ export const runOmpWorkflowTask = async (
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const systemPromptPath = task.agent === undefined
-    ? undefined
-    : await resolveInstalledAgentPrompt(options.cwd, task.agent.name);
-  const args = buildOmpArgs({
-    cwd: options.cwd,
-    ...(systemPromptPath !== undefined ? { systemPromptPath } : {}),
-    model: options.model,
-    provider: options.provider,
-    profile: options.profile,
-    thinking: options.thinking,
-    prompt,
-    ...(sessionPersistence === "ephemeral"
-      ? { sessionPersistence }
-      : { sessionPersistence, ...(sessionId !== undefined ? { sessionId } : {}) }),
-    permission: options.resolvedPermission,
-    restrictedTools: options.restrictedTools,
-  });
-
-  const { exitCode, stdout, stderr, durationMs, aborted } =
-    await runWorkflowWorkerProcess({
-      command,
-      args,
+  const systemPrompt = await resolveOmpSystemPrompt(options.cwd, task);
+  try {
+    const args = buildOmpArgs({
       cwd: options.cwd,
-      abortSignal: options.abortSignal,
-      onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
-    });
-  const failureSessionId = sessionPersistence === "persistent"
-    ? parseOmpJsonStream(stdout).sessionId ?? sessionId
-    : undefined;
-  const failureMetadata = (): Record<string, unknown> => workflowWorkerFailureMetadata({
-    adapter: "omp-cli",
-    stderr,
-    sessionPersistence,
-    ...(failureSessionId !== undefined ? { sessionId: failureSessionId } : {}),
-  });
-  if (aborted) {
-    throw new OmpWorkflowWorkerError(
-      "omp was aborted by Prism workflow stop",
-      failureMetadata(),
-    );
-  }
-  if (exitCode !== 0) {
-    throw new OmpWorkflowWorkerError(
-      `omp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
-      failureMetadata(),
-    );
-  }
-
-  const stream = parseOmpJsonStream(stdout);
-  const resultSessionId = sessionPersistence === "persistent"
-    ? sessionId ?? stream.sessionId
-    : undefined;
-  return {
-    output: parseWorkflowWorkerJsonOutput(stream.text),
-    metadata: {
-      adapter: "omp-cli",
-      ...(task.agent !== undefined ? { nativeAgent: task.agent.name } : {}),
+      systemPromptPath: systemPrompt.path,
       model: options.model,
-      durationMs,
+      provider: options.provider,
+      profile: options.profile,
+      thinking: options.thinking,
+      prompt,
+      ...(sessionPersistence === "ephemeral"
+        ? { sessionPersistence }
+        : { sessionPersistence, ...(sessionId !== undefined ? { sessionId } : {}) }),
+      permission: options.resolvedPermission,
+      restrictedTools: options.restrictedTools,
+    });
+
+    const { exitCode, stdout, stderr, durationMs, aborted } =
+      await runWorkflowWorkerProcess({
+        command,
+        args,
+        cwd: options.cwd,
+        abortSignal: options.abortSignal,
+        onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
+      });
+    const failureSessionId = sessionPersistence === "persistent"
+      ? parseOmpJsonStream(stdout).sessionId ?? sessionId
+      : undefined;
+    const failureMetadata = (): Record<string, unknown> => workflowWorkerFailureMetadata({
+      adapter: "omp-cli",
+      stderr,
       sessionPersistence,
-      ...(resultSessionId !== undefined ? { sessionId: resultSessionId } : {}),
-      ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),
-    },
-  };
+      ...(failureSessionId !== undefined ? { sessionId: failureSessionId } : {}),
+    });
+    if (aborted) {
+      throw new OmpWorkflowWorkerError(
+        "omp was aborted by Prism workflow stop",
+        failureMetadata(),
+      );
+    }
+    if (exitCode !== 0) {
+      throw new OmpWorkflowWorkerError(
+        `omp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+        failureMetadata(),
+      );
+    }
+
+    const stream = parseOmpJsonStream(stdout);
+    if (stream.error !== undefined) {
+      throw new OmpWorkflowWorkerError(
+        `omp provider error: ${stream.error}`,
+        failureMetadata(),
+      );
+    }
+    if (stream.text.trim().length === 0) {
+      throw new OmpWorkflowWorkerError(
+        "omp finished without an assistant message",
+        failureMetadata(),
+      );
+    }
+    const resultSessionId = sessionPersistence === "persistent"
+      ? sessionId ?? stream.sessionId
+      : undefined;
+    return {
+      output: parseWorkflowWorkerJsonOutput(stream.text),
+      metadata: {
+        adapter: "omp-cli",
+        nativeAgent: task.agent.name,
+        model: options.model,
+        durationMs,
+        sessionPersistence,
+        ...(resultSessionId !== undefined ? { sessionId: resultSessionId } : {}),
+        ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),
+      },
+    };
+  } finally {
+    await systemPrompt.cleanup?.();
+  }
 };

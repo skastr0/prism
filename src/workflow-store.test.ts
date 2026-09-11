@@ -1661,7 +1661,7 @@ describe("workflow store", () => {
 
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent!.plugin, name: task.agent!.name },
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "stored" },
       metadata: contractMetadata,
     });
@@ -1704,7 +1704,7 @@ describe("workflow store", () => {
 
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent!.plugin, name: task.agent!.name },
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "first run" },
       metadata: contractMetadata,
     });
@@ -1743,7 +1743,7 @@ describe("workflow store", () => {
 
     store.recordCompleted({
       identity: identityA,
-      agent: { plugin: task.agent!.plugin, name: task.agent!.name },
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "produced by workflow-file-a" },
       metadata: contractMetadata,
     });
@@ -1775,13 +1775,13 @@ describe("workflow store", () => {
 
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent!.plugin, name: task.agent!.name },
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "first" },
       metadata: { ...contractMetadata, adapter: "claude-code", sessionId: "session-1" },
     });
     store.recordCompleted({
       identity,
-      agent: { plugin: task.agent!.plugin, name: task.agent!.name },
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "second" },
       metadata: { ...contractMetadata, adapter: "claude-code", sessionId: "session-2" },
     });
@@ -2571,7 +2571,7 @@ describe("workflow store", () => {
       runId: metadataOnlyRunId,
       ordinal: 0,
       identity: workflowTaskIdentity(metadataOnlyWorkflow.name, metadataOnlyTask),
-      agent: { plugin: metadataOnlyTask.agent!.plugin, name: metadataOnlyTask.agent!.name },
+      agent: { plugin: metadataOnlyTask.agent.plugin, name: metadataOnlyTask.agent.name },
       status: "completed",
       cached: false,
       output: { summary: "metadata repair" },
@@ -2592,7 +2592,7 @@ describe("workflow store", () => {
       runId: mixedRunId,
       ordinal: 0,
       identity: workflowTaskIdentity(metadataOnlyWorkflow.name, metadataOnlyTask),
-      agent: { plugin: metadataOnlyTask.agent!.plugin, name: metadataOnlyTask.agent!.name },
+      agent: { plugin: metadataOnlyTask.agent.plugin, name: metadataOnlyTask.agent.name },
       status: "completed",
       cached: false,
       output: { summary: "terminal" },

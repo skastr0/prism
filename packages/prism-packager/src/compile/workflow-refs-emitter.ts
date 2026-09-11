@@ -961,15 +961,25 @@ const renderSopPhaseContractSides = (
   const sides: string[] = [];
   if (phase.input) {
     sides.push(
-      `      input: ${jsonSchemaToEffectSchemaSource(phase.input as JsonSchemaObject, `${context}.input`)},`,
+      `        input: ${jsonSchemaToEffectSchemaSource(phase.input as JsonSchemaObject, `${context}.input`)},`,
     );
   }
   if (phase.output) {
     sides.push(
-      `      output: ${jsonSchemaToEffectSchemaSource(phase.output as JsonSchemaObject, `${context}.output`)},`,
+      `        output: ${jsonSchemaToEffectSchemaSource(phase.output as JsonSchemaObject, `${context}.output`)},`,
     );
   }
   return sides.length > 0 ? `\n${sides.join("\n")}` : "";
+};
+
+const renderSopPhaseFraming = (
+  phase: CompileManifestSopPhase,
+): string => {
+  const lines: string[] = [];
+  if (phase.purpose.length > 0) lines.push(`          purpose: ${JSON.stringify(phase.purpose)},`);
+  if (phase.escalation !== undefined) lines.push(`          escalation: ${JSON.stringify(phase.escalation)},`);
+  if (lines.length === 0) return "";
+  return `\n        framing: {\n${lines.join("\n")}\n        },`;
 };
 
 const renderSopPhase = (options: {
@@ -978,13 +988,13 @@ const renderSopPhase = (options: {
 }): string => {
   const phaseKey = camelKey(options.phase.name);
   const context = `${options.sop.plugin}:${options.sop.name}.${phaseKey}`;
-  const escalation = options.phase.escalation !== undefined
-    ? `,\n      escalation: ${JSON.stringify(options.phase.escalation)}`
+  const criteria = options.phase.acceptanceCriteria.length > 0
+    ? `\n        criteria: ${JSON.stringify(options.phase.acceptanceCriteria)},`
     : "";
   return `      ${JSON.stringify(phaseKey)}: {
         name: ${JSON.stringify(options.phase.name)},
-        purpose: ${JSON.stringify(options.phase.purpose)},${renderSopPhaseContractSides(options.phase, context)}
-        acceptanceCriteria: ${JSON.stringify(options.phase.acceptanceCriteria)}${escalation}
+        sop: ${JSON.stringify(options.sop.name)},
+        plugin: ${JSON.stringify(options.sop.plugin)},${renderSopPhaseContractSides(options.phase, context)}${criteria}${renderSopPhaseFraming(options.phase)}
       }`;
 };
 
@@ -1038,13 +1048,20 @@ export const renderWorkflowSopsModule = (options: {
 
 import { Schema } from "effect";
 
+export interface WorkflowSopPhaseFraming {
+  readonly purpose?: string;
+  readonly when?: string;
+  readonly escalation?: string;
+}
+
 export interface WorkflowSopPhase {
   readonly name: string;
-  readonly purpose: string;
-  readonly input?: Schema.Schema.Any;
-  readonly output?: Schema.Schema.Any;
-  readonly acceptanceCriteria: ReadonlyArray<string>;
-  readonly escalation?: string;
+  readonly sop: string;
+  readonly plugin: string;
+  readonly input?: Schema.Schema.AnyNoContext;
+  readonly output?: Schema.Schema.AnyNoContext;
+  readonly criteria?: ReadonlyArray<string>;
+  readonly framing?: WorkflowSopPhaseFraming;
 }
 
 export interface WorkflowSop {

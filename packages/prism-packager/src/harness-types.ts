@@ -6,6 +6,7 @@
  * installed on the machine, not per repo.
  */
 
+import { workflowWorkerHarnessIds } from "./lowerer-capabilities.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prismStateDir } from "./prism-home.js";
@@ -149,19 +150,7 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
   const effortAugmentLines: string[] = [];
   const mapLines: string[] = [];
 
-  const harnessOrder: readonly WorkflowWorkerId[] = [
-    "amp-code",
-    "antigravity-cli",
-    "claude-code",
-    "codex-cli",
-    "cursor",
-    "devin",
-    "grok",
-    "hermes",
-    "kimi-code",
-    "opencode",
-    "omp",
-  ];
+  const harnessOrder: readonly WorkflowWorkerId[] = workflowWorkerHarnessIds();
 
   for (const harness of harnessOrder) {
     const entry = byHarness.get(harness);

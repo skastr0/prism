@@ -3,7 +3,6 @@
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
@@ -14,7 +13,7 @@ import { prepareHookBundleSource } from "../load.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   bindingsOwnedByPlugin,
   collectBindingNameMap,
@@ -32,7 +31,6 @@ import type { DesiredFile } from "../../sync/desired.js";
 import {
   matcherForResolvedToolHook,
   pushDesiredFile,
-  renderGeneratedOrbitSkill,
   renderGeneratedSopSkill,
   normalizeBundleSegment,
   serializeSimpleFrontmatter as serializeFrontmatter,
@@ -52,7 +50,6 @@ export interface AmpCodeLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -83,9 +80,6 @@ const generatedAgentSkillName = (agentName: string): string =>
 
 const generatedAgentSkillRelativePath = (agentName: string): string =>
   `${generatedAgentSkillName(agentName)}/SKILL.md`;
-
-const generatedOrbitSkillRelativePath = (orbitName: string): string =>
-  `${orbitName}/SKILL.md`;
 
 const generatedSopSkillRelativePath = (sopName: string): string =>
   `${sopName}/SKILL.md`;
@@ -466,16 +460,6 @@ const renderAmpAgentSkillMarkdown = (
   return `${lines.join("\n").trimEnd()}\n`;
 };
 
-const renderAmpOrbitSkillMarkdown = (
-  orbit: Orbit,
-  registry: PluginRegistry | undefined,
-): string =>
-  renderGeneratedOrbitSkill({
-    orbit,
-    registry,
-    trailingNewline: true,
-  });
-
 const renderAmpSopSkillMarkdown = (sop: Sop): string =>
   renderGeneratedSopSkill({
     sop,
@@ -560,22 +544,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   }
 
   await copyTargetedSkillArtifacts(input, files);
-
-  for (const orbit of input.orbits) {
-    pushDesiredFile(files, {
-      targetPath: join(ampSkillsRoot(input.target), generatedOrbitSkillRelativePath(orbit.name)),
-      content: renderAmpOrbitSkillMarkdown(orbit, input.registry),
-      plugin,
-    });
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      pushDesiredFile(files, {
-        targetPath: join(ampSkillsRoot(input.target), `${orbit.name}/references/${reference.filename}`),
-        content: reference.content,
-        plugin,
-      });
-    }
-  }
 
   for (const sop of input.sops) {
     pushDesiredFile(files, {

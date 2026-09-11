@@ -1,12 +1,11 @@
 /** Hermes Agent lowerer. */
 
 import { join } from "node:path";
-import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
@@ -17,7 +16,6 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   pushDesiredFile,
-  renderGeneratedOrbitSkill,
   renderGeneratedSopSkill,
   type LowerOutput,
   bundleGeneratedHookWrapper,
@@ -42,7 +40,6 @@ export interface HermesLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -64,16 +61,6 @@ const artifactTargetsHermes = (
   registry: PluginRegistry | undefined,
   artifact: AnyArtifactType,
 ): boolean => targetIncludesHermes(registry?.targets[artifact]);
-
-const renderHermesOrbitSkillMarkdown = (
-  orbit: Orbit,
-  registry: PluginRegistry | undefined,
-): string =>
-  renderGeneratedOrbitSkill({
-    orbit,
-    registry,
-    trailingNewline: true,
-  });
 
 const renderHermesSopSkillMarkdown = (sop: Sop): string =>
   renderGeneratedSopSkill({
@@ -221,25 +208,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   assertHermesLoweringInput(input);
 
   await copyTargetedSkillArtifacts(input, files);
-
-  for (const orbit of input.orbits) {
-    pushDesiredFile(files, {
-      targetPath: join(hermesSkillsRoot(input.target), `${orbit.name}/SKILL.md`),
-      content: renderHermesOrbitSkillMarkdown(orbit, input.registry),
-      plugin,
-    });
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      pushDesiredFile(files, {
-        targetPath: join(
-          hermesSkillsRoot(input.target),
-          `${orbit.name}/references/${reference.filename}`,
-        ),
-        content: reference.content,
-        plugin,
-      });
-    }
-  }
 
   for (const sop of input.sops) {
     pushDesiredFile(files, {

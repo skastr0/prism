@@ -23,8 +23,6 @@ import {
   HookDefinitionSchema,
   Identity,
   IdentityFrontmatter,
-  Orbit,
-  OrbitDefinitionSchema,
   Modelspace,
   ModelspaceSchema,
   Personality,
@@ -35,15 +33,11 @@ import {
   Sop,
   SopDefinitionSchema,
   normalizeAgentRefInput,
-  normalizeOrbitRefInput,
   normalizeModelProfileRefInput,
   normalizeSkillRefInput,
   type HookToolMatcherInput,
-  type OrbitDefinition,
   type NormalizedHookMatch,
   type NormalizedHookToolMatcher,
-  type NormalizedOrbitOrchestrator,
-  type NormalizedOrbitPhase,
   type NormalizedSopPhase,
   type SkillRefInput,
   type SopDefinition,
@@ -601,7 +595,7 @@ const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> =>
   const prismHome = resolvePrismHome();
   const { key } = deriveProjectKey();
   const refsDir = projectGeneratedRefsDir(prismHome, key);
-  const modules = ["agents", "models", "skills", "orbits", "sops", "tools"] as const;
+  const modules = ["agents", "models", "skills", "sops", "tools"] as const;
   return Object.fromEntries(
     modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
   );
@@ -849,7 +843,6 @@ const PERSONALITY_SUFFIX = ".personality.md";
 const AGENT_SUFFIX_TS = ".agent.ts";
 const MODELSPACE_SUFFIX_TS = ".modelspace.ts";
 const SKILLSPACE_SUFFIX_TS = ".skillspace.ts";
-const ORBIT_SUFFIX_TS = ".orbit.ts";
 const SOP_SUFFIX_TS = ".sop.ts";
 const TOOL_SUFFIX_TS = ".tool.ts";
 const HOOK_SUFFIX_TS = ".hook.ts";
@@ -1402,333 +1395,6 @@ const loadSkills = (
     return map;
   });
 
-type NormalizedPhaseOrbitBinding = {
-  readonly orbit: string;
-  readonly bindings?: Record<string, string>;
-};
-
-type NormalizedPhaseAgents = {
-  readonly agents: string[];
-};
-
-const orbitSourceParseError = (
-  sourcePath: string,
-  field: string,
-  message: string,
-): SourceParseError =>
-  new SourceParseError({
-    sourcePath,
-    kind: "orbit",
-    message: `${field}: ${message}`,
-  });
-
-const normalizePhaseNamedRef = <TRef>(
-  sourcePath: string,
-  field: string,
-  value: TRef,
-  normalize: (
-    field: string,
-    value: TRef,
-  ) => string | { readonly field: string; readonly message: string },
-): string | SourceParseError => {
-  const normalized = normalize(field, value);
-  if (typeof normalized === "string") return normalized;
-
-  return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
-};
-
-const normalizePhaseOrbitRef = (
-  sourcePath: string,
-  phase: OrbitDefinition["phases"][number],
-  index: number,
-): string | undefined | SourceParseError => {
-  if (!phase.orbit) return undefined;
-
-  return normalizePhaseNamedRef(
-    sourcePath,
-    `phases[${index}].orbit`,
-    phase.orbit,
-    normalizeOrbitRefInput,
-  );
-};
-
-const normalizePhaseOrbitBinding = (
-  sourcePath: string,
-  phase: OrbitDefinition["phases"][number],
-  index: number,
-): NormalizedPhaseOrbitBinding | undefined | SourceParseError => {
-  if (!phase.orbit_binding) return undefined;
-
-  const normalized = normalizeOrbitRefInput(
-    `phases[${index}].orbit_binding.orbit`,
-    phase.orbit_binding.orbit,
-  );
-  if (typeof normalized !== "string") {
-    return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
-  }
-
-  return {
-    orbit: normalized,
-    ...(phase.orbit_binding.bindings
-      ? { bindings: { ...phase.orbit_binding.bindings } }
-      : {}),
-  };
-};
-
-const phaseAgentAliasSources = (
-  phase: OrbitDefinition["phases"][number],
-): string[] =>
-  [
-    phase.agents && phase.agents.length > 0 ? "agents" : undefined,
-    phase.agent ? "agent" : undefined,
-  ].filter((value): value is string => value !== undefined);
-
-const normalizePhaseRawAgents = (
-  sourcePath: string,
-  phase: OrbitDefinition["phases"][number],
-  index: number,
-): string[] | SourceParseError => {
-  const rawAgents = phase.agents ?? (phase.agent ? [phase.agent] : undefined) ?? [];
-  const agents: string[] = [];
-
-  for (const [agentIndex, agent] of rawAgents.entries()) {
-    const normalized = normalizeAgentRefInput(
-      `phases[${index}].agents[${agentIndex}]`,
-      agent,
-    );
-    if (typeof normalized !== "string") {
-      return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
-    }
-    agents.push(normalized);
-  }
-
-  return agents;
-};
-
-const normalizePhaseAgents = (
-  sourcePath: string,
-  phase: OrbitDefinition["phases"][number],
-  index: number,
-): NormalizedPhaseAgents | SourceParseError => {
-  const uniqueAliases = [...new Set(phaseAgentAliasSources(phase))];
-  if (uniqueAliases.length > 1) {
-    return new SourceParseError({
-      sourcePath,
-      kind: "orbit",
-      message: `phase ${index + 1} ('${phase.name}') declares multiple agent assignment aliases (${uniqueAliases.join(", ")}); use only one of agent or agents`,
-    });
-  }
-
-  const agents = normalizePhaseRawAgents(sourcePath, phase, index);
-  if (agents instanceof SourceParseError) return agents;
-
-  return { agents };
-};
-
-const normalizeOrbitPhaseContract = (
-  sourcePath: string,
-  contract: OrbitDefinition["phases"][number]["contract"],
-  index: number,
-): NormalizedOrbitPhase["contract"] | undefined | SourceParseError => {
-  if (!contract) return undefined;
-
-  const normalized: {
-    input?: Schema.Schema.AnyNoContext;
-    output?: Schema.Schema.AnyNoContext;
-  } = {};
-  for (const side of ["input", "output"] as const) {
-    const schema = contract[side];
-    if (schema === undefined) continue;
-    if (!isEffectSchema(schema)) {
-      return orbitSourceParseError(
-        sourcePath,
-        `phases[${index}].contract.${side}`,
-        "must be an Effect Schema",
-      );
-    }
-    if (side === "input") {
-      normalized.input = schema;
-    } else {
-      normalized.output = schema;
-    }
-  }
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-};
-
-const normalizeOrbitPhase = (
-  sourcePath: string,
-  phase: OrbitDefinition["phases"][number],
-  index: number,
-): NormalizedOrbitPhase | SourceParseError => {
-  const orbit = normalizePhaseOrbitRef(sourcePath, phase, index);
-  if (orbit instanceof SourceParseError) return orbit;
-
-  const orbitBinding = normalizePhaseOrbitBinding(sourcePath, phase, index);
-  if (orbitBinding instanceof SourceParseError) return orbitBinding;
-
-  const phaseAgents = normalizePhaseAgents(sourcePath, phase, index);
-  if (phaseAgents instanceof SourceParseError) return phaseAgents;
-
-  const contract = normalizeOrbitPhaseContract(sourcePath, phase.contract, index);
-  if (contract instanceof SourceParseError) return contract;
-
-  const singularAgent = phase.agent
-    ? normalizePhaseNamedRef(
-        sourcePath,
-        `phases[${index}].agent`,
-        phase.agent,
-        normalizeAgentRefInput,
-      )
-    : undefined;
-  if (singularAgent instanceof SourceParseError) return singularAgent;
-
-  return {
-    name: phase.name,
-    ...(orbit ? { orbit } : {}),
-    ...(orbitBinding ? { orbit_binding: orbitBinding } : {}),
-    ...(singularAgent ? { agent: singularAgent } : {}),
-    agents: phaseAgents.agents,
-    notes: phase.notes,
-    ...(phase.telos !== undefined ? { telos: phase.telos } : {}),
-    ...(phase.real_world_change !== undefined
-      ? { real_world_change: phase.real_world_change }
-      : {}),
-    ...(phase.cold_pickup_test !== undefined
-      ? { cold_pickup_test: phase.cold_pickup_test }
-      : {}),
-    ...(phase.workflow !== undefined ? { workflow: phase.workflow } : {}),
-    ...(contract !== undefined ? { contract } : {}),
-    ...(phase.body !== undefined ? { body: phase.body } : {}),
-  };
-};
-
-const normalizeOrbitOrchestrator = (
-  sourcePath: string,
-  orchestrator: OrbitDefinition["orchestrator"],
-): NormalizedOrbitOrchestrator | undefined | SourceParseError => {
-  if (!orchestrator) return undefined;
-
-  const normalizedAgent = normalizeAgentRefInput(
-    "orchestrator.agent",
-    orchestrator.agent,
-  );
-  if (typeof normalizedAgent !== "string") {
-    return new SourceParseError({
-      sourcePath,
-      kind: "orbit",
-      message: `${normalizedAgent.field}: ${normalizedAgent.message}`,
-    });
-  }
-
-  return { agent: normalizedAgent };
-};
-
-const parseOrbitDefinition = (
-  sourcePath: string,
-  raw: unknown,
-  kind: "orbit",
-  body: string,
-): Effect.Effect<Orbit, CompileError> =>
-  Effect.gen(function* () {
-    const result = Schema.decodeUnknownEither(OrbitDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
-    if (result._tag === "Left") {
-      return yield* Effect.fail(
-        new SourceParseError({
-          sourcePath,
-          kind,
-          message: result.left.message,
-        }),
-      );
-    }
-
-    const parsed = result.right;
-    const fileStem = stripSuffix(basename(sourcePath), [ORBIT_SUFFIX_TS]);
-    if (parsed.name !== fileStem) {
-      return yield* Effect.fail(
-        new SourceParseError({
-          sourcePath,
-          kind,
-          message: `orbit 'name' field ('${parsed.name}') must match file stem ('${fileStem}')`,
-        }),
-      );
-    }
-
-    const phases: NormalizedOrbitPhase[] = [];
-    for (const [index, phase] of parsed.phases.entries()) {
-      const normalized = normalizeOrbitPhase(sourcePath, phase, index);
-      if (normalized instanceof SourceParseError) {
-        return yield* Effect.fail(normalized);
-      }
-      phases.push(normalized);
-    }
-
-    const orchestrator = normalizeOrbitOrchestrator(sourcePath, parsed.orchestrator);
-    if (orchestrator instanceof SourceParseError) {
-      return yield* Effect.fail(orchestrator);
-    }
-
-    const resolvedBody = (parsed.body ?? body).trim();
-
-    return new Orbit({
-      name: parsed.name,
-      sourcePath,
-      description: parsed.description,
-      produces: parsed.produces,
-      definitions: parsed.definitions,
-      parameters: (parsed.parameters ?? []).map((parameter) => ({
-        ...parameter,
-        required: parameter.required ?? true,
-      })),
-      phases,
-      ...(orchestrator ? { orchestrator } : {}),
-      pulsar_checkpoints: parsed.pulsar_checkpoints ?? [],
-      evolution: parsed.evolution,
-      body: resolvedBody,
-      ...(parsed.signal_emitter ? { signal_emitter: parsed.signal_emitter } : {}),
-    });
-  });
-
-const parseOrbitTs = (
-  sourcePath: string,
-): Effect.Effect<Orbit, CompileError> =>
-  Effect.gen(function* () {
-    const raw = yield* importTsModule<unknown>(sourcePath, "orbit");
-    return yield* parseOrbitDefinition(sourcePath, raw, "orbit", "");
-  });
-
-const loadOrbits = (
-  pluginPath: string,
-): Effect.Effect<Map<string, Orbit>, CompileError> =>
-  Effect.gen(function* () {
-    const dir = join(pluginPath, "orbits");
-    const entries = yield* listDir(dir);
-    const map = new Map<string, Orbit>();
-
-    for (const entry of entries.sort()) {
-      if (!entry.endsWith(ORBIT_SUFFIX_TS)) {
-        continue;
-      }
-
-      const orbit = yield* parseOrbitTs(join(dir, entry));
-
-      const existing = map.get(orbit.name);
-      if (existing) {
-        return yield* Effect.fail(
-          new DuplicateNameError({
-            kind: "orbit",
-            name: orbit.name,
-            firstPath: existing.sourcePath,
-            secondPath: orbit.sourcePath,
-          }),
-        );
-      }
-
-      map.set(orbit.name, orbit);
-    }
-
-    return map;
-  });
 
 const FORBIDDEN_SOP_FIELDS = [
   "agent",
@@ -1746,8 +1412,6 @@ const FORBIDDEN_SOP_FIELDS = [
   "definitions",
   "parameters",
   "bindings",
-  "orbit",
-  "orbit_binding",
 ] as const;
 
 const SOP_INVARIANT =
@@ -2261,7 +1925,6 @@ const loadPluginArtifacts = (
     registry.skills = yield* loadSkills(pluginPath);
     registry.tools = yield* loadCanonicalTools(pluginPath);
     registry.hooks = yield* loadHooks(pluginPath);
-    registry.orbits = yield* loadOrbits(pluginPath);
     registry.sops = yield* loadSops(pluginPath);
     registry.agents = yield* loadAgents(pluginPath);
     return registry;

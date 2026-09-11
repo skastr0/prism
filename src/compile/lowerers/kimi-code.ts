@@ -3,13 +3,12 @@
 import { join } from "node:path";
 import { Effect } from "effect";
 import type { ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   bindingsOwnedByPlugin,
   collectBindingNameMap,
@@ -27,7 +26,6 @@ import {
   normalizeBundleSegment,
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
-  renderStandardOrbitSkill,
   renderStandardSopSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
   uniqueSorted,
@@ -51,7 +49,6 @@ export interface KimiCodeLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -179,7 +176,7 @@ const renderKimiAgentRoleSkill = (
       name: roleSkillName(agent.name),
       description: `Prism compiled role for ${agent.description}`,
       type: "prompt",
-      whenToUse: `When the user asks for the ${agent.name} Prism role or this role is assigned by an orbit/workflow.`,
+      whenToUse: `When the user asks for the ${agent.name} Prism role or this role is assigned by a sop/workflow.`,
       disableModelInvocation: false,
     },
     sections.join("\n"),
@@ -269,32 +266,6 @@ const planAgentRoleSkills = (
       `skills/${roleSkillName(agent.name)}/SKILL.md`,
       renderKimiAgentRoleSkill(agent),
     );
-  }
-};
-
-const planOrbitSkillWrites = (
-  input: LowerInput,
-  desiredRelativePaths: Set<string>,
-  files: DesiredFile[],
-): void => {
-  for (const orbit of input.orbits) {
-    pushWrite(
-      files,
-      desiredRelativePaths,
-      input.target,
-      `skills/${orbit.name}/SKILL.md`,
-      renderStandardOrbitSkill(orbit, input.registry),
-    );
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      pushWrite(
-        files,
-        desiredRelativePaths,
-        input.target,
-        `skills/${orbit.name}/references/${reference.filename}`,
-        reference.content,
-      );
-    }
   }
 };
 
@@ -517,7 +488,6 @@ const hasPluginOutput = (
   contexts: ReadonlyArray<{ label: string; content: string }>,
 ): boolean =>
   input.agents.length > 0 ||
-  input.orbits.length > 0 ||
   (input.skills?.length ?? 0) > 0 ||
   (input.tools?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0 ||
@@ -547,7 +517,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     state.desiredRelativePaths,
     state.files,
   );
-  planOrbitSkillWrites(input, state.desiredRelativePaths, state.files);
   planSopSkillWrites(input, state.desiredRelativePaths, state.files);
   await planCommandSkillWrites(input, state.desiredRelativePaths, state.files);
   planContextSkillWrite(input, state.desiredRelativePaths, state.files, contexts);

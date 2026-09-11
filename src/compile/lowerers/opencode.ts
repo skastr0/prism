@@ -1,7 +1,7 @@
 /**
  * OpenCode lowerer.
  *
- * Takes a set of ComposedAgents + orbits and produces:
+ * Takes a set of ComposedAgents + sops and produces:
  *
  *   1. Per-agent markdown at <opencode-root>/agents/<name>.md with
  *      {name, description} frontmatter and the composed body.
@@ -13,8 +13,8 @@
  *          `plugins/prism-generated-review-core/dist/server.mjs`) when the
  *          plugin owns canonical tools or hooks
  *
- *   3. Per-orbit skills at <opencode-root>/skills/<name>/SKILL.md.
- *      Orbits remain source-language constructs; the generated skill is
+ *   3. Per-sop skills at <opencode-root>/skills/<name>/SKILL.md.
+ *      Sops remain source-language constructs; the generated skill is
  *      the runtime-facing lowering that OpenCode actually loads.
  *
  *   4. A generated OpenCode plugin directory at
@@ -31,11 +31,10 @@ import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
-import type { CanonicalTool, Hook, Orbit, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Sop } from "../sources.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { HarnessScope } from "../../types.js";
@@ -69,7 +68,6 @@ import { bindingsFromCanonicalTools } from "../tool-bindings.js";
 import {
   nativeHookEventName,
   pushDesiredFile,
-  renderGeneratedOrbitSkill,
   renderGeneratedSopSkill,
   serializeSimpleFrontmatter,
   type LowerOutput,
@@ -104,14 +102,6 @@ export interface OpenCodeLowerTarget {
 
 const agentMdPath = (target: OpenCodeLowerTarget, name: string): string =>
   join(target.root, "agents", `${name}.md`);
-
-const orbitSkillMdPath = (
-  target: OpenCodeLowerTarget,
-  name: string
-): string => join(target.root, "skills", name, "SKILL.md");
-
-const orbitSkillRelativePath = (name: string): string =>
-  `skills/${name}/SKILL.md`;
 
 const opencodeJsonPath = (target: OpenCodeLowerTarget): string =>
   join(target.root, "opencode.json");
@@ -1072,7 +1062,6 @@ const planGeneratedPluginFiles = async (options: {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -1171,35 +1160,6 @@ const planAgentConfigRegions = (
     }
   }
   return regions;
-};
-
-const planOrbitSkillWrites = (
-  input: LowerInput,
-  files: DesiredFile[],
-): void => {
-  for (const orbit of input.orbits) {
-    pushDesiredFile(files, {
-      targetPath: orbitSkillMdPath(input.target, orbit.name),
-      content: renderGeneratedOrbitSkill({
-        orbit,
-        registry: input.registry,
-        trailingNewline: false,
-        renderFrontmatter: (values) => serializeSimpleFrontmatter(values),
-      }),
-      plugin: input.target.sourcePluginName,
-    });
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      pushDesiredFile(files, {
-        targetPath: join(
-          input.target.root,
-          `skills/${orbit.name}/references/${reference.filename}`,
-        ),
-        content: reference.content,
-        plugin: input.target.sourcePluginName,
-      });
-    }
-  }
 };
 
 const planSopSkillWrites = (
@@ -1355,7 +1315,6 @@ export const planLowering = async (
   const files: DesiredFile[] = [];
 
   planAgentMarkdownWrites(input, files);
-  planOrbitSkillWrites(input, files);
   planSopSkillWrites(input, files);
   files.push(...(await planGeneratedRuntimePlugins(input, runtime, generatedRuntimeState)));
 

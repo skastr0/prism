@@ -6,7 +6,7 @@ import { join } from "node:path";
 /**
  * Minimal in-memory authoring runtime that stubs the `prism` module for
  * plugin source files. It provides the typed-ref helpers used by
- * `.agent.ts`, `.orbit.ts`, `.tool.ts`, `.modelspace.ts`, `.skillspace.ts`,
+ * `.agent.ts`, `.tool.ts`, `.modelspace.ts`, `.skillspace.ts`,
  * and `.hook.ts` files, which export a plain object satisfying the matching
  * `*Source` type — there is no define* wrapper call to stub.
  *
@@ -19,7 +19,6 @@ const withNamedRef = (kind, first, second) =>
   second === undefined ? { kind, name: first } : { kind, plugin: first, name: second };
 
 export const agentRef = (first, second) => withNamedRef("agent-ref", first, second);
-export const orbitRef = (first, second) => withNamedRef("orbit-ref", first, second);
 
 export const modelProfileRef = (first, second, third) =>
   third === undefined

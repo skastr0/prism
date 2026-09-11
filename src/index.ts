@@ -3,7 +3,6 @@
  *
  * The canonical structured source model is TypeScript-first:
  * - agents/*.agent.ts
- * - orbits/*.orbit.ts
  * - sops/*.sop.ts
  * - modelspaces/*.modelspace.ts
  * - skillspaces/*.skillspace.ts
@@ -28,10 +27,6 @@ export interface AgentRefDefinition extends NamedRefDefinition {
   readonly kind: "agent-ref";
 }
 
-export interface OrbitRefDefinition extends NamedRefDefinition {
-  readonly kind: "orbit-ref";
-}
-
 export interface ModelProfileRefDefinition {
   readonly kind: "model-profile-ref";
   readonly plugin?: string;
@@ -53,7 +48,6 @@ export interface SkillspaceRefDefinition {
 }
 
 export type AgentRefInput = string | AgentRefDefinition;
-export type OrbitRefInput = string | OrbitRefDefinition;
 export type ModelProfileRefInput = string | ModelProfileRefDefinition;
 export type SkillRefInput = SkillRefDefinition | SkillspaceRefDefinition;
 export type EffectSchemaValue = import("effect").Schema.Schema.AnyNoContext;
@@ -88,137 +82,6 @@ export interface ToolSchemaSlotDefinition {
 }
 
 export type ToolSlotDefinition = ToolSchemaSlotDefinition;
-
-export interface OrbitParameterDefinition {
-  readonly name: string;
-  readonly description?: string;
-  readonly required?: boolean;
-}
-
-export interface OrbitBindingDefinition {
-  readonly orbit: OrbitRefInput;
-  readonly bindings?: Readonly<Record<string, string>>;
-}
-
-export interface OrbitOrchestratorDefinition {
-  readonly agent: AgentRefInput;
-}
-
-export interface OrbitPhaseWorkflowDefinition {
-  readonly when?: string;
-  readonly inputs?: ReadonlyArray<string>;
-  readonly outputs?: ReadonlyArray<string>;
-  readonly sequence?: ReadonlyArray<string>;
-  readonly coordination?: string;
-  readonly finish_criteria?: ReadonlyArray<string>;
-  readonly escalation?: string;
-}
-
-export interface OrbitPhaseDefinition {
-  readonly name: string;
-  readonly orbit?: OrbitRefInput;
-  readonly orbit_binding?: OrbitBindingDefinition;
-  readonly agents?: ReadonlyArray<AgentRefInput>;
-  readonly agent?: AgentRefInput;
-  readonly notes?: Readonly<Record<string, string>>;
-  /**
-   * Short structured fields rendered into the root orbit SKILL.md per-phase
-   * block. Use these to describe the phase at a glance; deep content belongs
-   * in `body` (which lowers to `references/<phase>.md`).
-   */
-  readonly telos?: string;
-  readonly real_world_change?: string;
-  readonly cold_pickup_test?: string;
-  /**
-   * Generic workflow-authoring guidance for this phase. Prism renders this
-   * into generated orbit skills, but does not attach runtime semantics to it.
-   */
-  readonly workflow?: OrbitPhaseWorkflowDefinition;
-  /**
-   * Typed workflow I/O contract for this phase. Serialized to JSON Schema in
-   * the compile manifest for workflow runtimes; unsupported schema constructs
-   * fail the compile.
-   */
-  readonly contract?: {
-    readonly input?: import("effect/Schema").Schema.AnyNoContext;
-    readonly output?: import("effect/Schema").Schema.AnyNoContext;
-  };
-  /**
-   * Long-form markdown for this phase. When present, lowerers write it to
-   * `references/<phase-name>.md` next to the orbit SKILL.md. Treat this as
-   * the full phase download — telos, procrastination shapes, per-agent
-   * focus, links to deeper modules.
-   */
-  readonly body?: string;
-}
-
-export interface OrbitPulsarCheckpointDefinition {
-  readonly after?: string;
-  readonly before?: string;
-  readonly note?: string;
-}
-
-export type OrbitSignalEmitterPriority = "low" | "normal" | "high" | "urgent";
-
-export interface OrbitSignalEmitterDestinationDefinition {
-  readonly project_key: string;
-  readonly orbit: string;
-  readonly default_priority?: OrbitSignalEmitterPriority;
-  readonly note?: string;
-}
-
-export interface OrbitSignalEmitterDefinition {
-  /**
-   * Known destinations this orbit may emit signals to. Each entry is a
-   * `project_key`/`orbit` pair, optionally with a default priority and a
-   * note describing what the destination handles. Used as structural
-   * documentation, as input for delegation-map validation, and as the
-   * basis for tighter bound agent surfaces (e.g., per-destination
-   * delegate wrappers) when wanted.
-   *
-   * Leaving this empty marks the orbit as an emitter without constraining
-   * destinations — appropriate when the routing table is fluid or
-   * authored entirely in agent doctrine. Filled destinations make the
-   * permission surface explicit and reviewable.
-   */
-  readonly destinations?: ReadonlyArray<OrbitSignalEmitterDestinationDefinition>;
-}
-
-export interface OrbitDefinitionEntryDefinition {
-  readonly purpose: string;
-  readonly contains?: ReadonlyArray<string>;
-  readonly boundaries?: ReadonlyArray<string>;
-  readonly avoid?: ReadonlyArray<string>;
-}
-
-export interface OrbitDefinitionsDefinition {
-  readonly glyphs?: OrbitDefinitionEntryDefinition;
-  readonly dispatches?: OrbitDefinitionEntryDefinition;
-  readonly chatter?: OrbitDefinitionEntryDefinition;
-  readonly signals?: OrbitDefinitionEntryDefinition;
-}
-
-export interface OrbitDefinition {
-  readonly name: string;
-  readonly description: string;
-  readonly produces?: string;
-  readonly definitions?: OrbitDefinitionsDefinition;
-  readonly parameters?: ReadonlyArray<OrbitParameterDefinition>;
-  readonly phases: ReadonlyArray<OrbitPhaseDefinition>;
-  readonly orchestrator?: OrbitOrchestratorDefinition;
-  readonly pulsar_checkpoints?: ReadonlyArray<OrbitPulsarCheckpointDefinition>;
-  readonly evolution?: string;
-  readonly body?: string;
-  /**
-   * When present, declares this orbit emits signals to other orbits — the
-   * routing/delegation surface that is privileged separately from the
-   * receive-side signal tools. Declared `destinations` make the routing
-   * surface explicit and auditable.
-   */
-  readonly signal_emitter?: OrbitSignalEmitterDefinition;
-}
-
-export type OrbitSource = OrbitDefinition;
 
 export interface SopPhaseDefinition {
   readonly name: string;
@@ -591,12 +454,6 @@ export function agentRef(name: string): AgentRefDefinition;
 export function agentRef(plugin: string, name: string): AgentRefDefinition;
 export function agentRef(first: string, second?: string): AgentRefDefinition {
   return withNamedRef("agent-ref", first, second);
-}
-
-export function orbitRef(name: string): OrbitRefDefinition;
-export function orbitRef(plugin: string, name: string): OrbitRefDefinition;
-export function orbitRef(first: string, second?: string): OrbitRefDefinition {
-  return withNamedRef("orbit-ref", first, second);
 }
 
 export function modelProfileRef(

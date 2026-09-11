@@ -8,13 +8,12 @@
 import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
@@ -30,7 +29,6 @@ import {
   pushDesiredFile,
   renderPrePostSessionHookWrapperEntry,
   regexEscape,
-  renderStandardOrbitSkill,
   renderStandardSopSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
   uniqueSorted,
@@ -50,7 +48,6 @@ export interface AntigravityCliLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -321,22 +318,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   }
 
   await copyTargetedSkillArtifacts(input, files);
-
-  for (const orbit of input.orbits) {
-    pushDesiredFile(files, {
-      targetPath: join(root, "skills", orbit.name, "SKILL.md"),
-      content: renderStandardOrbitSkill(orbit, input.registry),
-      plugin,
-    });
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      pushDesiredFile(files, {
-        targetPath: join(root, "skills", orbit.name, "references", reference.filename),
-        content: reference.content,
-        plugin,
-      });
-    }
-  }
 
   for (const sop of input.sops) {
     pushDesiredFile(files, {

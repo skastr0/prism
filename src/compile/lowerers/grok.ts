@@ -13,7 +13,7 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
 } from "../tool-bindings.js";
@@ -27,7 +27,6 @@ import {
   planGeneratedPluginHookWrites,
   planGeneratedPluginManifest,
   planGeneratedPluginSkillWrites,
-  planStandardGeneratedPluginOrbitSkillWrites,
   planStandardGeneratedPluginSopSkillWrites,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
@@ -48,7 +47,6 @@ export interface GrokLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -316,11 +314,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   if (input.target.scope === "project") {
     await planAgentWrites(pushDirectWrite);
     await planGeneratedPluginSkillWrites({ input, state, pushWrite: pushDirectWrite });
-    await planStandardGeneratedPluginOrbitSkillWrites({
-      input,
-      state,
-      pushWrite: pushDirectWrite,
-    });
     await planStandardGeneratedPluginSopSkillWrites({
       input,
       state,
@@ -332,8 +325,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   // An artifact-less compile must not plant an empty generated plugin bundle.
   const hasBundleArtifacts =
     input.agents.length > 0 ||
-    input.orbits.length > 0 ||
-    input.sops.length > 0 ||
+      input.sops.length > 0 ||
     (input.tools?.length ?? 0) > 0 ||
     (input.skills?.length ?? 0) > 0 ||
     (input.hooks?.length ?? 0) > 0;
@@ -348,11 +340,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     });
     await planAgentWrites(pushWrite);
     await planGeneratedPluginSkillWrites({ input, state, pushWrite });
-    await planStandardGeneratedPluginOrbitSkillWrites({
-      input,
-      state,
-      pushWrite,
-    });
     await planStandardGeneratedPluginSopSkillWrites({
       input,
       state,

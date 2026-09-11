@@ -1,18 +1,17 @@
 /**
  * Devin CLI lowerer (PR1).
  *
- * Skills + orbit skills + Claude-compatible hooks.v1.json. No agents, no MCP,
+ * Skills + Claude-compatible hooks.v1.json. No agents, no MCP,
  * no plugins install. Never whole-file owns config.json.
  */
 
 import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
@@ -27,7 +26,6 @@ import {
   normalizeBundleSegment,
   pushDesiredFile,
   regexEscape,
-  renderGeneratedOrbitSkill,
   renderGeneratedSopSkill,
   renderPrePostSessionHookWrapperEntry,
   uniqueSorted,
@@ -47,7 +45,6 @@ export interface DevinLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -293,29 +290,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   assertDevinLoweringInput(input);
 
   await copyTargetedSkillArtifacts(input, files);
-
-  for (const orbit of input.orbits) {
-    pushDesiredFile(files, {
-      targetPath: join(skillsRoot(input.target), `${orbit.name}/SKILL.md`),
-      content: renderGeneratedOrbitSkill({
-        orbit,
-        registry: input.registry,
-        trailingNewline: true,
-      }),
-      plugin,
-    });
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      pushDesiredFile(files, {
-        targetPath: join(
-          skillsRoot(input.target),
-          `${orbit.name}/references/${reference.filename}`,
-        ),
-        content: reference.content,
-        plugin,
-      });
-    }
-  }
 
   for (const sop of input.sops) {
     pushDesiredFile(files, {

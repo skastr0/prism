@@ -15,10 +15,6 @@ import { readFile } from "../../fs.js";
 import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import type { ComposedAgent } from "../compose.js";
 import {
-  renderDerivedOrbitPhaseReferences,
-  renderDerivedOrbitSkillBody,
-} from "../derived-orbit-skill.js";
-import {
   renderDerivedSopPhaseReferences,
   renderDerivedSopSkillBody,
 } from "../derived-sop-skill.js";
@@ -29,7 +25,7 @@ import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import { prepareHookBundleSource } from "../load.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   makeTempBuildRoot,
   removeTempBuildRoot,
@@ -90,46 +86,6 @@ export const serializeSimpleFrontmatter = (values: Record<string, unknown>): str
   lines.push("---");
   return lines.join("\n");
 };
-
-export const renderGeneratedOrbitSkill = (options: {
-  readonly orbit: Orbit;
-  readonly registry: PluginRegistry | undefined;
-  readonly trailingNewline: boolean;
-  readonly renderFrontmatter?: (values: {
-    readonly name: string;
-    readonly description: string;
-  }) => string;
-}): string => {
-  const frontmatter = {
-    name: options.orbit.name,
-    description: options.orbit.description,
-  };
-  const lines: string[] = [
-    options.renderFrontmatter?.(frontmatter) ?? serializeSimpleFrontmatter(frontmatter),
-    "",
-  ];
-  if (options.registry) {
-    lines.push(renderDerivedOrbitSkillBody(options.orbit, options.registry));
-  } else {
-    lines.push(`# ${options.orbit.name}`, "", options.orbit.description, "");
-    if (options.orbit.body.trim().length > 0) {
-      lines.push(options.orbit.body.trim(), "");
-    }
-  }
-
-  const rendered = lines.join("\n");
-  return options.trailingNewline ? `${rendered.trimEnd()}\n` : rendered;
-};
-
-export const renderStandardOrbitSkill = (
-  orbit: Orbit,
-  registry: PluginRegistry | undefined,
-): string =>
-  renderGeneratedOrbitSkill({
-    orbit,
-    registry,
-    trailingNewline: false,
-  });
 
 export const renderGeneratedSopSkill = (options: {
   readonly sop: Sop;
@@ -530,7 +486,6 @@ export type GeneratedPluginWritePusher<Target extends GeneratedPluginPlanTarget>
 
 export interface GeneratedPluginPlanInput<Target extends GeneratedPluginPlanTarget> {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -597,49 +552,6 @@ export const planGeneratedPluginSkillWrites = async <
       await readFile(skill.sourcePath),
     );
   }
-};
-
-export const planGeneratedPluginOrbitSkillWrites = async <
-  Target extends GeneratedPluginPlanTarget,
->(options: {
-  readonly input: GeneratedPluginPlanInput<Target>;
-  readonly state: GeneratedPluginPlanState;
-  readonly pushWrite: GeneratedPluginWritePusher<Target>;
-  readonly renderOrbitSkill: (orbit: Orbit) => string;
-}): Promise<void> => {
-  for (const orbit of options.input.orbits) {
-    options.pushWrite(
-      options.state.files,
-      options.state.desiredRelativePaths,
-      options.input.target,
-      `skills/${orbit.name}/SKILL.md`,
-      options.renderOrbitSkill(orbit),
-    );
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      options.pushWrite(
-        options.state.files,
-        options.state.desiredRelativePaths,
-        options.input.target,
-        `skills/${orbit.name}/references/${reference.filename}`,
-        reference.content,
-      );
-    }
-  }
-};
-
-export const planStandardGeneratedPluginOrbitSkillWrites = async <
-  Target extends GeneratedPluginPlanTarget,
->(options: {
-  readonly input: GeneratedPluginPlanInput<Target>;
-  readonly state: GeneratedPluginPlanState;
-  readonly pushWrite: GeneratedPluginWritePusher<Target>;
-}): Promise<void> => {
-  await planGeneratedPluginOrbitSkillWrites({
-    ...options,
-    renderOrbitSkill: (orbit) =>
-      renderStandardOrbitSkill(orbit, options.input.registry),
-  });
 };
 
 export const planGeneratedPluginSopSkillWrites = async <

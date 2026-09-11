@@ -3,13 +3,12 @@
 import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { renderDerivedSopPhaseReferences } from "../derived-sop-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
@@ -24,7 +23,6 @@ import {
   pushDesiredFile,
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
-  renderStandardOrbitSkill,
   renderStandardSopSkill,
   uniqueSorted,
   type LowerOutput,
@@ -42,7 +40,6 @@ export interface CodexCliLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -375,31 +372,6 @@ const planManagedSkillWrites = async (
   }
 };
 
-const planOrbitWrites = (
-  input: LowerInput,
-  files: DesiredFile[],
-): void => {
-  for (const orbit of input.orbits) {
-    pushDesiredFile(files, {
-      targetPath: join(input.target.root, "skills", `${orbit.name}/SKILL.md`),
-      content: renderStandardOrbitSkill(orbit, input.registry),
-      plugin: input.target.sourcePluginName,
-    });
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      pushDesiredFile(files, {
-        targetPath: join(
-          input.target.root,
-          "skills",
-          `${orbit.name}/references/${reference.filename}`,
-        ),
-        content: reference.content,
-        plugin: input.target.sourcePluginName,
-      });
-    }
-  }
-};
-
 const planSopWrites = (
   input: LowerInput,
   files: DesiredFile[],
@@ -484,12 +456,12 @@ const planConfigRegions = (
   return regions;
 };
 
+
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
 
   planAgentWrites(input, files);
   await planManagedSkillWrites(input, files);
-  planOrbitWrites(input, files);
   planSopWrites(input, files);
   const hooks = await planHooks(input, files);
   const regions = planConfigRegions(input, hooks);

@@ -15,8 +15,6 @@ import {
   type CompileManifestManagedSkill,
   type CompileManifestModelspace,
   type CompileManifestSkillspace,
-  type CompileManifestOrbit,
-  type CompileManifestOrbitPhase,
   type CompileManifestSop,
   type CompileManifestCanonicalTool,
   type HarnessId,
@@ -332,37 +330,6 @@ const deriveToolsForManifest = (options: {
   return tools;
 };
 
-export interface CompileManifestOrbitProjectionInput {
-  readonly name: string;
-  readonly phases: ReadonlyArray<CompileManifestOrbitPhase>;
-}
-
-const deriveOrbitsForManifest = (options: {
-  readonly base: CompileManifest;
-  readonly registryPluginName: string;
-  readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
-}): Record<string, CompileManifestOrbit> => {
-  const orbitsRecord: Record<string, CompileManifestOrbit> = {
-    ...options.base.orbits,
-  };
-  if (options.orbits !== undefined) {
-    for (const key of Object.keys(orbitsRecord)) {
-      if (orbitsRecord[key]!.plugin === options.registryPluginName) {
-        delete orbitsRecord[key];
-      }
-    }
-    for (const orbit of options.orbits) {
-      const id = `${options.registryPluginName}:${orbit.name}`;
-      orbitsRecord[id] = {
-        plugin: options.registryPluginName,
-        name: orbit.name,
-        phases: [...orbit.phases],
-      };
-    }
-  }
-  return orbitsRecord;
-};
-
 export interface CompileManifestSopProjectionInput {
   readonly name: string;
   readonly phases: CompileManifestSop["phases"];
@@ -371,8 +338,8 @@ export interface CompileManifestSopProjectionInput {
 /**
  * A sop compile pass is always authoritative for the source plugin's sop
  * entries: passing projections replaces every existing entry for that plugin
- * (including the empty set), so stale sops cannot be stranded. Unlike orbits,
- * there is no declared/undeclared "authoritative pass" split here.
+ * (including the empty set), so stale sops cannot be stranded. There is no
+ * declared/undeclared "authoritative pass" split here.
  */
 const deriveSopsForManifest = (options: {
   readonly base: CompileManifest;
@@ -431,8 +398,6 @@ export const buildCompileManifestForTarget = (options: {
   readonly scope: HarnessScope;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
-  /** When provided, this compile pass is authoritative for the source plugin's orbit phase projections (from prepareTargetOrbits, non-templates only). Threaded only for orbit-targeting compiles to avoid clearing on other targets. */
-  readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
   /** When provided, this compile pass replaces every sop entry for the source plugin (including with the empty set). Threaded only for sop-targeting compiles. */
   readonly sops?: ReadonlyArray<CompileManifestSopProjectionInput>;
 }): CompileManifest => {
@@ -486,12 +451,6 @@ export const buildCompileManifestForTarget = (options: {
     registry: options.registry,
   });
 
-  const orbits = deriveOrbitsForManifest({
-    base: options.base,
-    registryPluginName: options.registry.pluginName,
-    ...(options.orbits ? { orbits: options.orbits } : {}),
-  });
-
   const sops = deriveSopsForManifest({
     base: options.base,
     registryPluginName: options.registry.pluginName,
@@ -513,7 +472,6 @@ export const buildCompileManifestForTarget = (options: {
     modelspaces,
     skills,
     tools,
-    orbits,
     sops,
   });
 };
@@ -526,8 +484,6 @@ export const updateCompileManifestForTarget = async (options: {
   readonly scope: HarnessScope;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
-  /** Forwarded from surfaces.orbits pass in compilePluginForTarget; undefined means non-authoritative for orbits (carry base). */
-  readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
   /** Forwarded from surfaces.sops pass in compilePluginForTarget; undefined carries base, [] clears the plugin's sop entries. */
   readonly sops?: ReadonlyArray<CompileManifestSopProjectionInput>;
 }): Promise<void> =>
@@ -543,7 +499,6 @@ export const updateCompileManifestForTarget = async (options: {
         scope: options.scope,
         composed: options.composed,
         cacheDescriptors: options.cacheDescriptors,
-        ...(options.orbits ? { orbits: options.orbits } : {}),
         ...(options.sops ? { sops: options.sops } : {}),
       }),
     });

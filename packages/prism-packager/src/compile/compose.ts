@@ -3,7 +3,7 @@
  * ComposedAgent for the lowerers.
  */
 
-import type { NormalizedOrbitPhase as OrbitPhase, NormalizedSopPhase as SopPhase } from "./sources.js";
+import type { NormalizedSopPhase as SopPhase } from "./sources.js";
 import type { ResolvedAgent } from "./resolve.js";
 
 export interface ComposedAgentManifestMetadata {
@@ -42,11 +42,6 @@ const manifestModelBindings = (
 const manifestMetadata = (resolved: ResolvedAgent): ComposedAgentManifestMetadata => ({
   modelBindings: manifestModelBindings(resolved.agent.model),
 });
-
-export interface ComposedOrbitPhaseReference {
-  readonly label: string;
-  readonly detailLines: ReadonlyArray<string>;
-}
 
 const renderPersonalitySection = (resolved: ResolvedAgent): string | undefined => {
   const personality = resolved.personality;
@@ -120,48 +115,6 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
   };
 };
 
-export const composeOrbitPhaseReference = (
-  phase: OrbitPhase,
-): ComposedOrbitPhaseReference => {
-  if (phase.orbit_binding) {
-    const bindings = Object.entries(phase.orbit_binding.bindings ?? {})
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, value]) => `\`${name}=${value}\``);
-
-    return {
-      label: `orbit \`${phase.orbit_binding.orbit}\``,
-      detailLines:
-        bindings.length > 0 ? [`- **Bindings**: ${bindings.join(", ")}`] : [],
-    };
-  }
-
-  if (phase.orbit) {
-    return {
-      label: `orbit \`${phase.orbit}\``,
-      detailLines: [],
-    };
-  }
-
-  if (phase.agents.length === 1) {
-    return {
-      label: `agent \`${phase.agents[0]}\``,
-      detailLines: [],
-    };
-  }
-
-  if (phase.agents.length > 1) {
-    return {
-      label: `agents ${phase.agents.map((agent) => `\`${agent}\``).join(", ")}`,
-      detailLines: [],
-    };
-  }
-
-  return {
-    label: "(no reference)",
-    detailLines: [],
-  };
-};
-
 export interface ComposedSopPhaseReference {
   readonly label: string;
   readonly detailLines: ReadonlyArray<string>;
@@ -169,7 +122,7 @@ export interface ComposedSopPhaseReference {
 
 /**
  * Diagnostics-only summary of a SOP phase's typed contract. SOP phases have
- * no agent/orbit references by construction, so the only "reference" a phase
+ * no agent references by construction, so the only "reference" a phase
  * carries is the shape of its input/output contract.
  */
 export const composeSopPhaseReference = (

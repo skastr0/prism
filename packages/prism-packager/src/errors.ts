@@ -156,7 +156,6 @@ export type PrismError =
 export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "SourceParseError",
   "UnknownReferenceError",
-  "OrbitValidationError",
   "AgentValidationError",
   "UnknownTargetError",
   "InvalidTargetScopeError",
@@ -240,12 +239,6 @@ export const describePrismError = (error: PrismError): PrismErrorRender => {
       return {
         headline: formatCompileError(error),
         hint: `declare ${error.field} '${error.referenceName}' in the plugin or remove the reference`,
-        path: error.sourcePath,
-      };
-    case "OrbitValidationError":
-      return {
-        headline: formatCompileError(error),
-        hint: `fix '${error.field}' of orbit '${error.orbitName}' at ${error.sourcePath}`,
         path: error.sourcePath,
       };
     case "AgentValidationError":

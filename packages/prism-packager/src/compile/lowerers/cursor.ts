@@ -18,7 +18,7 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   collectBindingNameMap,
   ownerPluginForBinding,
@@ -32,7 +32,6 @@ import {
   planGeneratedPluginAgentWrites,
   planGeneratedPluginHookWrites,
   planGeneratedPluginSkillWrites,
-  planStandardGeneratedPluginOrbitSkillWrites,
   renderPrePostSessionHookWrapperEntry,
   serializeSimpleFrontmatter,
   type LowerOutput,
@@ -50,7 +49,6 @@ export interface CursorLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -197,7 +195,6 @@ const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
 const hasCursorBundleArtifacts = (input: LowerInput): boolean =>
   input.agents.length > 0 ||
-  input.orbits.length > 0 ||
   (input.skills?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0;
 
@@ -228,11 +225,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     renderAgentMarkdown,
   });
   await planGeneratedPluginSkillWrites({ input, state, pushWrite });
-  await planStandardGeneratedPluginOrbitSkillWrites({
-    input,
-    state,
-    pushWrite,
-  });
   if ((input.hooks?.length ?? 0) > 0) {
     await planGeneratedPluginHookWrites({
       input,

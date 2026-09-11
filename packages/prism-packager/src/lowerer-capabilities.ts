@@ -115,7 +115,7 @@ export const LOWERER_CAPABILITIES = {
       skills: {
         kind: "markdown-file",
         path: "<generated-plugin>/skills/",
-        summary: "Compile bundles targeted skills and orbit skills as Agent Skills.",
+        summary: "Compile bundles targeted skills and concrete sop skills as Agent Skills.",
       },
       generatedTools: {
         kind: "direct-file",
@@ -300,7 +300,7 @@ export const LOWERER_CAPABILITIES = {
       skills: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/skills/",
-        summary: "Compile bundles targeted skills and orbit skills.",
+        summary: "Compile bundles targeted skills and concrete sop skills.",
       },
       generatedTools: {
         kind: "direct-file",
@@ -348,7 +348,7 @@ export const LOWERER_CAPABILITIES = {
       skills: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/skills/",
-        summary: "Compile bundles targeted plugin skills and orbit skills into the generated Kimi plugin.",
+        summary: "Compile bundles targeted plugin skills and concrete sop skills into the generated Kimi plugin.",
       },
       generatedTools: {
         kind: "direct-file",
@@ -453,7 +453,7 @@ export const LOWERER_CAPABILITIES = {
       skills: {
         kind: "direct-file",
         path: "<cursor-root>/skills/",
-        summary: "Install writes Agent Skill folders; concrete orbit skills also bundle into the generated plugin.",
+        summary: "Install writes Agent Skill folders; concrete sop skills also bundle into the generated plugin.",
       },
       generatedTools: {
         kind: "direct-file",
@@ -472,7 +472,7 @@ export const LOWERER_CAPABILITIES = {
       "Cursor plugin hooks are Claude-shaped command scripts: hooks/hooks.json plus hooks/*.mjs, loaded from the generated plugin and --plugin-dir. Do not whole-file own ~/.cursor/hooks.json.",
       "Workflow worker dispatches `agent --print --output-format stream-json --trust`; default model composer-2.5-fast; resume via --resume.",
       "Cursor command artifacts install through the same local plugin bundle so Prism uses Cursor's native command discovery instead of direct command files.",
-      "Cursor Agent Skills stay install-phase direct under .cursor/skills and ~/.cursor/skills. Concrete orbit skills bundle into the generated plugin.",
+      "Cursor Agent Skills stay install-phase direct under .cursor/skills and ~/.cursor/skills. Concrete sop skills bundle into the generated plugin.",
       "Per-agent skill permission visibility remains unsupported. Canonical tools stay CLI-only (`prism tools invoke`); no mcp.json patch is emitted.",
     ],
   },
@@ -553,7 +553,7 @@ export const LOWERER_CAPABILITIES = {
       skills: {
         kind: "native-plugin-bundle",
         path: "<generated-package>/skills/",
-        summary: "Compile bundles targeted skills and concrete orbit skills into the generated Pi package.",
+        summary: "Compile bundles targeted skills and concrete sop skills into the generated Pi package.",
       },
       generatedTools: {
         kind: "native-plugin-api",
@@ -653,7 +653,7 @@ export const LOWERER_CAPABILITIES = {
       skills: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/skills/",
-        summary: "Compile bundles targeted skills and orbit skills.",
+        summary: "Compile bundles targeted skills and concrete sop skills.",
       },
       generatedTools: {
         kind: "direct-file",

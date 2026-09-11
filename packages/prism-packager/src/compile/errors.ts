@@ -20,7 +20,6 @@ export class SourceParseError extends Schema.TaggedError<SourceParseError>()(
       "agent",
       "modelspace",
       "skillspace",
-      "orbit",
       "sop",
       "tool",
       "hook",
@@ -39,8 +38,6 @@ export class UnknownReferenceError extends Schema.TaggedError<UnknownReferenceEr
       "personality",
       "model",
       "skill",
-      "orbit",
-      "phase.orbit",
       "phase.agent",
     ),
     referenceName: Schema.String,
@@ -93,16 +90,6 @@ export class UnsupportedTargetCapabilityError extends Schema.TaggedError<Unsuppo
   },
 ) {}
 
-export class OrbitValidationError extends Schema.TaggedError<OrbitValidationError>()(
-  "OrbitValidationError",
-  {
-    sourcePath: Schema.String,
-    orbitName: Schema.String,
-    field: Schema.String,
-    message: Schema.String,
-  },
-) {}
-
 export class AgentValidationError extends Schema.TaggedError<AgentValidationError>()(
   "AgentValidationError",
   {
@@ -122,7 +109,6 @@ export class DuplicateNameError extends Schema.TaggedError<DuplicateNameError>()
       "agent",
       "modelspace",
       "skillspace",
-      "orbit",
       "sop",
       "tool",
       "hook",
@@ -158,7 +144,6 @@ export class MissingTargetResolutionError extends Schema.TaggedError<MissingTarg
 export type CompileError =
   | SourceParseError
   | UnknownReferenceError
-  | OrbitValidationError
   | AgentValidationError
   | UnknownTargetError
   | InvalidTargetScopeError
@@ -176,8 +161,6 @@ export const formatCompileError = (error: CompileError): string => {
       return `${error.sourcePath}: failed to parse ${error.kind}: ${error.message}`;
     case "UnknownReferenceError":
       return `${error.sourcePath}: agent '${error.agentName}' references unknown ${error.field} '${error.referenceName}'`;
-    case "OrbitValidationError":
-      return `${error.sourcePath}: orbit '${error.orbitName}' invalid ${error.field}: ${error.message}`;
     case "AgentValidationError":
       return `${error.sourcePath}: agent '${error.agentName}' invalid ${error.field}: ${error.message}`;
     case "UnknownTargetError":

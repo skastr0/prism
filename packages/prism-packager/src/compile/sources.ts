@@ -3,7 +3,6 @@
  *
  * Canonical structured artifacts are TypeScript-authored:
  * - Agent         : agents/*.agent.ts
- * - Orbit     : orbits/*.orbit.ts
  * - Sop           : sops/*.sop.ts
  * - Modelspace    : modelspaces/*.modelspace.ts
  * - Skillspace    : skillspaces/*.skillspace.ts
@@ -38,16 +37,6 @@ export const AgentRefInputSchema = Schema.Union(
   }),
 );
 export type AgentRefInput = typeof AgentRefInputSchema.Type;
-
-export const OrbitRefInputSchema = Schema.Union(
-  Schema.String,
-  Schema.Struct({
-    kind: Schema.Literal("orbit-ref"),
-    plugin: Schema.optional(Schema.String),
-    name: Schema.String,
-  }),
-);
-export type OrbitRefInput = typeof OrbitRefInputSchema.Type;
 
 export const ModelProfileRefInputSchema = Schema.Union(
   Schema.String,
@@ -1088,11 +1077,6 @@ export const normalizeAgentRefInput = (
   value: AgentRefInput,
 ): string | RefNormalizationError => normalizeDirectNamedRefInput(field, value);
 
-export const normalizeOrbitRefInput = (
-  field: string,
-  value: OrbitRefInput,
-): string | RefNormalizationError => normalizeDirectNamedRefInput(field, value);
-
 export const normalizeModelProfileRefInput = (
   field: string,
   value: ModelProfileRefInput,
@@ -1398,177 +1382,6 @@ export class Skillspace extends Schema.Class<Skillspace>("Skillspace")({
   sourcePath: Schema.String,
   description: Schema.optional(Schema.String),
   skills: Schema.Record({ key: Schema.String, value: SkillDefinitionSchema }),
-}) {}
-
-// ---------------------------------------------------------------------------
-// Orbit
-// ---------------------------------------------------------------------------
-
-export const OrbitParameterSchema = Schema.Struct({
-  name: Schema.String,
-  description: Schema.optional(Schema.String),
-  required: Schema.optional(Schema.Boolean),
-});
-export type OrbitParameter = typeof OrbitParameterSchema.Type;
-
-export const OrbitBindingSchema = Schema.Struct({
-  orbit: OrbitRefInputSchema,
-  bindings: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
-});
-export type OrbitBinding = typeof OrbitBindingSchema.Type;
-
-export const OrbitOrchestratorSchema = Schema.Struct({
-  agent: AgentRefInputSchema,
-});
-export type OrbitOrchestrator = typeof OrbitOrchestratorSchema.Type;
-
-export const OrbitPhaseWorkflowSchema = Schema.Struct({
-  when: Schema.optional(Schema.String),
-  inputs: Schema.optional(Schema.Array(Schema.String)),
-  outputs: Schema.optional(Schema.Array(Schema.String)),
-  sequence: Schema.optional(Schema.Array(Schema.String)),
-  coordination: Schema.optional(Schema.String),
-  finish_criteria: Schema.optional(Schema.Array(Schema.String)),
-  escalation: Schema.optional(Schema.String),
-});
-export type OrbitPhaseWorkflow = typeof OrbitPhaseWorkflowSchema.Type;
-
-export const OrbitPhaseContractSchema = Schema.Struct({
-  input: Schema.optional(Schema.Unknown),
-  output: Schema.optional(Schema.Unknown),
-});
-export type OrbitPhaseContractInput = typeof OrbitPhaseContractSchema.Type;
-
-export type OrbitPhaseContract = {
-  readonly input?: Schema.Schema.AnyNoContext;
-  readonly output?: Schema.Schema.AnyNoContext;
-};
-
-export const OrbitPhaseSchema = Schema.Struct({
-  name: Schema.String,
-  orbit: Schema.optional(OrbitRefInputSchema),
-  orbit_binding: Schema.optional(OrbitBindingSchema),
-  agents: Schema.optional(Schema.Array(AgentRefInputSchema)),
-  agent: Schema.optional(AgentRefInputSchema),
-  notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
-  telos: Schema.optional(Schema.String),
-  real_world_change: Schema.optional(Schema.String),
-  cold_pickup_test: Schema.optional(Schema.String),
-  workflow: Schema.optional(OrbitPhaseWorkflowSchema),
-  contract: Schema.optional(OrbitPhaseContractSchema),
-  body: Schema.optional(Schema.String),
-});
-export type OrbitPhase = typeof OrbitPhaseSchema.Type;
-
-export const NormalizedOrbitBindingSchema = Schema.Struct({
-  orbit: Schema.String,
-  bindings: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
-});
-
-export const NormalizedOrbitPhaseContractSchema = OrbitPhaseContractSchema;
-
-export const NormalizedOrbitPhaseSchema = Schema.Struct({
-  name: Schema.String,
-  orbit: Schema.optional(Schema.String),
-  orbit_binding: Schema.optional(NormalizedOrbitBindingSchema),
-  agent: Schema.optional(Schema.String),
-  agents: Schema.Array(Schema.String),
-  notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
-  telos: Schema.optional(Schema.String),
-  real_world_change: Schema.optional(Schema.String),
-  cold_pickup_test: Schema.optional(Schema.String),
-  workflow: Schema.optional(OrbitPhaseWorkflowSchema),
-  contract: Schema.optional(NormalizedOrbitPhaseContractSchema),
-  body: Schema.optional(Schema.String),
-});
-export type NormalizedOrbitPhase = typeof NormalizedOrbitPhaseSchema.Type;
-
-export const NormalizedOrbitOrchestratorSchema = Schema.Struct({
-  agent: Schema.String,
-});
-export type NormalizedOrbitOrchestrator =
-  typeof NormalizedOrbitOrchestratorSchema.Type;
-
-export const OrbitPulsarCheckpointSchema = Schema.Struct({
-  after: Schema.optional(Schema.String),
-  before: Schema.optional(Schema.String),
-  note: Schema.optional(Schema.String),
-});
-export type OrbitPulsarCheckpoint = typeof OrbitPulsarCheckpointSchema.Type;
-
-export const OrbitSignalEmitterPrioritySchema = Schema.Literal(
-  "low",
-  "normal",
-  "high",
-  "urgent",
-);
-export type OrbitSignalEmitterPriority =
-  typeof OrbitSignalEmitterPrioritySchema.Type;
-
-export const OrbitSignalEmitterDestinationSchema = Schema.Struct({
-  project_key: Schema.String,
-  orbit: Schema.String,
-  default_priority: Schema.optional(OrbitSignalEmitterPrioritySchema),
-  note: Schema.optional(Schema.String),
-});
-export type OrbitSignalEmitterDestination =
-  typeof OrbitSignalEmitterDestinationSchema.Type;
-
-export const OrbitSignalEmitterSchema = Schema.Struct({
-  destinations: Schema.optional(Schema.Array(OrbitSignalEmitterDestinationSchema)),
-});
-export type OrbitSignalEmitter = typeof OrbitSignalEmitterSchema.Type;
-
-export const OrbitDefinitionEntrySchema = Schema.Struct({
-  purpose: Schema.String,
-  contains: Schema.optional(Schema.Array(Schema.String)),
-  boundaries: Schema.optional(Schema.Array(Schema.String)),
-  avoid: Schema.optional(Schema.Array(Schema.String)),
-});
-export type OrbitDefinitionEntry = typeof OrbitDefinitionEntrySchema.Type;
-
-export const OrbitDefinitionsSchema = Schema.Struct({
-  glyphs: Schema.optional(OrbitDefinitionEntrySchema),
-  dispatches: Schema.optional(OrbitDefinitionEntrySchema),
-  chatter: Schema.optional(OrbitDefinitionEntrySchema),
-  signals: Schema.optional(OrbitDefinitionEntrySchema),
-});
-export type OrbitDefinitions = typeof OrbitDefinitionsSchema.Type;
-
-export const OrbitDefinitionSchema = Schema.Struct({
-  name: Schema.String,
-  description: Schema.String,
-  produces: Schema.optional(Schema.String),
-  definitions: Schema.optional(OrbitDefinitionsSchema),
-  parameters: Schema.optional(Schema.Array(OrbitParameterSchema)),
-  phases: Schema.Array(OrbitPhaseSchema),
-  orchestrator: Schema.optional(OrbitOrchestratorSchema),
-  pulsar_checkpoints: Schema.optional(Schema.Array(OrbitPulsarCheckpointSchema)),
-  evolution: Schema.optional(Schema.String),
-  body: Schema.optional(Schema.String),
-  signal_emitter: Schema.optional(OrbitSignalEmitterSchema),
-});
-export type OrbitDefinition = typeof OrbitDefinitionSchema.Type;
-export const OrbitSourceSchema = OrbitDefinitionSchema;
-export type OrbitSource = typeof OrbitSourceSchema.Type;
-
-export class Orbit extends Schema.Class<Orbit>("Orbit")({
-  name: Schema.String,
-  sourcePath: Schema.String,
-  description: Schema.String,
-  produces: Schema.optional(Schema.String),
-  definitions: Schema.optional(OrbitDefinitionsSchema),
-  parameters: Schema.Array(OrbitParameterSchema),
-  phases: Schema.Array(NormalizedOrbitPhaseSchema),
-  orchestrator: Schema.optional(NormalizedOrbitOrchestratorSchema),
-  pulsar_checkpoints: Schema.Array(OrbitPulsarCheckpointSchema),
-  evolution: Schema.optional(Schema.String),
-  body: Schema.String,
-  signal_emitter: Schema.optional(OrbitSignalEmitterSchema),
 }) {}
 
 // ---------------------------------------------------------------------------

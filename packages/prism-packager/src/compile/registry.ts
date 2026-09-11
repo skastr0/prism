@@ -11,7 +11,6 @@ import {
   CanonicalTool,
   Hook,
   Identity,
-  Orbit,
   Modelspace,
   Personality,
   Skill,
@@ -34,7 +33,6 @@ export interface PluginRegistry {
   skills: Map<string, Skill>;
   tools: Map<string, CanonicalTool>;
   hooks: Map<string, Hook>;
-  orbits: Map<string, Orbit>;
   sops: Map<string, Sop>;
   agents: Map<string, Agent>;
   deps: Map<string, PluginRegistry>;
@@ -61,7 +59,6 @@ export const emptyRegistry = (
   skills: new Map(),
   tools: new Map(),
   hooks: new Map(),
-  orbits: new Map(),
   sops: new Map(),
   agents: new Map(),
   deps: new Map(),

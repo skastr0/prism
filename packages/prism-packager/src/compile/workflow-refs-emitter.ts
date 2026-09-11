@@ -3,9 +3,6 @@ import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-sdk/refs";
 import type {
   CompileManifest,
   CompileManifestAgent,
-  CompileManifestOrbit,
-  CompileManifestOrbitPhase,
-  CompileManifestOrbitPhaseContract,
   CompileManifestSop,
   CompileManifestSopPhase,
   CompileManifestCanonicalTool,
@@ -32,9 +29,6 @@ export const workflowModelsPath = (prismHome: string, projectKey: string): strin
 export const workflowSkillsPath = (prismHome: string, projectKey: string): string =>
   join(workflowRefsRoot(prismHome, projectKey), "skills.ts");
 
-export const workflowOrbitsPath = (prismHome: string, projectKey: string): string =>
-  join(workflowRefsRoot(prismHome, projectKey), "orbits.ts");
-
 export const workflowSopsPath = (prismHome: string, projectKey: string): string =>
   join(workflowRefsRoot(prismHome, projectKey), "sops.ts");
 
@@ -54,13 +48,8 @@ const camelKey = (value: string): string => {
   ].join("");
 };
 
-const pascalKey = (value: string): string => {
-  const camel = camelKey(value);
-  return camel.length > 0 ? camel[0]!.toUpperCase() + camel.slice(1) : "Agent";
-};
-
-export class WorkflowOrbitsEmitError extends Error {
-  override readonly name = "WorkflowOrbitsEmitError";
+export class WorkflowRefsEmitError extends Error {
+  override readonly name = "WorkflowRefsEmitError";
   constructor(message: string) {
     super(message);
   }
@@ -131,136 +120,12 @@ export const jsonSchemaToEffectSchemaSource = (
     return "Schema.Unknown";
   }
 
-  throw new WorkflowOrbitsEmitError(
+  throw new WorkflowRefsEmitError(
     `unsupported JSON Schema at ${path}: ${JSON.stringify(schema)}`,
   );
 };
 
 const manifestAgentId = (plugin: string, name: string): string => `${plugin}:${name}`;
-
-const agentRefExpression = (options: {
-  readonly manifest: CompileManifest;
-  readonly plugin: string;
-  readonly name: string;
-  readonly context: string;
-}): string => {
-  const manifestId = manifestAgentId(options.plugin, options.name);
-  if (!options.manifest.agents[manifestId]) {
-    throw new WorkflowOrbitsEmitError(
-      `phase agent ${manifestId} is missing from the emitted agents module (${options.context})`,
-    );
-  }
-  return `agents.${camelKey(options.plugin)}.${camelKey(options.name)}`;
-};
-
-const renderPhaseContract = (
-  contract: CompileManifestOrbitPhaseContract,
-  context: string,
-): string => {
-  const sides: string[] = [];
-  if (contract.input) {
-    sides.push(
-      `input: ${jsonSchemaToEffectSchemaSource(contract.input as JsonSchemaObject, `${context}.contract.input`)}`,
-    );
-  }
-  if (contract.output) {
-    sides.push(
-      `output: ${jsonSchemaToEffectSchemaSource(contract.output as JsonSchemaObject, `${context}.contract.output`)}`,
-    );
-  }
-  return sides.length > 0 ? `,\n      contract: { ${sides.join(", ")} }` : "";
-};
-
-const renderPhaseAgents = (options: {
-  readonly manifest: CompileManifest;
-  readonly orbit: CompileManifestOrbit;
-  readonly phase: CompileManifestOrbitPhase;
-}): string => {
-  const context = `${options.orbit.plugin}:${options.orbit.name} phase ${options.phase.name}`;
-  const entries = options.phase.agents.map((agent) => {
-    const slotKey = camelKey(agent.name);
-    const ref = agentRefExpression({
-      manifest: options.manifest,
-      plugin: agent.plugin,
-      name: agent.name,
-      context,
-    });
-    return `        ${JSON.stringify(slotKey)}: ${ref}`;
-  });
-  return entries.length > 0 ? entries.join(",\n") : "";
-};
-
-const renderPhase = (options: {
-  readonly manifest: CompileManifest;
-  readonly orbit: CompileManifestOrbit;
-  readonly phase: CompileManifestOrbitPhase;
-}): string => {
-  const phaseKey = camelKey(options.phase.name);
-  const context = `${options.orbit.plugin}:${options.orbit.name}.${phaseKey}`;
-  const notes =
-    options.phase.notes && Object.keys(options.phase.notes).length > 0
-      ? `,\n      notes: ${JSON.stringify(options.phase.notes)}`
-      : "";
-  const contract = options.phase.contract
-    ? renderPhaseContract(options.phase.contract, context)
-    : "";
-  const agentsBlock = renderPhaseAgents(options);
-  return `      ${JSON.stringify(phaseKey)}: {
-        name: ${JSON.stringify(options.phase.name)},
-        orbit: ${JSON.stringify(options.orbit.name)},
-        plugin: ${JSON.stringify(options.orbit.plugin)},
-        agents: {
-${agentsBlock}
-        },
-        criteria: ${JSON.stringify(options.phase.criteria)},
-        io: ${JSON.stringify(options.phase.io)},
-        framing: ${JSON.stringify(options.phase.framing)}${notes}${contract}
-      }`;
-};
-
-const renderOrbit = (options: {
-  readonly manifest: CompileManifest;
-  readonly orbit: CompileManifestOrbit;
-}): string => {
-  const orbitKey = camelKey(options.orbit.name);
-  const sequence = options.orbit.phases.map((phase) => camelKey(phase.name));
-  const phaseBlocks = options.orbit.phases
-    .map((phase) =>
-      renderPhase({
-        manifest: options.manifest,
-        orbit: options.orbit,
-        phase,
-      }),
-    )
-    .join(",\n");
-  return `    ${JSON.stringify(orbitKey)}: {
-      plugin: ${JSON.stringify(options.orbit.plugin)},
-      name: ${JSON.stringify(options.orbit.name)},
-      sequence: ${JSON.stringify(sequence)} as const,
-      phases: {
-${phaseBlocks}
-      }
-    }`;
-};
-
-const phaseAgentTypeAlias = (options: {
-  readonly plugin: string;
-  readonly orbitName: string;
-  readonly phaseName: string;
-}): string => {
-  const pluginKey = camelKey(options.plugin);
-  const orbitKey = camelKey(options.orbitName);
-  const phaseKey = camelKey(options.phaseName);
-  const alias = `${pascalKey(options.plugin)}${pascalKey(options.orbitName)}${pascalKey(options.phaseName)}Agent`;
-  return `export type ${alias} = typeof orbits.${pluginKey}.${orbitKey}.phases.${phaseKey}.agents[keyof typeof orbits.${pluginKey}.${orbitKey}.phases.${phaseKey}.agents];`;
-};
-
-const collectManifestOrbits = (manifest: CompileManifest): CompileManifestOrbit[] =>
-  Object.values(manifest.orbits ?? {}).sort((left, right) =>
-    left.plugin === right.plugin
-      ? left.name.localeCompare(right.name)
-      : left.plugin.localeCompare(right.plugin),
-  );
 
 const sortStrings = (values: Iterable<string>): string[] => [...values].sort();
 
@@ -678,105 +543,6 @@ const collectUsedTools = (
       : a.plugin.localeCompare(b.plugin),
   );
 
-export const renderWorkflowOrbitsModule = (options: {
-  readonly manifest: CompileManifest;
-}): string => {
-  const orbits = collectManifestOrbits(options.manifest);
-  const byPlugin = new Map<string, CompileManifestOrbit[]>();
-  for (const orbit of orbits) {
-    const pluginKey = camelKey(orbit.plugin);
-    const group = byPlugin.get(pluginKey) ?? [];
-    group.push(orbit);
-    byPlugin.set(pluginKey, group);
-  }
-
-  const pluginBlocks = [...byPlugin.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([pluginKey, pluginOrbits]) => {
-      const orbitBlocks = pluginOrbits
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map((orbit) =>
-          renderOrbit({
-            manifest: options.manifest,
-            orbit,
-          }),
-        )
-        .join(",\n");
-      return `  ${JSON.stringify(pluginKey)}: {\n${orbitBlocks}\n  }`;
-    });
-
-  const body = pluginBlocks.length > 0 ? pluginBlocks.join(",\n") : "";
-  const typeAliases = orbits
-    .flatMap((orbit) =>
-      orbit.phases
-        .filter((phase) => phase.agents.length > 0)
-        .map((phase) =>
-          phaseAgentTypeAlias({
-            plugin: orbit.plugin,
-            orbitName: orbit.name,
-            phaseName: phase.name,
-          }),
-        ),
-    )
-    .join("\n");
-
-  const typeAliasBlock = typeAliases.length > 0 ? `\n${typeAliases}\n` : "";
-
-  return `/**
- * Generated by Prism. Do not edit.
- * Source: compile manifest ${options.manifest.manifestHash}
- */
-
-import { Schema } from "effect";
-import { agents, type WorkflowAgentRef } from "./agents.ts";
-
-// Re-exported so orbit-phase authors can import agents, orbits, and the ref
-// type from one specifier ("prism/refs/orbits") instead of also reaching into
-// bare "prism/refs" just for the type.
-export type { WorkflowAgentRef } from "./agents.ts";
-
-export interface WorkflowOrbitPhaseIo {
-  readonly inputs: ReadonlyArray<string>;
-  readonly outputs: ReadonlyArray<string>;
-}
-
-export interface WorkflowOrbitPhaseFraming {
-  readonly telos?: string;
-  readonly when?: string;
-  readonly coordination?: string;
-  readonly escalation?: string;
-}
-
-export interface WorkflowOrbitPhaseContract {
-  readonly input?: Schema.Schema.Any;
-  readonly output?: Schema.Schema.Any;
-}
-
-export interface WorkflowOrbitPhase {
-  readonly name: string;
-  readonly orbit: string;
-  readonly plugin: string;
-  readonly agents: Readonly<Record<string, WorkflowAgentRef>>;
-  readonly criteria: ReadonlyArray<string>;
-  readonly io: WorkflowOrbitPhaseIo;
-  readonly framing: WorkflowOrbitPhaseFraming;
-  readonly notes?: Readonly<Record<string, string>>;
-  readonly contract?: WorkflowOrbitPhaseContract;
-}
-
-export interface WorkflowOrbit {
-  readonly plugin: string;
-  readonly name: string;
-  readonly sequence: ReadonlyArray<string>;
-  readonly phases: Readonly<Record<string, WorkflowOrbitPhase>>;
-}
-
-export const orbits = {
-${body}
-} as const satisfies Record<string, Record<string, WorkflowOrbit>>;
-${typeAliasBlock}`;
-};
-
 const collectManifestSops = (manifest: CompileManifest): CompileManifestSop[] =>
   Object.values(manifest.sops ?? {}).sort((left, right) =>
     left.plugin === right.plugin
@@ -980,13 +746,6 @@ export const planWorkflowRefsEmit = (options: {
       {
         targetPath: workflowSkillsPath(options.prismHome, options.projectKey),
         content: renderWorkflowSkillsModule({
-          manifest: options.manifest,
-        }),
-        plugin: WORKFLOW_REFS_HARNESS,
-      },
-      {
-        targetPath: workflowOrbitsPath(options.prismHome, options.projectKey),
-        content: renderWorkflowOrbitsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,

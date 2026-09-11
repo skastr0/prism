@@ -11,7 +11,7 @@ import {
 } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Orbit, Skill, Sop } from "../sources.js";
+import type { CanonicalTool, Hook, Skill, Sop } from "../sources.js";
 import {
   bindingsFromCanonicalTools,
   bindingsOwnedByPlugin,
@@ -29,10 +29,8 @@ import {
   matcherForResolvedToolHook,
   nativeHookEventName,
   normalizeBundleSegment,
-  planGeneratedPluginOrbitSkillWrites,
   planGeneratedPluginSopSkillWrites,
   pushDesiredFile,
-  renderGeneratedOrbitSkill,
   renderGeneratedSopSkill,
   renderPrePostSessionHookWrapperEntry,
   serializeSimpleFrontmatter as serializeFrontmatter,
@@ -54,7 +52,6 @@ export interface PiLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly orbits: ReadonlyArray<Orbit>;
   readonly sops: ReadonlyArray<Sop>;
   readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
@@ -170,16 +167,6 @@ const renderPiAgentMarkdown = (
   ];
   return `${lines.join("\n").trimEnd()}\n`;
 };
-
-const renderPiOrbitSkillMarkdown = (
-  orbit: Orbit,
-  registry: PluginRegistry | undefined,
-): string =>
-  renderGeneratedOrbitSkill({
-    orbit,
-    registry,
-    trailingNewline: true,
-  });
 
 const renderPiSopSkillMarkdown = (sop: Sop): string =>
   renderGeneratedSopSkill({
@@ -536,7 +523,6 @@ const hasPackageOutput = (
     input.target.sourcePluginName,
     input.tools ?? [],
   ).length > 0 ||
-  input.orbits.length > 0 ||
   input.sops.length > 0 ||
   (input.tools?.length ?? 0) > 0 ||
   (input.skills?.length ?? 0) > 0 ||
@@ -591,13 +577,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   }
 
   await planTargetedSkillWrites(input, state.files, state.desiredRelativePaths);
-  await planGeneratedPluginOrbitSkillWrites({
-    input,
-    state,
-    pushWrite,
-    renderOrbitSkill: (orbit) =>
-      renderPiOrbitSkillMarkdown(orbit, input.registry),
-  });
   await planGeneratedPluginSopSkillWrites({
     input,
     state,

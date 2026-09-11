@@ -177,8 +177,9 @@ test("doctor --fix compiles targeted plugin outputs before refresh inspection", 
       targets: {
         agents: ["opencode"],
         orbits: ["opencode"],
-        toolspaces: ["opencode"],
+        tools: ["opencode"],
         modelspaces: ["opencode"],
+        skillspaces: ["opencode"],
       },
     }, null, 2)}\n`,
   );

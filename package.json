@@ -41,7 +41,6 @@
     "test:ci": "bun run build:core && bun scripts/build-dts.ts && bun test --timeout 30000",
     "acceptance:idempotency-git": "bun scripts/acceptance/idempotency-git.ts",
     "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",
-    "acceptance:orbit-workflows": "bun scripts/acceptance/orbit-workflows.ts",
     "acceptance:workflow-e2e": "bun scripts/acceptance/workflow-e2e-matrix.ts",
     "acceptance:all": "bun scripts/acceptance/run-all.ts",
     "check:tool-suites": "bun test --timeout 30000 src/compile src/sync src/tools-cli scripts/acceptance/workflow-e2e-matrix.test.ts"

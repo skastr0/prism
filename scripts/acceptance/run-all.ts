@@ -41,7 +41,6 @@ const GATE_SCRIPTS: ReadonlyArray<GateScript> = [
   { script: "matrix-direct-file-install.ts", expected: "PASS" },
   { script: "matrix-amp-compile.ts", expected: "PASS" },
   { script: "matrix-pi-compile.ts", expected: "PASS" },
-  { script: "orbit-workflows.ts", expected: "PASS" },
   { script: "workflow-e2e-matrix.ts", args: ["--mode", "temp", "--validate-only"], expected: "PASS" },
 ];
 

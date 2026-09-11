@@ -157,11 +157,11 @@ describe("workflow-e2e temp cleanup", () => {
       await mkdir(join(opencodeRoot, "plugins", "prism-generated-prism-harness-qa", "dist"), { recursive: true });
       await mkdir(join(opencodeRoot, "agents"), { recursive: true });
       await mkdir(join(opencodeRoot, "skills", "qa-helper"), { recursive: true });
-      await mkdir(join(opencodeRoot, "skills", "qa-orbit"), { recursive: true });
+      await mkdir(join(opencodeRoot, "skills", "qa-sop"), { recursive: true });
       await writeFile(join(opencodeRoot, "plugins", "prism-generated-prism-harness-qa", "dist", "server.mjs"), "");
       await writeFile(join(opencodeRoot, "agents", "qa-tester.md"), "");
       await writeFile(join(opencodeRoot, "skills", "qa-helper", "SKILL.md"), "");
-      await writeFile(join(opencodeRoot, "skills", "qa-orbit", "SKILL.md"), "");
+      await writeFile(join(opencodeRoot, "skills", "qa-sop", "SKILL.md"), "");
       await writeFile(join(opencodeRoot, "opencode.json"), `${JSON.stringify({
         agent: { "qa-tester": { model: "test" }, keeper: { model: "ok" } },
         permission: { "prism_harness_qa_*": "allow", keep: "allow" },

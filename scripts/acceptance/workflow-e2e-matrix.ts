@@ -456,7 +456,7 @@ const writeE2EManifest = async (pluginRoot: string): Promise<void> => {
     targets: {
       skills: WORKFLOW_HARNESSES,
       agents: COMPILED_AGENT_HARNESSES,
-      orbits: WORKFLOW_HARNESSES,
+      sops: WORKFLOW_HARNESSES,
       modelspaces: WORKFLOW_HARNESSES,
       tools: WORKFLOW_HARNESSES,
     },
@@ -574,7 +574,7 @@ const workflowE2EQaFallbackPaths = (harness: QaCleanupHarness, root: string): re
         join(root, "plugins", QA_GENERATED_PLUGIN_NAME),
         join(root, "agents", "qa-tester.md"),
         join(root, "skills", "qa-helper"),
-        join(root, "skills", "qa-orbit"),
+        join(root, "skills", "qa-sop"),
       ];
     case "claude-code":
       return [join(root, "skills", QA_GENERATED_PLUGIN_NAME)];
@@ -582,7 +582,7 @@ const workflowE2EQaFallbackPaths = (harness: QaCleanupHarness, root: string): re
       return [
         join(root, "agents", "qa-tester.toml"),
         join(root, "skills", "qa-helper"),
-        join(root, "skills", "qa-orbit"),
+        join(root, "skills", "qa-sop"),
         join(root, "prism-orphans", "agents", "qa-tester.toml"),
       ];
     case "grok":
@@ -590,7 +590,7 @@ const workflowE2EQaFallbackPaths = (harness: QaCleanupHarness, root: string): re
     case "hermes":
       return [
         join(root, "skills", "qa-helper"),
-        join(root, "skills", "qa-orbit"),
+        join(root, "skills", "qa-sop"),
       ];
     case "kimi-code":
       return [join(root, "plugins", "managed", QA_GENERATED_PLUGIN_NAME)];
@@ -599,7 +599,7 @@ const workflowE2EQaFallbackPaths = (harness: QaCleanupHarness, root: string): re
         join(root, "plugins", `${QA_GENERATED_PLUGIN_NAME}.ts`),
         join(root, "skills", "prism-agent-qa-tester"),
         join(root, "skills", "qa-helper"),
-        join(root, "skills", "qa-orbit"),
+        join(root, "skills", "qa-sop"),
       ];
   }
 };

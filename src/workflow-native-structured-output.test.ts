@@ -57,7 +57,7 @@ describe("workflow native structured output", () => {
       expect(call.args).toContain("--json-schema");
       expect(call.schema.properties).toMatchObject({
         summary: { type: "string" },
-        status: { enum: ["pass", "needs-work"] },
+        status: { type: "string", enum: ["pass", "needs-work"] },
       });
       expect(result.output).toEqual({ summary: "typed", status: "pass" });
       expect(result.metadata).toMatchObject({
@@ -180,7 +180,7 @@ describe("workflow native structured output", () => {
       expect(call.args).toContain("--output-last-message");
       expect(call.schema.properties).toMatchObject({
         summary: { type: "string" },
-        status: { enum: ["pass", "needs-work"] },
+        status: { type: "string", enum: ["pass", "needs-work"] },
       });
       expect(result.output).toEqual({ summary: "typed", status: "pass" });
       expect(result.metadata).toMatchObject({

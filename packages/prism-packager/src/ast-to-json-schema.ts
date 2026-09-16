@@ -59,18 +59,36 @@ const unsupportedConstruct = (
   );
 };
 
+/**
+ * JSON Schema `type` for a literal value. Strict validators (Kimi's
+ * Moonshot-flavored schema check, OpenAI structured outputs) reject `enum` and
+ * `const` without a sibling `type`, and an array of enum-only items leaves
+ * `items` untyped — so literal schemas always carry one.
+ */
+const literalJsonSchemaType = (
+  literal: string | number | boolean | null,
+): "string" | "number" | "boolean" | "null" =>
+  literal === null
+    ? "null"
+    : typeof literal === "boolean"
+      ? "boolean"
+      : typeof literal === "number"
+        ? "number"
+        : "string";
+
 const literalJsonSchema = (
   literal: string | number | boolean | null | bigint,
   fieldPath: string,
   options: AstToJsonSchemaOptions,
 ): JsonSchema => {
   if (typeof literal === "bigint") {
-    unsupportedConstruct("Literal", fieldPath, options, "bigint literals are not JSON-serializable");
+    return unsupportedConstruct("Literal", fieldPath, options, "bigint literals are not JSON-serializable");
   }
+  const type = literalJsonSchemaType(literal);
   if (options.literalRepresentation === "const") {
-    return { const: literal };
+    return { type, const: literal };
   }
-  return { enum: [literal] };
+  return { type, enum: [literal] };
 };
 
 const astToJsonSchemaInner = (
@@ -100,11 +118,15 @@ const astToJsonSchemaInner = (
         const values = unionAst.types.map((type) => {
           const literal = (type as SchemaAST.Literal).literal;
           if (typeof literal === "bigint") {
-            unsupportedConstruct("Literal", fieldPath, options, "bigint literals are not JSON-serializable");
+            return unsupportedConstruct("Literal", fieldPath, options, "bigint literals are not JSON-serializable");
           }
           return literal;
         });
-        return { enum: values };
+        const literalTypes = new Set(values.map((value) => literalJsonSchemaType(value)));
+        // Mixed-type literal unions have no single `type`; omit it rather than lie.
+        return literalTypes.size === 1
+          ? { type: [...literalTypes][0]!, enum: values }
+          : { enum: values };
       }
       const nonUndefined = unionAst.types.filter((type) => type._tag !== "UndefinedKeyword");
       if (nonUndefined.length === 1) {

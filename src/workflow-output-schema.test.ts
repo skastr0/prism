@@ -26,7 +26,7 @@ describe("workflow output JSON Schema", () => {
         count: { type: "number" },
         ok: { type: "boolean" },
         tags: { type: "array", items: { type: "string" } },
-        mode: { enum: ["pass", "fail"] },
+        mode: { type: "string", enum: ["pass", "fail"] },
         maybeScore: { type: "number" },
         nullableNote: {
           anyOf: [

@@ -32,6 +32,7 @@ describe("astToJsonSchema", () => {
         ok: Schema.Boolean,
         tags: Schema.Array(Schema.String),
         mode: Schema.Literal("pass", "fail"),
+        modes: Schema.Array(Schema.Literal("pass", "fail")),
         maybeScore: Schema.optional(Schema.Number),
         nullableNote: Schema.NullOr(Schema.String),
       }),
@@ -45,7 +46,8 @@ describe("astToJsonSchema", () => {
         count: { type: "number" },
         ok: { type: "boolean" },
         tags: { type: "array", items: { type: "string" } },
-        mode: { enum: ["pass", "fail"] },
+        mode: { type: "string", enum: ["pass", "fail"] },
+        modes: { type: "array", items: { type: "string", enum: ["pass", "fail"] } },
         maybeScore: { type: "number" },
         nullableNote: {
           anyOf: [
@@ -54,7 +56,7 @@ describe("astToJsonSchema", () => {
           ],
         },
       },
-      required: ["summary", "count", "ok", "tags", "mode", "nullableNote"],
+      required: ["summary", "count", "ok", "tags", "mode", "modes", "nullableNote"],
       additionalProperties: false,
     });
   });
@@ -137,6 +139,6 @@ describe("astToJsonSchema", () => {
       errorPrefix: "test",
       literalRepresentation: "const",
     });
-    expect(schema).toEqual({ const: "fixed" });
+    expect(schema).toEqual({ type: "string", const: "fixed" });
   });
 });

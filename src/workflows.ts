@@ -1,7 +1,17 @@
 import { Effect, Result, Schema } from "effect";
 import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
+import { isWorkflowSchedule, parseWorkflowSchedule, type WorkflowSchedule } from "./workflow-scheduler/schedule.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
+export {
+  WORKFLOW_SCHEDULE_MISSED_RUN_POLICIES,
+  WORKFLOW_SCHEDULE_OVERLAP_POLICIES,
+  isWorkflowSchedule,
+  parseWorkflowSchedule,
+  type WorkflowSchedule,
+  type WorkflowScheduleMissedRuns,
+  type WorkflowScheduleOverlap,
+} from "./workflow-scheduler/schedule.js";
 
 export interface WorkflowModelRef {
   readonly modelspace?: string;
@@ -481,6 +491,12 @@ export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyA
   readonly kind: "workflow";
   readonly name: Name;
   readonly tasks: Tasks;
+  /**
+   * Inert scheduling policy. Declaring it registers nothing; only
+   * `prism workflow schedule install` activates a schedule. See
+   * `workflow-scheduler/schedule.ts`.
+   */
+  readonly schedule?: WorkflowSchedule;
 }
 
 export interface PhaseFraming {
@@ -735,6 +751,8 @@ export interface DynamicWorkflowDefinition<
   readonly name: Name;
   readonly tasks: readonly [];
   readonly run: (runtime: WorkflowRuntime) => Effect.Effect<Result, Err, never>;
+  /** Inert scheduling policy; see `WorkflowDefinition.schedule`. */
+  readonly schedule?: WorkflowSchedule;
 }
 
 export type AnyWorkflowDefinition =
@@ -749,7 +767,8 @@ export const isWorkflowDefinition = (
   typeof value.name === "string" &&
   Array.isArray(value.tasks) &&
   value.tasks.every(isWorkflowTask) &&
-  (value.run === undefined || typeof value.run === "function");
+  (value.run === undefined || typeof value.run === "function") &&
+  (value.schedule === undefined || isWorkflowSchedule(value.schedule));
 
 export const workflowSummary = (
   path: string,
@@ -772,34 +791,48 @@ export const defineTask = <
   ...definition,
 });
 
+/**
+ * `schedule` is validated here rather than left to `install` so an authoring
+ * mistake fails at import, with the file in front of the author. `install`
+ * re-validates because an installed schedule is boundary data — a hand-written
+ * object, or a definition produced by a different Prism version.
+ */
+const validatedWorkflowSchedule = (value: unknown): WorkflowSchedule | undefined =>
+  value === undefined ? undefined : parseWorkflowSchedule(value);
+
 export function defineWorkflow<const Name extends string, const Tasks extends ReadonlyArray<AnyWorkflowTask>>(
-  definition: { readonly name: Name; readonly tasks: Tasks },
+  definition: { readonly name: Name; readonly tasks: Tasks; readonly schedule?: WorkflowSchedule },
 ): WorkflowDefinition<Name, Tasks>;
 export function defineWorkflow<const Name extends string, Result, Err = WorkflowRuntimeError>(
   definition: {
     readonly name: Name;
     readonly run: (runtime: WorkflowRuntime) => Effect.Effect<Result, Err, never>;
+    readonly schedule?: WorkflowSchedule;
   },
 ): DynamicWorkflowDefinition<Name, Result, Err>;
 export function defineWorkflow<const Name extends string, Result, Err = WorkflowRuntimeError>(
   definition:
-    | { readonly name: Name; readonly tasks: ReadonlyArray<AnyWorkflowTask> }
+    | { readonly name: Name; readonly tasks: ReadonlyArray<AnyWorkflowTask>; readonly schedule?: WorkflowSchedule }
     | {
       readonly name: Name;
       readonly run: (runtime: WorkflowRuntime) => Effect.Effect<Result, Err, never>;
+      readonly schedule?: WorkflowSchedule;
     },
 ): WorkflowDefinition<Name, ReadonlyArray<AnyWorkflowTask>> | DynamicWorkflowDefinition<Name, Result, Err> {
+  const schedule = validatedWorkflowSchedule(definition.schedule);
   if ("run" in definition) {
     return {
       kind: "workflow",
       name: definition.name,
       tasks: [],
       run: definition.run,
+      ...(schedule !== undefined ? { schedule } : {}),
     };
   }
   return {
   kind: "workflow",
   ...definition,
+  ...(schedule !== undefined ? { schedule } : {}),
   };
 }
 

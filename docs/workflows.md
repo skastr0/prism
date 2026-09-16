@@ -17,6 +17,8 @@ For the product tour, start at the [root README](../README.md#workflows-typed-ta
 - [Running and operating](#running-and-operating)
 - [Testing a graph without spending tokens](#testing-a-graph-without-spending-tokens)
 
+Scheduling is a separate document: [workflow-scheduling.md](./workflow-scheduling.md).
+
 ## The mental model
 
 A **task** binds four things: a *worker* (which harness CLI executes it), a *prompt*, an *output schema* (Effect Schema the worker's final answer must decode into), and *finish criteria* (checks the decoded output must pass). There is no agent field — agents are a standalone compile primitive (`agents/*.agent.ts` → harness agent files) that workflows do not reference. A **workflow** composes tasks — statically as a list, or dynamically as an Effect program with full control flow. Every run persists to a SQLite ledger; every completed task result is cached content-addressed.
@@ -196,6 +198,18 @@ Two shapes:
 export default defineWorkflow({
   name: "kimi-code-smoke",
   tasks: [verifyChallenge],
+});
+```
+
+Either shape may also declare an inert `schedule` policy. Declaring it registers nothing;
+`prism workflow schedule install <file>` is the only thing that activates a schedule. See
+[workflow-scheduling.md](./workflow-scheduling.md).
+
+```ts
+export default defineWorkflow({
+  name: "inbox-router",
+  schedule: { cron: "*/10 * * * *", timezone: "America/Sao_Paulo", overlap: "skip", missedRuns: "skip" },
+  run: (wf) => /* Effect program */,
 });
 ```
 

@@ -616,6 +616,45 @@ export class SchedulerStore {
     return { kind: "reserved", execution };
   }
 
+  /**
+   * Record a consumed opportunity that did not launch because the schedule was
+   * already occupied.
+   *
+   * Inserted directly rather than through `reserveExecution`, because
+   * `reserveExecution` writes an occupying row and the occupancy index admits at
+   * most one unresolved execution per schedule — so a skip routed through it
+   * would be rejected by the very constraint that makes overlap impossible. A
+   * skip has no worker, so it is terminal on arrival and never occupies.
+   */
+  recordSkippedOverlap(input: {
+    readonly scheduleId: string;
+    readonly scheduleRevision: number;
+    readonly scheduledFor: string | null;
+    readonly schedulerInstanceId: string;
+  }): ScheduleExecutionRecord {
+    const executionId = randomUUID();
+    const reason = "the previous execution is still unresolved";
+    const at = nowIso();
+    this.db.query(`
+      insert into schedule_executions
+        (execution_id, schedule_id, schedule_revision, status, scheduled_for,
+         scheduler_instance_id, started_at, finished_at, cause_json)
+      values (?, ?, ?, 'skipped-overlap', ?, ?, ?, ?, ?)
+    `).run(
+      executionId,
+      input.scheduleId,
+      input.scheduleRevision,
+      input.scheduledFor,
+      input.schedulerInstanceId,
+      at,
+      at,
+      JSON.stringify({ reason }),
+    );
+    const execution = this.getExecution(executionId);
+    if (execution === null) throw new Error(`execution disappeared during skip: ${executionId}`);
+    return execution;
+  }
+
   getExecution(executionId: string): ScheduleExecutionRecord | null {
     const row = this.db.query<ExecutionRow, [string]>(`
       select execution_id, schedule_id, schedule_revision, status, scheduled_for,

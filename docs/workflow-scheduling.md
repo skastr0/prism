@@ -168,6 +168,9 @@ prism workflow scheduler serve                # watch and launch, in the foregro
 prism workflow scheduler serve --once         # one tick, waiting for what it started
 prism workflow scheduler reconcile            # resolve executions left by a previous scheduler
 prism workflow scheduler status               # is a scheduler running, and what is each schedule doing
+
+prism workflow scheduler install-service      # macOS: run the scheduler at login, under launchd
+prism workflow scheduler uninstall-service
 ```
 
 Installing needs the project's workflow store path, because that is where a scheduled run's ledger
@@ -196,6 +199,27 @@ it a complete foreground alternative to a long-running daemon:
 
 Overlap is still safe under that arrangement: the occupancy index is in the database, so two
 overlapping invocations cannot both run one schedule.
+
+**Surviving logout (macOS).** `install-service` writes one LaunchAgent for this Prism home and
+bootstraps it. launchd owns the process; Prism owns the schedules — there is no agent per workflow,
+because a schedule is data and one service watching one catalog is what makes the instance lock
+meaningful. The plist contains no `StartCalendarInterval`: two authorities for the same fact would be
+a bug.
+
+The agent does not run the scheduler directly. It runs `/bin/sh` with a short preflight that checks
+the Prism executable and then `exec`s it, so the launcher does not live inside a bundle that an
+upgrade can delete. A missing installation produces one diagnostic and exits **0**, which with
+`KeepAlive: { SuccessfulExit: false }` tells launchd to stand down instead of respawning into the
+same failure — the failure mode `prism doctor` already detects as retired-service residue.
+
+A LaunchAgent runs as you but inherits no interactive shell, so `PRISM_HOME` and `PATH` are written
+into the plist and credentials are not: the plist is readable and secrets belong in the harness's own
+credential store. `uninstall-service` boots out the agent and removes its own plist, keeping
+schedules and run history. `install-service` refuses while a hand-started scheduler holds the lock,
+because a managed agent that lost that race would exit 0 and never supervise the running one.
+
+On a host without launchd both commands fail closed with an environment error and point at
+`serve`/`--once`. There is no systemd backend yet.
 
 **Monitoring.** `scheduler status` reports lock occupancy and instance-record freshness as two
 separate facts and prints no aggregate health boolean — "lock held, metadata stale" is not healthy,

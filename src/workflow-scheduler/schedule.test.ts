@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
+import { loadWorkflowFile } from "../workflow-loader.js";
 import {
   isWorkflowDefinition,
   isWorkflowSchedule,
@@ -124,5 +125,90 @@ describe("workflow schedule declaration", () => {
     expect(isWorkflowDefinition({ kind: "workflow", name: "n", tasks: [], schedule: declaration })).toBe(true);
     expect(isWorkflowDefinition({ kind: "workflow", name: "n", tasks: [], schedule: { cron: "x" } })).toBe(false);
     expect(isWorkflowDefinition({ kind: "workflow", name: "n", tasks: [] })).toBe(true);
+  });
+});
+
+/**
+ * A workflow file's `prism` import does not resolve to `src/workflows.ts` at run
+ * time: the loader rewrites it to a generated DSL bundle that carries its own
+ * `defineWorkflow`. That bundle is a second representation of the same contract
+ * (AGENTS.md rule 3), and it silently dropped `schedule` from the dynamic branch
+ * — which made every `run`-style workflow uninstallable. These tests load a real
+ * file through the real loader, so the two representations cannot drift again
+ * without a failure here.
+ */
+describe("a declared schedule survives the workflow loader", () => {
+  const writeWorkflow = async (root: string, name: string, source: string): Promise<string> => {
+    const path = join(root, `${name}.workflow.ts`);
+    await writeFile(path, source);
+    return path;
+  };
+
+  const declaration = `{ cron: "*/10 * * * *", timezone: "America/Sao_Paulo", overlap: "skip", missedRuns: "skip" }`;
+
+  test("a dynamic workflow keeps its schedule through the generated DSL bundle", async () => {
+    const root = await createTempRoot();
+    const path = await writeWorkflow(root, "dynamic", `
+import { Effect } from "effect";
+import { defineWorkflow } from "prism";
+
+export default defineWorkflow({
+  name: "dynamic-router",
+  schedule: ${declaration},
+  run: () => Effect.succeed("done"),
+});
+`);
+    const workflow = await loadWorkflowFile(path, { skipTypecheck: true });
+    expect(workflow.schedule).toEqual({
+      cron: "*/10 * * * *",
+      timezone: "America/Sao_Paulo",
+      overlap: "skip",
+      missedRuns: "skip",
+    });
+  });
+
+  test("a static workflow keeps its schedule through the generated DSL bundle", async () => {
+    const root = await createTempRoot();
+    const path = await writeWorkflow(root, "static", `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+export default defineWorkflow({
+  name: "static-router",
+  schedule: ${declaration},
+  tasks: [defineTask({ id: "a", prompt: "p", output: Schema.Struct({ s: Schema.String }) })],
+});
+`);
+    const workflow = await loadWorkflowFile(path, { skipTypecheck: true });
+    expect(workflow.schedule?.cron).toBe("*/10 * * * *");
+  });
+
+  test("a workflow with no schedule declares none", async () => {
+    const root = await createTempRoot();
+    const path = await writeWorkflow(root, "plain", `
+import { Effect } from "effect";
+import { defineWorkflow } from "prism";
+
+export default defineWorkflow({ name: "plain", run: () => Effect.succeed("x") });
+`);
+    const workflow = await loadWorkflowFile(path, { skipTypecheck: true });
+    expect(workflow.schedule).toBeUndefined();
+  });
+
+  test("the loader rejects a schedule the bundle carried through unvalidated", async () => {
+    const root = await createTempRoot();
+    // The bundle preserves the field without judging it; the host validates it
+    // on load, so an unimplemented policy fails here rather than at launch.
+    const path = await writeWorkflow(root, "bad", `
+import { Effect } from "effect";
+import { defineWorkflow } from "prism";
+
+export default defineWorkflow({
+  name: "bad",
+  schedule: { cron: "*/10 * * * *", timezone: "UTC", overlap: "queue", missedRuns: "skip" },
+  run: () => Effect.succeed("x"),
+});
+`);
+    await expect(loadWorkflowFile(path, { skipTypecheck: true })).rejects.toThrow();
   });
 });

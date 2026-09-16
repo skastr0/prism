@@ -313,6 +313,44 @@ describe("scheduler loop: one tick", () => {
     }
   });
 
+  test("counts a non-completing execution as a failure, and a skip as not one", async () => {
+    const root = await createTempRoot();
+    const store = await SchedulerStore.open(join(root, "scheduler.sqlite"));
+    const fake = createFakeHost();
+    try {
+      installSchedule(store);
+      // The run fails, so `--once` must be able to report that through `$?`.
+      fake.setAutoComplete("failed", 1);
+      const report = await runOnce(store, fake);
+      expect(report.launched).toBe(1);
+      expect(report.failed).toBe(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a skipped overlap is not a failure", async () => {
+    const root = await createTempRoot();
+    const store = await SchedulerStore.open(join(root, "scheduler.sqlite"));
+    const fake = createFakeHost();
+    try {
+      const schedule = installSchedule(store);
+      const previous = store.reserveExecution({
+        scheduleId: schedule.scheduleId,
+        scheduleRevision: schedule.revision,
+        scheduledFor: "2026-09-16T12:00:00.000Z",
+        schedulerInstanceId: "instance-0",
+      });
+      if (previous.kind !== "reserved") throw new Error("expected a reservation");
+      fake.seedRun("run-previous", previous.execution.executionId, true);
+      const report = await runOnce(store, fake);
+      expect(report.skippedOverlap).toBe(1);
+      expect(report.failed).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
   test("does nothing for a schedule that is not yet due", async () => {
     const root = await createTempRoot();
     const store = await SchedulerStore.open(join(root, "scheduler.sqlite"));

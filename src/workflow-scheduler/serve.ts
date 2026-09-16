@@ -71,6 +71,17 @@ export interface SchedulerServeReport {
   readonly skippedOverlap: number;
   readonly reconciled: number;
   readonly leftRunningOnShutdown: number;
+  /**
+   * Executions that ended without completing — a failed run, an interrupted
+   * worker, or a launch that never happened. `cancelled` is deliberately not
+   * counted: no workflow code ran, so nothing failed.
+   *
+   * `serve --once` maps this onto its exit status, because a cron entry's `$?`
+   * has to mean something. The long-running daemon ignores it and keeps serving,
+   * and exits 0 on a graceful signal so a service manager does not read a normal
+   * shutdown as a crash.
+   */
+  readonly failed: number;
 }
 
 interface AttemptCompletion {
@@ -85,6 +96,7 @@ const emptyCounters = () => ({
   skippedOverlap: 0,
   reconciled: 0,
   leftRunningOnShutdown: 0,
+  failed: 0,
 });
 
 /**
@@ -258,6 +270,7 @@ export const runSchedulerServe = (
         // stays occupied for the next pass rather than being closed underneath
         // a live worker.
         const kind = decision.action.kind === "close-interrupted" ? "interrupted" : "cancelled";
+        const countsAsFailure = kind === "interrupted";
         if (runId !== null) {
           const wrote = yield* host.interruptRun({
             storePath: schedule.storePath,
@@ -292,6 +305,9 @@ export const runSchedulerServe = (
           type: "execution.closed",
           payload: { status: kind, reason: decision.reason },
         });
+        if (countsAsFailure) {
+          yield* Ref.update(report, (current) => ({ ...current, failed: current.failed + 1 }));
+        }
         return true;
       });
 
@@ -409,6 +425,9 @@ export const runSchedulerServe = (
             type: "execution.finished",
             payload: { runId, runStatus, observedExitCode: exitCode },
           });
+          if (executionStatusForRunStatus(runStatus) !== "completed") {
+            yield* Ref.update(report, (current) => ({ ...current, failed: current.failed + 1 }));
+          }
         }).pipe(
           Effect.catch((error: SchedulerError) =>
             Effect.gen(function* () {
@@ -426,6 +445,7 @@ export const runSchedulerServe = (
                 type: "execution.launch_failed",
                 payload: { message: error.message, hint: error.hint },
               });
+              yield* Ref.update(report, (current) => ({ ...current, failed: current.failed + 1 }));
             }),
           ),
           Effect.onInterrupt(() =>

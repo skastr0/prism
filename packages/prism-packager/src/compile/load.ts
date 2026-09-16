@@ -171,12 +171,17 @@ export const defineTask = (definition) => ({
 });
 
 export function defineWorkflow(definition) {
+  // The dynamic branch builds its value explicitly, so every field added to the
+  // definition must be carried here too. \`schedule\` is inert: recording it
+  // registers nothing, and only \`prism workflow schedule install\` activates it.
+  // The host re-validates it on load, so this bundle only has to preserve it.
   if ("run" in definition) {
     return {
       kind: "workflow",
       name: definition.name,
       tasks: [],
       run: definition.run,
+      ...(definition.schedule === undefined ? {} : { schedule: definition.schedule }),
     };
   }
   return {

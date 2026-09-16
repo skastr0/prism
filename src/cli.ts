@@ -39,8 +39,9 @@ import type {
   PluginManifest,
 } from "./types.js";
 import { basename, dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { loadPlugin } from "./compile/load.js";
 import {
@@ -120,6 +121,7 @@ import { runConfigureTui } from "./configure/index.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
 import {
+  currentCliCommand,
   startDetachedWorkflowRun,
   stopWorkflowRun,
   updateDetachedWorkflowRun,
@@ -132,6 +134,15 @@ import { refreshHarnessTypes, renderHarnessTypesRefreshHuman } from "./harness-t
 import { generateWorkflowTsconfig } from "./workflow-tsconfig.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 import { currentProcessIdentity } from "./workflow-scheduler/process-identity.js";
+import {
+  installSchedulerService,
+  schedulerServiceLabel,
+  schedulerServiceLogPath,
+  uninstallSchedulerService,
+  type SchedulerLaunchAgentInput,
+  type SchedulerServiceDeps,
+  type SchedulerServiceResult,
+} from "./workflow-scheduler/launchd.js";
 import {
   installWorkflowSchedule,
   renderScheduleListHuman,
@@ -2006,13 +2017,19 @@ const runSchedulerCommand = async (options: {
     }
     if (options.json === true) {
       console.log(JSON.stringify(exit.value, null, 2));
-      return;
+    } else {
+      await writeStdout(
+        `Scheduler ${instanceId} finished: ${exit.value.ticks} tick(s), ${exit.value.launched} launched, ` +
+          `${exit.value.skippedOverlap} skipped, ${exit.value.reconciled} reconciled, ` +
+          `${exit.value.leftRunningOnShutdown} left running, ${exit.value.failed} failed.\n`,
+      );
     }
-    await writeStdout(
-      `Scheduler ${instanceId} finished: ${exit.value.ticks} tick(s), ${exit.value.launched} launched, ` +
-        `${exit.value.skippedOverlap} skipped, ${exit.value.reconciled} reconciled, ` +
-        `${exit.value.leftRunningOnShutdown} left running.\n`,
-    );
+    // A one-shot invocation is a cron entry, so its exit status must report what
+    // happened. The daemon does not do this: a graceful signal is not a failure,
+    // and a service manager would read a nonzero exit as a crash to restart.
+    if (options.once === true && exit.value.failed > 0) {
+      exitWith(EXIT_CODES.domainFailure);
+    }
   } catch (error) {
     printCliError(error, "Scheduler failed");
     exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
@@ -2039,6 +2056,113 @@ workflowScheduler
   .option("--json", "Print the run report as JSON", false)
   .action(async (options: { readonly json?: boolean }) => {
     await runSchedulerCommand({ ...options, reconcileOnly: true });
+  });
+
+/** Real dependencies for LaunchAgent management. Injected so the lifecycle is testable. */
+const launchdDeps = (): SchedulerServiceDeps => ({
+  platform: process.platform,
+  homeDir: homedir(),
+  uid: typeof process.getuid === "function" ? process.getuid() : 0,
+  runLaunchctl: async (args) => {
+    const child = Bun.spawn({ cmd: ["launchctl", ...args], stdout: "pipe", stderr: "pipe" });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { exitCode, stdout, stderr };
+  },
+  readFile: async (path) => {
+    try {
+      return await readFile(path, "utf8");
+    } catch {
+      return null;
+    }
+  },
+  writeFile: async (path, contents) => {
+    await writeFile(path, contents, { mode: 0o600 });
+  },
+  removeFile: async (path) => {
+    await rm(path, { force: true });
+  },
+  mkdirp: async (path) => {
+    await mkdir(path, { recursive: true });
+  },
+});
+
+const schedulerServiceInput = (): SchedulerLaunchAgentInput => {
+  const prismHome = resolvePrismHome();
+  return {
+    label: schedulerServiceLabel(prismHome),
+    prismCommand: currentCliCommand(),
+    prismHome,
+    stdoutPath: schedulerServiceLogPath(prismHome, "out"),
+    stderrPath: schedulerServiceLogPath(prismHome, "err"),
+    // A LaunchAgent inherits no interactive shell, so PATH is written in.
+    pathEnv: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+  };
+};
+
+const reportServiceResult = async (result: SchedulerServiceResult, verb: string): Promise<void> => {
+  switch (result.kind) {
+    case "installed":
+      await writeStdout(
+        `${verb} ${result.label}\n  plist  ${result.plistPath}\n` +
+          (result.changed ? "" : "  (replaced an existing Prism-owned agent)\n") +
+          "It starts at login and on demand. Inspect with `prism workflow scheduler status`.\n",
+      );
+      return;
+    case "uninstalled":
+      await writeStdout(`Removed ${result.label} (${result.plistPath}). Installed schedules were kept.\n`);
+      return;
+    case "unsupported":
+      console.error(`\n❌ ${result.reason}\n   hint: ${result.hint}`);
+      exitWith(EXIT_CODES.environment);
+      return;
+    case "blocked":
+      console.error(`\n❌ ${result.reason}\n   hint: ${result.hint}`);
+      exitWith(EXIT_CODES.domainFailure);
+      return;
+  }
+};
+
+workflowScheduler
+  .command("install-service")
+  .description("Install a launchd agent that runs the scheduler at login (macOS)")
+  .action(async () => {
+    try {
+      const input = schedulerServiceInput();
+      const held = schedulerLockIsHeld(schedulerLockPath(input.prismHome));
+      if (held === true) {
+        // A managed agent that loses to a live manual holder would exit 0 and
+        // never supervise it, so refuse rather than leave a silent gap.
+        console.error(
+          "\n❌ A scheduler is already running for this Prism home.\n" +
+            "   hint: stop it, then install the service so launchd supervises it instead",
+        );
+        exitWith(EXIT_CODES.domainFailure);
+      }
+      await reportServiceResult(await installSchedulerService(launchdDeps(), input), "Installed");
+    } catch (error) {
+      printCliError(error, "Scheduler service install failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowScheduler
+  .command("uninstall-service")
+  .description("Remove the launchd agent; installed schedules and run history are kept")
+  .action(async () => {
+    try {
+      const prismHome = resolvePrismHome();
+      await reportServiceResult(
+        await uninstallSchedulerService(launchdDeps(), schedulerServiceLabel(prismHome)),
+        "Removed",
+      );
+    } catch (error) {
+      printCliError(error, "Scheduler service uninstall failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
   });
 
 workflowScheduler

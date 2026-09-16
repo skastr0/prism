@@ -9,6 +9,7 @@ semantics the scheduler guarantees. For the workflow language itself, see
 - [Cron dialect](#cron-dialect)
 - [The cursor](#the-cursor)
 - [Overlap](#overlap)
+- [Installing and operating](#installing-and-operating)
 - [What the scheduler is not](#what-the-scheduler-is-not)
 
 ## The three gates
@@ -150,6 +151,71 @@ that the old worker is dead, which is exactly what the evidence does not say. Pr
 re-observation, an explicit `prism workflow scheduler reconcile`, and automatic resolution after a
 verified reboot — a reboot being positive proof that the previous processes cannot still be running.
 
+## Installing and operating
+
+```bash
+# Register the declaration. This is the only thing that activates a schedule.
+prism workflow schedule install <file> --store <path-to-project-workflows.sqlite>
+prism workflow schedule install <file> --mock-output mocks.json   # token-free rehearsal
+
+prism workflow schedule list                  # next due, active, last outcome
+prism workflow schedule show <scheduleId>     # one schedule + recent executions
+prism workflow schedule disable <scheduleId>  # stops launching; a running execution is left alone
+prism workflow schedule enable <scheduleId>
+prism workflow schedule remove <scheduleId>   # refused while an execution occupies it
+
+prism workflow scheduler serve                # watch and launch, in the foreground
+prism workflow scheduler serve --once         # one tick, waiting for what it started
+prism workflow scheduler reconcile            # resolve executions left by a previous scheduler
+prism workflow scheduler status               # is a scheduler running, and what is each schedule doing
+```
+
+Installing needs the project's workflow store path, because that is where a scheduled run's ledger
+row is written and where `prism workflow runs` will show it.
+
+**`install` does not use `validateWorkflowFile`.** That function probes a dynamic workflow by running
+it with `wf.runTask` mocked, so installing would execute the author's `run` program and any effects
+it performs before the first task. Loading the module is unavoidable — the declaration lives in it —
+so the honest statement of the boundary is this: *declaring* a schedule registers nothing, and
+*installing* never runs `run`. Prism does not claim that importing an arbitrary TypeScript module is
+free of top-level side effects, because it is not.
+
+**Running it.** `serve` takes the machine-wide instance lock; a second scheduler reports that one is
+already running and exits successfully, because losing that race means the desired state already
+holds. Stop it with SIGTERM/SIGINT/SIGHUP: the loop stops claiming, records which executions it left
+running, and releases the lock last. In-flight runners are **not** killed — they are detached
+children with their own ledger rows, and the next scheduler adopts them.
+
+**`--once` as a cron entry.** `--once` runs recovery and one tick and waits for the executions that
+tick started, so the caller gets a real exit status rather than "a process was launched". That makes
+it a complete foreground alternative to a long-running daemon:
+
+```cron
+*/10 * * * *  PRISM_HOME=$HOME/.prism prism workflow scheduler serve --once >>$HOME/.prism/scheduler.log 2>&1
+```
+
+Overlap is still safe under that arrangement: the occupancy index is in the database, so two
+overlapping invocations cannot both run one schedule.
+
+**Monitoring.** `scheduler status` reports lock occupancy and instance-record freshness as two
+separate facts and prints no aggregate health boolean — "lock held, metadata stale" is not healthy,
+and a single green light over independent facts is how a degraded scheduler looks healthy.
+`prism workflow runs` on the project store shows the runs themselves, each carrying its execution id,
+schedule id, and occurrence.
+
+**Reading the execution states.**
+
+| Status | Means |
+|---|---|
+| `reserved` | The launch was authorized and nothing has been observed yet. |
+| `running` | A runner claimed the authorization and recorded its identity. |
+| `completed` / `failed` | The run reached a terminal status; the outcome is durable. |
+| `interrupted` | The runner is demonstrably gone and the run recorded no outcome. Not retried. |
+| `uncertain` | The evidence does not settle it. The schedule stays occupied. |
+| `skipped-overlap` | A due occurrence arrived while the previous execution was unresolved. |
+| `cancelled` | The authorization was never consumed, so no workflow code ran. |
+| `launch-failed` | The runner process could not be spawned. |
+
 ## What the scheduler is not
 
 - **Not a durable replay engine.** Prism supervises auditable attempts; it does not keep executing
@@ -162,3 +228,5 @@ verified reboot — a reboot being positive proof that the previous processes ca
   the model, and the graph.
 - **Not a resource lock across workflows.** Overlap is per installed schedule. Excluding unrelated
   workflows from each other is a domain concern and belongs in userland.
+- **Not a service installer.** `serve` runs in the foreground and is meant to be supervised by
+  whatever already supervises your processes. Prism does not yet write a launchd or systemd unit.

@@ -2626,6 +2626,55 @@ export class WorkflowStore {
     };
   }
 
+  /**
+   * Terminalize a scheduled run the scheduler has established cannot continue.
+   *
+   * Returns whether it wrote, so the caller can tell "we closed it" from "the
+   * runner claimed it first". The ledger keeps its existing status vocabulary —
+   * `crashed` for a worker that died mid-run, `stopped` for one that never
+   * received its authorization — while the scheduler's more specific knowledge
+   * lives on the execution row and in the event stream. Widening
+   * `WorkflowRunStatus` for the scheduler's benefit would put a new state in
+   * front of every consumer of run history for no gain.
+   *
+   * The update is guarded on `status = 'running'`, so it is a compare-and-set
+   * against a runner claiming the run concurrently: exactly one wins.
+   */
+  interruptScheduledRun(input: {
+    readonly runId: string;
+    readonly kind: "interrupted" | "cancelled";
+    readonly reason: string;
+    readonly runnerPid?: number | null;
+    readonly heartbeatAt?: string | null;
+  }): boolean {
+    return this.db.transaction(() => {
+      const cause: WorkflowRunTerminalCause = input.kind === "interrupted"
+        ? {
+            kind: "crashed",
+            reason: input.reason,
+            ...(input.runnerPid !== null && input.runnerPid !== undefined
+              ? { runnerPid: input.runnerPid }
+              : {}),
+            ...(input.heartbeatAt !== null && input.heartbeatAt !== undefined
+              ? { heartbeatAt: input.heartbeatAt }
+              : {}),
+          }
+        : { kind: "stopped", reason: input.reason };
+      const updated = this.finishRunInCurrentTransaction(
+        input.runId,
+        input.kind === "interrupted" ? "crashed" : "stopped",
+        cause,
+      );
+      if (updated === null) return false;
+      this.recordEvent({
+        runId: input.runId,
+        type: input.kind === "interrupted" ? "run.scheduler_interrupted" : "run.scheduler_cancelled",
+        payload: cause,
+      });
+      return true;
+    })();
+  }
+
   recordRunSnapshot(input: {
     readonly runId: string;
     readonly workflowFile: string;

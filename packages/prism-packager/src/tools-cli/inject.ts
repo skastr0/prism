@@ -35,10 +35,30 @@ export const toolsCliRulesRegionKey = (pluginName: string): string =>
   `tools-cli.${normalizeBundleSegment(pluginName)}`;
 
 /**
+ * Whether this target also receives the `prism-tools-<plugin>` skill file.
+ * Only `TOOLS_CLI_SKILL_HARNESSES` install it; every other target gets the
+ * CLI-runtime rules region alone, so its pointer must not name a skill that
+ * was never written.
+ */
+export interface ToolCliSkillPointerOptions {
+  readonly skillInstalled: boolean;
+}
+
+const toolInventoryPointer = (
+  catalog: ToolCliCatalog,
+  options: ToolCliSkillPointerOptions,
+): string =>
+  options.skillInstalled
+    ? `Load skill \`${toolsCliSkillName(catalog.plugin)}\` for invoke recipes and full descriptions.`
+    : `Run \`prism tools list --plugin ${catalog.plugin}\` for invoke recipes and full descriptions.`;
+
+/**
  * Full inventory — always-on rules for tool discovery without loading a skill.
  */
-export const renderToolCliRulesFull = (catalog: ToolCliCatalog): string => {
-  const skill = toolsCliSkillName(catalog.plugin);
+export const renderToolCliRulesFull = (
+  catalog: ToolCliCatalog,
+  options: ToolCliSkillPointerOptions,
+): string => {
   const toolLines =
     catalog.tools.length === 0
       ? ["_(no tools)_"]
@@ -65,7 +85,9 @@ export const renderToolCliRulesFull = (catalog: ToolCliCatalog): string => {
     "",
     "### Notes",
     "",
-    `- Full skill doc (optional detail): \`${skill}\``,
+    options.skillInstalled
+      ? `- Full skill doc (optional detail): \`${toolsCliSkillName(catalog.plugin)}\``
+      : `- Full tool list: \`prism tools list --plugin ${catalog.plugin}\``,
     "",
   ].join("\n");
 };
@@ -74,8 +96,10 @@ export const renderToolCliRulesFull = (catalog: ToolCliCatalog): string => {
  * Pointer-only rules for skill mode — headers + skill name, not full bodies.
  * Always-on context tells the agent which tools exist and which skill holds them.
  */
-export const renderToolCliRulesPointer = (catalog: ToolCliCatalog): string => {
-  const skill = toolsCliSkillName(catalog.plugin);
+export const renderToolCliRulesPointer = (
+  catalog: ToolCliCatalog,
+  options: ToolCliSkillPointerOptions,
+): string => {
   const names =
     catalog.tools.length === 0
       ? "_(none)_"
@@ -86,7 +110,7 @@ export const renderToolCliRulesPointer = (catalog: ToolCliCatalog): string => {
     "",
     `Tools: ${names}`,
     "",
-    `Load skill \`${skill}\` for invoke recipes and full descriptions.`,
+    toolInventoryPointer(catalog, options),
     "",
     "Shell surface:",
     "",
@@ -102,7 +126,11 @@ export const renderToolCliRulesPointer = (catalog: ToolCliCatalog): string => {
 export const renderToolCliRules = (
   catalog: ToolCliCatalog,
   mode: ToolsCliInjectMode,
-): string => (mode === "rules" ? renderToolCliRulesFull(catalog) : renderToolCliRulesPointer(catalog));
+  options: ToolCliSkillPointerOptions,
+): string =>
+  mode === "rules"
+    ? renderToolCliRulesFull(catalog, options)
+    : renderToolCliRulesPointer(catalog, options);
 
 export interface ToolCliAgentGroup {
   readonly pluginName: string;
@@ -220,8 +248,11 @@ export const planToolsCliAgentSurface = async (
   const regions: DesiredRegion[] = [];
   const plugin = options.pluginName;
   const skillName = toolsCliSkillName(plugin);
+  const skillInstalled =
+    options.mode === "skill" && TOOLS_CLI_SKILL_HARNESSES.has(options.targetId);
+  const pointerOptions: ToolCliSkillPointerOptions = { skillInstalled };
 
-  if (options.mode === "skill" && TOOLS_CLI_SKILL_HARNESSES.has(options.targetId)) {
+  if (skillInstalled) {
     files.push({
       targetPath: toolCliSkillTargetPath(options, skillName),
       content: renderToolCliSkillMarkdown(options.catalog),
@@ -236,7 +267,7 @@ export const planToolsCliAgentSurface = async (
         "rules",
         `${skillName}.md`,
       ),
-      content: renderToolCliRules(options.catalog, options.mode),
+      content: renderToolCliRules(options.catalog, options.mode, pointerOptions),
       plugin,
     });
   }
@@ -250,7 +281,7 @@ export const planToolsCliAgentSurface = async (
       regionKey: toolsCliRulesRegionKey(plugin),
       commentPrefix: style.prefix,
       ...(style.suffix !== undefined ? { commentSuffix: style.suffix } : {}),
-      content: renderToolCliRules(options.catalog, options.mode),
+      content: renderToolCliRules(options.catalog, options.mode, pointerOptions),
       plugin,
     });
   }

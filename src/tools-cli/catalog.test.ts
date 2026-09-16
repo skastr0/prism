@@ -141,15 +141,26 @@ describe("tools-cli inject", () => {
       bindings: sampleBindings,
       generatedAt: "2026-07-10T00:00:00.000Z",
     });
-    const pointer = renderToolCliRulesPointer(catalog);
+    const pointer = renderToolCliRulesPointer(catalog, { skillInstalled: true });
     expect(pointer).toContain("list_glyphs");
     expect(pointer).toContain("create_glyph");
     expect(pointer).toContain(toolsCliSkillName("tower"));
     expect(pointer).toContain("Load skill");
     expect(pointer).not.toContain("prism tools invoke tower list_glyphs --input '{}'");
 
-    const full = renderToolCliRulesFull(catalog);
+    // Harnesses outside TOOLS_CLI_SKILL_HARNESSES never receive the skill file,
+    // so the region must not point at it.
+    const pointerWithoutSkill = renderToolCliRulesPointer(catalog, { skillInstalled: false });
+    expect(pointerWithoutSkill).not.toContain(toolsCliSkillName("tower"));
+    expect(pointerWithoutSkill).not.toContain("Load skill");
+    expect(pointerWithoutSkill).toContain("prism tools list --plugin tower");
+
+    const full = renderToolCliRulesFull(catalog, { skillInstalled: true });
     expect(full).toContain("prism tools invoke tower list_glyphs --input '{}'");
     expect(full).toContain("### Tools");
+
+    const fullWithoutSkill = renderToolCliRulesFull(catalog, { skillInstalled: false });
+    expect(fullWithoutSkill).not.toContain(toolsCliSkillName("tower"));
+    expect(fullWithoutSkill).toContain("prism tools list --plugin tower");
   });
 });

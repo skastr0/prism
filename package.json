@@ -46,10 +46,11 @@
     "check:tool-suites": "bun test --timeout 30000 src/compile src/sync src/tools-cli src/workflow-scheduler scripts/acceptance/workflow-e2e-matrix.test.ts"
   },
   "dependencies": {
+    "@opencode-ai/plugin": "^1.15.13",
     "@opentui/core": "0.4.1",
     "@opentui/react": "0.4.1",
     "@skastr0/prism-sdk": "workspace:*",
-    "@opencode-ai/plugin": "^1.15.13",
+    "@typesafe-ai/sdk": "0.6.0",
     "commander": "^13.1.0",
     "effect": "4.0.0-rc.115",
     "gray-matter": "^4.0.3",

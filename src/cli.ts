@@ -4,7 +4,7 @@
  */
 
 import { Command, CommanderError, InvalidArgumentError, Option as CommanderOption } from "commander";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { randomUUID } from "node:crypto";
 import { detectInstalledHarnessIds } from "./harness-install-detection.js";
 import {
@@ -131,6 +131,24 @@ import { decodeWorkflowProcessGuardRequest, runWorkflowProcessGuard } from "./wo
 import { refreshHarnessTypes, renderHarnessTypesRefreshHuman } from "./harness-types-discover.js";
 import { generateWorkflowTsconfig } from "./workflow-tsconfig.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
+import { currentProcessIdentity } from "./workflow-scheduler/process-identity.js";
+import {
+  installWorkflowSchedule,
+  renderScheduleListHuman,
+  renderScheduleShowHuman,
+  summarizeSchedules,
+} from "./workflow-scheduler/install.js";
+import {
+  renderSchedulerStatusHuman,
+  readSchedulerStatus,
+} from "./workflow-scheduler/status.js";
+import { acquireSchedulerInstanceLock, schedulerLockIsHeld } from "./workflow-scheduler/instance-lock.js";
+import { runSchedulerServe } from "./workflow-scheduler/serve.js";
+import {
+  SchedulerStoreServiceLive,
+  ScheduledRunHostLive,
+} from "./workflow-scheduler/services.js";
+import { SchedulerStore, schedulerLockPath, schedulerStorePath } from "./workflow-scheduler/store.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -796,11 +814,48 @@ workflow
       // returns promptly; structural loading still runs either way.
       const isDetachSpawnParent = options.detach === true && options.runId === undefined;
       const isDetachedChild = process.env.PRISM_WORKFLOW_DETACHED_CHILD === "1";
+      const storePath = resolveWorkflowStorePath(options.store);
+      executionStorePath = storePath;
+
+      // Authorize the launch BEFORE importing the workflow module, because
+      // importing it runs author code. Consuming the authorization and
+      // recording this runner's identity happen in one store transaction, so
+      // "a runner exists" and "a runner was authorized" cannot disagree — and a
+      // runner that arrives late cannot import anything, because the claim
+      // requires the run to still be running.
+      let runnerAuthorized = false;
+      if (options.runId !== undefined && options.detach !== true) {
+        if (
+          process.env.PRISM_WORKFLOW_DETACHED_CHILD !== "1" ||
+          process.env.PRISM_WORKFLOW_DETACHED_RUN_ID !== options.runId
+        ) {
+          throw new CliUsageError("--run-id is reserved for Prism's internal detached runner");
+        }
+        if (options.runToken === undefined) {
+          throw new CliUsageError("invalid detached workflow run handoff");
+        }
+        const identity = currentProcessIdentity();
+        store = await WorkflowStore.open(storePath);
+        const authorization = store.beginScheduledRun({
+          runId: options.runId,
+          token: options.runToken,
+          runnerPid: identity.pid,
+          runnerBootId: identity.bootId,
+          runnerStartId: identity.startId,
+        });
+        if (authorization.kind !== "authorized") {
+          const detail = authorization.kind === "unauthorized"
+            ? authorization.reason
+            : `the run is ${authorization.kind === "terminal" ? authorization.status : "missing"}`;
+          throw new CliUsageError(`workflow run ${options.runId} was not authorized to start: ${detail}`);
+        }
+        executionRunId = options.runId;
+        runnerAuthorized = true;
+      }
+
       const workflow = await loadWorkflowFile(file, {
         skipTypecheck: isDetachSpawnParent || isDetachedChild,
       });
-      const storePath = resolveWorkflowStorePath(options.store);
-      executionStorePath = storePath;
       if (options.detach === true) {
         if (options.runId !== undefined || options.runToken !== undefined) {
           throw new CliUsageError("--run-id and --run-token are reserved for Prism's internal detached runner");
@@ -826,19 +881,8 @@ workflow
         console.log(JSON.stringify({ runId, workflow: workflow.name, status: startedRun.status, detached: true }, null, 2));
         return;
       }
-      if (
-        options.runId !== undefined &&
-        (process.env.PRISM_WORKFLOW_DETACHED_CHILD !== "1" || process.env.PRISM_WORKFLOW_DETACHED_RUN_ID !== options.runId)
-      ) {
-        throw new CliUsageError("--run-id is reserved for Prism's internal detached runner");
-      }
-      store = await WorkflowStore.open(storePath);
-      if (options.runId !== undefined) {
-        if (options.runToken === undefined || !store.consumeRunHandoffToken(options.runId, options.runToken)) {
-          throw new CliUsageError("invalid detached workflow run handoff");
-        }
-        executionRunId = options.runId;
-      } else {
+      if (store === undefined) store = await WorkflowStore.open(storePath);
+      if (executionRunId === undefined) {
         executionRunId = store.createRun(workflow.name);
       }
       store.recordRunSnapshot({
@@ -862,7 +906,9 @@ workflow
         terminationHandlers[signal] = handler;
         process.once(signal, handler);
       }
-      store.markRunRunnerStarted(executionRunId, process.pid);
+      // A run authorized through the launch protocol already recorded its
+      // runner identity in the same transaction; a hand-run one records it here.
+      if (!runnerAuthorized) store.markRunRunnerStarted(executionRunId, process.pid);
       heartbeat = setInterval(() => store?.heartbeatRun(executionRunId!), 2_000);
       const outputs = options.mockOutput
         ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>
@@ -1731,6 +1777,289 @@ workflowRuns
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     } finally {
       store?.close();
+    }
+  });
+
+// Workflow scheduling — declare, install, and supervise schedules.
+const workflowSchedule = workflow
+  .command("schedule")
+  .description("Install and manage workflow schedules (declaring one in a file registers nothing)");
+
+workflowSchedule
+  .command("install <file>")
+  .description("Validate a workflow's declared schedule and register it in the scheduler store")
+  .option("--store <path>", "SQLite workflow store this schedule's runs are written to")
+  .option("--worker <worker>", "Fallback worker for tasks that pin none")
+  .option("--model <model>", "Fallback model for tasks that pin none")
+  .option("--permission <mode>", "Fallback permission mode for tasks that pin none")
+  .option("--mock-output <path>", "JSON object keyed by task id; rehearses the schedule without spending tokens")
+  .option("--json", "Print a machine-readable JSON envelope", false)
+  .action(async (file: string, options: {
+    readonly store?: string;
+    readonly worker?: string;
+    readonly model?: string;
+    readonly permission?: string;
+    readonly mockOutput?: string;
+    readonly json?: boolean;
+  }) => {
+    try {
+      const result = await installWorkflowSchedule({
+        prismHome: resolvePrismHome(),
+        workflowFile: file,
+        storePath: options.store ?? defaultWorkflowStorePathForCwd(),
+        ...(options.worker !== undefined ? { worker: options.worker } : {}),
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.permission !== undefined ? { permission: options.permission } : {}),
+        ...(options.mockOutput !== undefined ? { mockOutput: options.mockOutput } : {}),
+      });
+      if (options.json === true) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      const verb = result.kind === "unchanged" ? "unchanged" : "installed";
+      await writeStdout(
+        `Schedule ${verb} for '${result.schedule.name}' (${result.schedule.cron} ${result.schedule.timezone})\n` +
+          `  next due  ${result.schedule.nextDueAt}\n` +
+          `  id        ${result.schedule.scheduleId}\n` +
+          `  revision  ${result.schedule.revision}\n` +
+          "Start it with `prism workflow scheduler serve`.\n",
+      );
+    } catch (error) {
+      printCliError(error, "Workflow schedule install failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowSchedule
+  .command("list")
+  .description("List installed schedules with their next, active, and last execution")
+  .option("--json", "Print a machine-readable JSON envelope", false)
+  .action(async (options: { readonly json?: boolean }) => {
+    let store: SchedulerStore | undefined;
+    try {
+      store = await SchedulerStore.open(schedulerStorePath(resolvePrismHome()));
+      const summaries = summarizeSchedules(store);
+      if (options.json === true) {
+        console.log(JSON.stringify({ schedules: summaries }, null, 2));
+        return;
+      }
+      await writeStdout(`${renderScheduleListHuman(summaries)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow schedule list failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowSchedule
+  .command("show <scheduleId>")
+  .description("Show one installed schedule and its recent executions")
+  .option("--limit <n>", "How many executions to show", parsePositiveInteger, 10)
+  .option("--json", "Print a machine-readable JSON envelope", false)
+  .action(async (scheduleId: string, options: { readonly limit?: number; readonly json?: boolean }) => {
+    let store: SchedulerStore | undefined;
+    try {
+      store = await SchedulerStore.open(schedulerStorePath(resolvePrismHome()));
+      const summary = summarizeSchedules(store).find(
+        (candidate) => candidate.schedule.scheduleId === scheduleId
+          || candidate.schedule.scheduleId.startsWith(scheduleId),
+      );
+      if (summary === undefined) {
+        throw new CliUsageError(`schedule not found: ${scheduleId}`);
+      }
+      const executions = store.listExecutions(summary.schedule.scheduleId, options.limit ?? 10);
+      if (options.json === true) {
+        console.log(JSON.stringify({ ...summary, executions }, null, 2));
+        return;
+      }
+      await writeStdout(`${renderScheduleShowHuman(summary, executions)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow schedule show failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
+
+const setScheduleEnabled = async (scheduleId: string, enabled: boolean): Promise<void> => {
+  const store = await SchedulerStore.open(schedulerStorePath(resolvePrismHome()));
+  try {
+    const schedule = store.setScheduleEnabled(scheduleId, enabled);
+    if (schedule === null) throw new CliUsageError(`schedule not found: ${scheduleId}`);
+    await writeStdout(`${schedule.name} is now ${enabled ? "enabled" : "disabled"}.\n`);
+  } finally {
+    store.close();
+  }
+};
+
+workflowSchedule
+  .command("enable <scheduleId>")
+  .description("Allow a schedule to launch again (its cursor is preserved)")
+  .action(async (scheduleId: string) => {
+    try {
+      await setScheduleEnabled(scheduleId, true);
+    } catch (error) {
+      printCliError(error, "Workflow schedule enable failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowSchedule
+  .command("disable <scheduleId>")
+  .description("Stop a schedule from launching; a running execution is left alone")
+  .action(async (scheduleId: string) => {
+    try {
+      await setScheduleEnabled(scheduleId, false);
+    } catch (error) {
+      printCliError(error, "Workflow schedule disable failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowSchedule
+  .command("remove <scheduleId>")
+  .description("Remove an installed schedule; refused while an execution occupies it")
+  .action(async (scheduleId: string) => {
+    const store = await SchedulerStore.open(schedulerStorePath(resolvePrismHome()));
+    try {
+      const result = store.removeSchedule(scheduleId);
+      if (result.kind === "not-found") throw new CliUsageError(`schedule not found: ${scheduleId}`);
+      if (result.kind === "occupied") {
+        throw new CliUsageError(
+          `schedule ${scheduleId} is still occupied by execution ${result.executionId}; ` +
+            "reconcile it first with `prism workflow scheduler reconcile`",
+        );
+      }
+      await writeStdout(`Removed schedule ${scheduleId}.\n`);
+    } catch (error) {
+      printCliError(error, "Workflow schedule remove failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store.close();
+    }
+  });
+
+const workflowScheduler = workflow
+  .command("scheduler")
+  .description("Run and inspect the local scheduler that launches due schedules");
+
+/**
+ * The one place a scheduler process is started. The instance lock is taken
+ * first and released last, after the store is closed and every attempt fiber has
+ * been interrupted, so a replacement scheduler never starts against a store this
+ * one is still unwinding.
+ */
+const runSchedulerCommand = async (options: {
+  readonly once?: boolean;
+  readonly reconcileOnly?: boolean;
+  readonly pollMs?: number;
+  readonly json?: boolean;
+}): Promise<void> => {
+  const prismHome = resolvePrismHome();
+  const lock = acquireSchedulerInstanceLock(schedulerLockPath(prismHome));
+  if (lock.kind === "held") {
+    // Losing the race means the desired state already holds. Not a failure.
+    await writeStdout("A scheduler is already running for this Prism home.\n");
+    return;
+  }
+  if (lock.kind === "error") {
+    console.error(`\n❌ Scheduler lock failed: ${lock.reason}`);
+    exitWith(EXIT_CODES.environment);
+  }
+
+  const abort = new AbortController();
+  const signals: ReadonlyArray<NodeJS.Signals> = ["SIGTERM", "SIGINT", "SIGHUP"];
+  const handlers = signals.map((signal) => {
+    const handler = (): void => abort.abort(signal);
+    process.once(signal, handler);
+    return { signal, handler };
+  });
+
+  let store: SchedulerStore | undefined;
+  try {
+    store = await SchedulerStore.open(schedulerStorePath(prismHome));
+    const instanceId = randomUUID();
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        runSchedulerServe({
+          instanceId,
+          version: prismVersion,
+          instanceMode: "manual",
+          ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
+          ...(options.once === true ? { once: true } : {}),
+          ...(options.reconcileOnly === true ? { reconcileOnly: true } : {}),
+        }),
+      ).pipe(
+        Effect.provide(SchedulerStoreServiceLive(store)),
+        Effect.provide(ScheduledRunHostLive),
+      ),
+      { signal: abort.signal },
+    );
+
+    if (Exit.isFailure(exit)) {
+      const described = describePrismCause(exit.cause);
+      console.error(`\n❌ Scheduler stopped: ${described.headline}`);
+      for (const detail of described.detail ?? []) console.error(`   ${detail}`);
+      if (described.hint !== undefined) console.error(`   hint: ${described.hint}`);
+      exitWith(EXIT_CODES.domainFailure);
+    }
+    if (options.json === true) {
+      console.log(JSON.stringify(exit.value, null, 2));
+      return;
+    }
+    await writeStdout(
+      `Scheduler ${instanceId} finished: ${exit.value.ticks} tick(s), ${exit.value.launched} launched, ` +
+        `${exit.value.skippedOverlap} skipped, ${exit.value.reconciled} reconciled, ` +
+        `${exit.value.leftRunningOnShutdown} left running.\n`,
+    );
+  } catch (error) {
+    printCliError(error, "Scheduler failed");
+    exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+  } finally {
+    for (const { signal, handler } of handlers) process.off(signal, handler);
+    store?.close();
+    lock.release();
+  }
+};
+
+workflowScheduler
+  .command("serve")
+  .description("Watch installed schedules and launch the ones that are due, in the foreground")
+  .option("--poll-ms <ms>", "How often to check for due schedules", parsePositiveInteger)
+  .option("--once", "Run recovery and one tick, waiting for the executions it starts", false)
+  .option("--json", "Print the run report as JSON", false)
+  .action(async (options: { readonly pollMs?: number; readonly once?: boolean; readonly json?: boolean }) => {
+    await runSchedulerCommand(options);
+  });
+
+workflowScheduler
+  .command("reconcile")
+  .description("Resolve executions left by a previous scheduler, without launching anything")
+  .option("--json", "Print the run report as JSON", false)
+  .action(async (options: { readonly json?: boolean }) => {
+    await runSchedulerCommand({ ...options, reconcileOnly: true });
+  });
+
+workflowScheduler
+  .command("status")
+  .description("Report whether a scheduler is running and what each schedule is doing")
+  .option("--json", "Print a machine-readable JSON envelope", false)
+  .action(async (options: { readonly json?: boolean }) => {
+    try {
+      const prismHome = resolvePrismHome();
+      const report = await readSchedulerStatus({
+        prismHome,
+        lockHeld: schedulerLockIsHeld(schedulerLockPath(prismHome)),
+      });
+      if (options.json === true) {
+        console.log(JSON.stringify(report, null, 2));
+        return;
+      }
+      await writeStdout(`${renderSchedulerStatusHuman(report)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow scheduler status failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 

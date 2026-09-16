@@ -56,6 +56,12 @@ export interface SchedulerServeOptions {
   readonly pollMs?: number;
   /** Run recovery and exactly one tick, then return. Used by tests and `--once`. */
   readonly once?: boolean;
+  /**
+   * Run recovery only, then return without ticking. `prism workflow scheduler
+   * reconcile` uses this: it is the explicit way to resolve executions left by a
+   * previous scheduler, without also launching whatever is currently due.
+   */
+  readonly reconcileOnly?: boolean;
 }
 
 export interface SchedulerServeReport {
@@ -577,34 +583,13 @@ export const runSchedulerServe = (
     });
     yield* reconcileOrphans();
 
-    // Discard opportunities that were missed while nothing was watching: a
-    // restart is not evidence that the missed work should happen now. This is
-    // where `missedRuns: "skip"` differs from the wake case, which coalesces to
-    // a single opportunity and honours it.
-    //
-    // Strictly before, not at-or-before: an occurrence due *now* is due, not
-    // missed, so it stays for the first tick to fire. Using `<=` here would mean
-    // a scheduler that happened to restart on the minute silently swallowed that
-    // minute's run.
-    const recoveryNow = yield* Clock.currentTimeMillis;
-    for (const schedule of yield* store.listSchedules) {
-      if (!schedule.enabled || schedule.nextDueAt === null) continue;
-      const dueMs = Date.parse(schedule.nextDueAt);
-      if (!Number.isFinite(dueMs) || dueMs >= recoveryNow) continue;
-      const parsed = parseWorkflowCron(schedule.cron, schedule.timezone);
-      const nextDueAt = new Date(nextWorkflowCronOccurrence(parsed, recoveryNow)).toISOString();
-      yield* store.advanceCursor({
-        scheduleId: schedule.scheduleId,
-        revision: schedule.revision,
-        nextDueAt,
-      });
-      yield* store.recordEvent({
-        instanceId: options.instanceId,
-        scheduleId: schedule.scheduleId,
-        type: "schedule.overdue_discarded_on_start",
-        payload: { discarded: schedule.nextDueAt, nextDueAt },
-      });
-    }
+    // Nothing is discarded here, and that is deliberate. An overdue cursor fires
+    // exactly one coalesced opportunity on the first tick and then jumps to the
+    // next future occurrence, so "a machine asleep for three hours runs once, not
+    // eighteen" falls out of the cursor rather than needing a rule. Discarding
+    // instead would mean a scheduler restart silently swallowed an inbox poll,
+    // and it is self-limiting without one: after that single run the cursor is in
+    // the future, so even a crash-loop stays quiet until the next occurrence.
     yield* store.recordEvent({
       instanceId: options.instanceId,
       type: "scheduler.recovery.finished",
@@ -612,6 +597,16 @@ export const runSchedulerServe = (
     });
 
     // -- loop ----------------------------------------------------------------
+    if (options.reconcileOnly === true) {
+      const counted = yield* Ref.get(report);
+      yield* store.recordEvent({
+        instanceId: options.instanceId,
+        type: "scheduler.reconcile_only",
+        payload: counted,
+      });
+      yield* store.closeInstance(options.instanceId);
+      return { instanceId: options.instanceId, ...counted };
+    }
     if (options.once === true) {
       // `--once` is a synchronous tick: it waits for the attempts it started.
       // That is what makes it usable as a foreground cron entry, where the

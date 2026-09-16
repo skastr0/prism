@@ -1365,7 +1365,7 @@ describe("workflow store", () => {
       previousRunId: "running-run",
       mode: "restart-with-cache",
     });
-    expect(store.consumeRunHandoffToken("replacement-run", "token")).toBe(true);
+    expect(store.scheduledRunState("replacement-run")?.launchAuthorized).toBe(false);
     store.close();
   });
 

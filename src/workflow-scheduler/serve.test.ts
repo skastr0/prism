@@ -327,19 +327,23 @@ describe("scheduler loop: one tick", () => {
     }
   });
 
-  test("discards an overdue opportunity on startup instead of replaying it", async () => {
+  test("coalesces an overdue cursor into exactly one opportunity, not a catch-up burst", async () => {
     const root = await createTempRoot();
     const store = await SchedulerStore.open(join(root, "scheduler.sqlite"));
     const fake = createFakeHost();
     try {
-      // Three hours overdue, as if the machine had been asleep.
+      // Three hours overdue, as if the machine had been asleep: an every-ten-
+      // minutes schedule owes eighteen runs and must perform one.
       const schedule = installSchedule(store, { nextDueAt: "2026-09-16T09:00:00.000Z" });
+      fake.setAutoComplete("completed", 0);
       const report = await runOnce(store, fake);
 
-      expect(report.launched).toBe(0);
+      expect(report.launched).toBe(1);
+      // The cursor jumps straight to the next future occurrence.
       expect(store.getSchedule(schedule.scheduleId)?.nextDueAt).toBe("2026-09-16T12:20:00.000Z");
-      expect(store.listEvents().some((event) => event.type === "schedule.overdue_discarded_on_start")).toBe(true);
-      expect(executionStatuses(store)).toEqual([]);
+      expect(executionStatuses(store)).toEqual(["completed"]);
+      // The single opportunity represents the most recent missed occurrence.
+      expect(fake.started).toHaveLength(1);
     } finally {
       store.close();
     }

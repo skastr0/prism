@@ -578,10 +578,6 @@ interface StaleRunRow extends RunRow {
   readonly created_at: string;
 }
 
-interface HandoffTokenRow {
-  readonly handoff_token: string | null;
-}
-
 interface EventRow {
   readonly sequence: number;
   readonly run_id: string;
@@ -2767,18 +2763,6 @@ export class WorkflowStore {
 
   setRunHandoffToken(runId: string, token: string): void {
     this.db.query("update workflow_runs set handoff_token = ? where run_id = ?").run(digestWorkflowSecret(token), runId);
-  }
-
-  consumeRunHandoffToken(runId: string, token: string): boolean {
-    const row = this.db.query<HandoffTokenRow, [string]>(
-      "select handoff_token from workflow_runs where run_id = ?"
-    ).get(runId);
-    if (row?.handoff_token === null || row?.handoff_token === undefined) return false;
-    const expected = Buffer.from(row.handoff_token, "utf8");
-    const provided = Buffer.from(digestWorkflowSecret(token), "utf8");
-    if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) return false;
-    this.db.query("update workflow_runs set handoff_token = null where run_id = ?").run(runId);
-    return true;
   }
 
   markRunRunnerStarted(runId: string, runnerPid: number): void {

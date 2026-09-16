@@ -233,7 +233,26 @@ describe("workflow store data governance", () => {
     raw.close();
     expect(handoff?.startsWith(WORKFLOW_SECRET_DIGEST_PREFIX)).toBe(true);
     expect(handoff).not.toContain("plaintext-handoff-secret");
-    expect(store.consumeRunHandoffToken(runId, "plaintext-handoff-secret")).toBe(true);
+    // The token is stored as a digest, and consuming it is the launch
+    // authorization: it succeeds only for the exact secret.
+    expect(
+      store.beginScheduledRun({
+        runId,
+        token: "wrong-secret",
+        runnerPid: process.pid,
+        runnerBootId: null,
+        runnerStartId: null,
+      }).kind,
+    ).toBe("unauthorized");
+    expect(
+      store.beginScheduledRun({
+        runId,
+        token: "plaintext-handoff-secret",
+        runnerPid: process.pid,
+        runnerBootId: null,
+        runnerStartId: null,
+      }),
+    ).toEqual({ kind: "authorized" });
 
     store.finishRun(runId, "failed", {
       kind: "workflow-failed",

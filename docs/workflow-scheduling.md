@@ -21,6 +21,11 @@ Scheduling has three separate steps, and keeping them separate is the whole desi
 | **Install** — `prism workflow schedule install <file>` | Prism validates the workflow and the policy, and writes one schedule row into the scheduler store. | Nothing starts running, and no execution is created. |
 | **Serve** — `prism workflow scheduler serve` | The scheduler process watches the store and launches due workflows. | Editing the workflow file does not change installed scheduling configuration. |
 
+`--once` runs recovery and a single tick, and **waits for the executions that tick started**. That
+makes it usable as a foreground cron entry, where the caller needs a real exit status rather than
+"a process was launched". `--once` and `scheduler reconcile` are also how you exercise a schedule
+without leaving a daemon running.
+
 So a task or prompt edit takes effect on the next run with no reinstall, while a schedule edit
 requires reinstalling. That asymmetry is deliberate: the installed schedule is data that crossed a
 process boundary, and Prism does not silently reinterpret data it did not write in this process.
@@ -109,10 +114,11 @@ Consequences, each of which is the intended behaviour rather than a side effect:
 - A schedule edit sets a fresh cursor in the same transaction as the new revision, so a stale
   cursor can never fire the old plan.
 
-A **scheduler restart** is stricter than a wake. A wake means the machine was there and Prism was
-merely not watching, so the overdue opportunity is honoured. A restart means Prism was not running,
-which is not evidence that the missed work should happen now, so overdue opportunities are discarded
-and the cursor resumes from the future.
+A **scheduler restart** behaves the same way, and that is deliberate. An overdue cursor fires one
+coalesced opportunity on the first tick and then jumps to the next future occurrence. Discarding
+instead would mean a restart silently swallowed an inbox poll, and it is not needed for safety: after
+that single run the cursor is in the future, so even a crash-loop stays quiet until the next
+occurrence.
 
 ## Overlap
 

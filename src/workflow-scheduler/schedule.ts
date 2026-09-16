@@ -25,10 +25,10 @@
  *     recorded; it is never queued and never run in parallel. A stranded
  *     execution cannot be cleared by a timeout, only by evidence.
  *   - `missedRuns: "skip"` — overdue occurrences are coalesced into at most one
- *     opportunity. A machine asleep for three hours produces one run on wake,
- *     not eighteen. A scheduler *restart* is stricter than a wake: overdue
- *     opportunities are discarded outright, because a restart is not evidence
- *     that the missed work should happen now.
+ *     opportunity. A machine asleep for three hours produces one run on wake, not
+ *     eighteen, and a scheduler restart behaves the same way rather than silently
+ *     swallowing an occurrence. Nothing accumulates: the cursor advances whether
+ *     or not the run succeeds, so a crash-loop fires at most once per occurrence.
  */
 
 import { parseWorkflowCron } from "./cron.js";

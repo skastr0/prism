@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   startDetachedWorkflowRun,
+  startWorkflowRunProcess,
   updateDetachedWorkflowRun,
   workflowDetachedRunArgs,
   workflowRunOptionsSnapshot,
@@ -823,6 +824,114 @@ test("a detached runner's pre-readiness failure output lands in the runner log (
       expect((await stat(logPath)).mode & 0o777).toBe(0o600);
       expect((await stat(workflowRunnerLogDir(storePath))).mode & 0o777).toBe(0o700);
       expect(workflowRunnerLogPathIfPresent(storePath, { runId, runnerPid: 4242 })).toBe(logPath);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+/**
+ * The scheduler does not detach: it keeps the process handle and awaits the
+ * real exit status, because "launched" is not an outcome. These tests exercise
+ * that retained-ownership path directly — the same primitive the detached
+ * launcher is now built on, used without relinquishing the handle.
+ */
+const writeAwaitedWorkflow = async (root: string, name: string, source: string): Promise<string> => {
+  const workflowPath = join(root, `${name}.workflow.ts`);
+  await writeFile(workflowPath, source);
+  return workflowPath;
+};
+
+const retainedRunSource = (name: string): string => `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+export default defineWorkflow({
+  name: ${JSON.stringify(name)},
+  tasks: [defineTask({
+    id: "build",
+    prompt: "Exercise retained process ownership.",
+    output: Schema.Struct({ summary: Schema.String }),
+  })],
+});
+`;
+
+test("a retained run process reports the real exit status and terminal ledger state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "prism-workflow-retained-"));
+  try {
+    const workflowPath = await writeAwaitedWorkflow(root, "retained-success", retainedRunSource("retained-success"));
+    const mockOutputPath = join(root, "mock-output.json");
+    await writeFile(mockOutputPath, `${JSON.stringify({ build: { summary: "retained" } })}\n`);
+    const storePath = join(root, "workflows.sqlite");
+
+    const store = await WorkflowStore.open(storePath);
+    try {
+      const runId = store.createRun("retained-success");
+      const token = randomUUID();
+      store.setRunHandoffToken(runId, token);
+      store.recordRunSnapshot({ runId, workflowFile: workflowPath, options: { mockOutput: mockOutputPath } });
+
+      const process = startWorkflowRunProcess({
+        store,
+        file: workflowPath,
+        options: { mockOutput: mockOutputPath },
+        run: { runId, storePath, token },
+      });
+      expect(isValidPid(process.pid)).toBe(true);
+      expect(process.args).toContain("--run-token");
+
+      const exitCode = await process.exited;
+      expect(exitCode).toBe(0);
+      expect(store.getRun(runId)?.status).toBe("completed");
+      // The handle is retained, so the caller can still observe identity and
+      // clean up rather than having relinquished ownership at readiness.
+      process.relinquish();
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("a retained run process surfaces a failing workflow as a non-zero exit status", async () => {
+  const root = await mkdtemp(join(tmpdir(), "prism-workflow-retained-fail-"));
+  try {
+    const workflowPath = await writeAwaitedWorkflow(
+      root,
+      "retained-failure",
+      `
+import { Effect } from "effect";
+import { defineWorkflow } from "${prismImportPath}";
+
+export default defineWorkflow({
+  name: "retained-failure",
+  run: () => Effect.fail(new Error("deliberate failure")),
+});
+`,
+    );
+    const storePath = join(root, "workflows.sqlite");
+
+    const store = await WorkflowStore.open(storePath);
+    try {
+      const runId = store.createRun("retained-failure");
+      const token = randomUUID();
+      store.setRunHandoffToken(runId, token);
+      store.recordRunSnapshot({ runId, workflowFile: workflowPath, options: {} });
+
+      const process = startWorkflowRunProcess({
+        store,
+        file: workflowPath,
+        options: {},
+        run: { runId, storePath, token },
+      });
+
+      const exitCode = await process.exited;
+      // The real exit status is what the scheduler records — not "it started".
+      expect(exitCode).not.toBe(0);
+      expect(store.getRun(runId)?.status).toBe("failed");
     } finally {
       store.close();
     }

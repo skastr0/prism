@@ -165,20 +165,52 @@ export const workflowDetachedRunArgs = (
   ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
 ];
 
-export const startDetachedWorkflowRun = async (
-  store: WorkflowStore,
-  file: string,
-  options: WorkflowDetachedRunOptions,
-  run: { readonly runId: string; readonly storePath: string; readonly token: string },
-): Promise<WorkflowRunRecord> => {
-  const args = workflowDetachedRunArgs(file, options, run);
+export interface WorkflowRunProcessInput {
+  readonly store: WorkflowStore;
+  readonly file: string;
+  readonly options: WorkflowDetachedRunOptions;
+  readonly run: { readonly runId: string; readonly storePath: string; readonly token: string };
+}
 
-  // Opened BEFORE spawn and redirected in-place (not "ignore"): if the detached
-  // runner dies before its first sqlite write (bad flags, module resolution
-  // failure, env problem), this file is the only evidence that survives. Both
-  // streams share one fd — a run-scoped crash-evidence channel, not a log
-  // firehose. The parent's fd copy is closed right after spawn; the child
-  // keeps its own duplicated reference to the same open file.
+/**
+ * A workflow running in its own OS process, with the parent still holding the
+ * handle.
+ *
+ * `startDetachedWorkflowRun` is built on this and then *relinquishes* the
+ * handle: it waits for the readiness handshake and returns, leaving the child
+ * to outlive the caller. The scheduler is built on it and keeps the handle: it
+ * awaits `exited`, so the exit status it records is the real one rather than
+ * "the process was launched".
+ *
+ * Ownership is explicit because the two callers want opposite things. There is
+ * no flag that means both.
+ */
+export interface WorkflowRunProcess {
+  readonly pid: number;
+  readonly args: ReadonlyArray<string>;
+  readonly logPath: string;
+  /** Resolves with the child's exit code once it has exited and been reaped. */
+  readonly exited: Promise<number | null>;
+  /** SIGTERM the child's whole process group, escalating to SIGKILL, recording events. */
+  readonly terminate: (reason: string) => Promise<void>;
+  /** Stop keeping the parent's event loop alive for this child, without terminating it. */
+  readonly relinquish: () => void;
+}
+
+/**
+ * Spawn one workflow runner process and return the retained handle.
+ *
+ * The log file is opened BEFORE the spawn and redirected in place (not
+ * "ignore"): if the child dies before its first SQLite write — bad flags, a
+ * module-resolution failure, an environment problem — this file is the only
+ * evidence that survives. Both streams share one fd; it is a run-scoped
+ * crash-evidence channel, not a log firehose. The parent's copy of the fd is
+ * closed immediately after the spawn, while the child keeps its own duplicated
+ * reference to the same open file.
+ */
+export const startWorkflowRunProcess = (input: WorkflowRunProcessInput): WorkflowRunProcess => {
+  const { store, file, options, run } = input;
+  const args = workflowDetachedRunArgs(file, options, run);
   const logPath = workflowRunnerLogPath(run.storePath, run.runId);
   mkdirSync(dirname(logPath), { recursive: true, mode: WORKFLOW_RUNNER_LOG_DIRECTORY_MODE });
   chmodSync(dirname(logPath), WORKFLOW_RUNNER_LOG_DIRECTORY_MODE);
@@ -207,6 +239,27 @@ export const startDetachedWorkflowRun = async (
   } finally {
     closeSync(logFd);
   }
+
+  return {
+    pid: child.pid,
+    args,
+    logPath,
+    exited: child.exited,
+    terminate: (reason: string) =>
+      requestWorkflowRunnerTermination(store, { runId: run.runId, runnerPid: child.pid }, reason),
+    relinquish: () => child.unref(),
+  };
+};
+
+export const startDetachedWorkflowRun = async (
+  store: WorkflowStore,
+  file: string,
+  options: WorkflowDetachedRunOptions,
+  run: { readonly runId: string; readonly storePath: string; readonly token: string },
+): Promise<WorkflowRunRecord> => {
+  const process = startWorkflowRunProcess({ store, file, options, run });
+  const { logPath } = process;
+  const child = { pid: process.pid, exited: process.exited, unref: process.relinquish };
 
   try {
     const deadline = Date.now() + DETACHED_RUNNER_READINESS_TIMEOUT_MS;

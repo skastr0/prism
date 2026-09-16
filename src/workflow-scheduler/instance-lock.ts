@@ -33,9 +33,9 @@
  * SQLite already provides.
  */
 
-import { Database } from "bun:sqlite";
 import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
+import { openWorkflowDatabase, type WorkflowDatabase } from "../workflow-runtime.js";
 
 const LOCK_FILE_MODE = 0o600;
 const LOCK_DIRECTORY_MODE = 0o700;
@@ -53,7 +53,7 @@ export type SchedulerInstanceLockResult =
  * which is not a failure. Only an unexpected error is reported as `error`.
  */
 export const acquireSchedulerInstanceLock = (lockPath: string): SchedulerInstanceLockResult => {
-  let db: Database | undefined;
+  let db: WorkflowDatabase | undefined;
   try {
     const directory = dirname(lockPath);
     mkdirSync(directory, { recursive: true, mode: LOCK_DIRECTORY_MODE });
@@ -63,7 +63,9 @@ export const acquireSchedulerInstanceLock = (lockPath: string): SchedulerInstanc
     closeSync(openSync(lockPath, "a", LOCK_FILE_MODE));
     chmodSync(lockPath, LOCK_FILE_MODE);
 
-    db = new Database(lockPath);
+    // Through the runtime seam, not `bun:sqlite` directly: the workflow engine's
+    // Bun-only dependencies live in one module so the engine stays portable.
+    db = openWorkflowDatabase(lockPath);
     db.exec("pragma busy_timeout = 0;");
     // A valid, minimal database. `BEGIN IMMEDIATE` alone is the lock; nothing is
     // ever written, because a committed row would be a second, contradicting

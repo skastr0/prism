@@ -17,6 +17,7 @@
  */
 
 import { expandPath } from "../fs.js";
+import { renderTable } from "./render.js";
 import { loadWorkflowFile } from "../workflow-loader.js";
 import { nextWorkflowCronOccurrence, parseWorkflowCron } from "./cron.js";
 import { WorkflowScheduleInstallError } from "./errors.js";
@@ -123,15 +124,6 @@ export const describeExecutionOutcome = (execution: ScheduleExecutionRecord | nu
   return `${execution.status}${reason}`;
 };
 
-const pad = (rows: ReadonlyArray<ReadonlyArray<string>>, header: ReadonlyArray<string>): string => {
-  const widths = header.map((title, index) =>
-    Math.max(title.length, ...rows.map((row) => (row[index] ?? "").length)),
-  );
-  const format = (cells: ReadonlyArray<string>): string =>
-    cells.map((cell, index) => (cell ?? "").padEnd(widths[index] ?? 0)).join("  ");
-  return [format(header), format(widths.map((width) => "-".repeat(width))), ...rows.map(format)].join("\n");
-};
-
 /** Compact local time in the schedule's own zone, so the table reads as authored. */
 const localTime = (iso: string | null, timezone: string): string => {
   if (iso === null) return "-";
@@ -163,7 +155,7 @@ export const renderScheduleListHuman = (
     describeExecutionOutcome(summary.lastExecution),
     summary.schedule.scheduleId.slice(0, 8),
   ]);
-  return pad(rows, ["name", "state", "schedule", "next", "active", "last", "id"]);
+  return renderTable(rows, ["name", "state", "schedule", "next", "active", "last", "id"]);
 };
 
 export const renderScheduleShowHuman = (
@@ -189,7 +181,7 @@ export const renderScheduleShowHuman = (
   }
   lines.push("", "Recent executions:");
   lines.push(
-    pad(
+    renderTable(
       executions.map((execution) => [
         localTime(execution.startedAt, schedule.timezone),
         execution.status,

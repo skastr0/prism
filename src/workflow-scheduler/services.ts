@@ -28,7 +28,7 @@ import {
   type WorkflowRunProcess,
 } from "../workflow-controls.js";
 import { WorkflowStore } from "../workflow-store.js";
-import { SchedulerLaunchError, SchedulerStoreError } from "./errors.js";
+import { SchedulerLaunchError } from "./errors.js";
 import {
   observeProcessIdentity,
   processIdentityOf,
@@ -285,15 +285,3 @@ export const ScheduledRunHostLive: Layer.Layer<ScheduledRunHost> = Layer.succeed
     ).pipe(Effect.orElseSucceed(() => false)),
 });
 
-/**
- * Translate a scheduler-store failure at the edge. The store is synchronous, so
- * a throw there is a real defect in the store layer rather than a transient
- * condition to retry; it is surfaced as a typed error so the CLI can report it
- * with a hint instead of a stack.
- */
-export const schedulerStoreError = (path: string, cause: unknown): SchedulerStoreError =>
-  new SchedulerStoreError({
-    message: `scheduler store failure at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
-    hint: "run `prism workflow scheduler status` to inspect the store, or remove it to start clean (installed schedules are lost)",
-    path,
-  });

@@ -10,7 +10,6 @@ import {
   processIdentityOf,
   readBootIdentity,
   readProcessStartIdentity,
-  type ProcessIdentity,
 } from "./process-identity.js";
 
 const onLinux = process.platform === "linux";

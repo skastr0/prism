@@ -17,6 +17,7 @@
  */
 
 import { join } from "node:path";
+import { relativeTime, renderTable } from "./render.js";
 import { observeProcessIdentity, type ProcessObservation } from "./process-identity.js";
 import { summarizeSchedules, type WorkflowScheduleSummary } from "./install.js";
 import { SchedulerStore, schedulerLockPath, type SchedulerInstanceRecord } from "./store.js";
@@ -78,36 +79,6 @@ export const readSchedulerStatus = async (input: {
 
 export { schedulerLockPath };
 
-const pad = (rows: ReadonlyArray<ReadonlyArray<string>>, header: ReadonlyArray<string>): string => {
-  const widths = header.map((title, index) =>
-    Math.max(title.length, ...rows.map((row) => (row[index] ?? "").length)),
-  );
-  const format = (cells: ReadonlyArray<string>): string =>
-    cells.map((cell, index) => (cell ?? "").padEnd(widths[index] ?? 0)).join("  ");
-  return [format(header), format(widths.map((width) => "-".repeat(width))), ...rows.map(format)].join("\n");
-};
-
-/**
- * Relative time in either direction.
- *
- * A "next due" value is in the future and a heartbeat is in the past, so a
- * one-directional age would render an upcoming occurrence as a negative number
- * of seconds ago — which reads as a bug in the schedule rather than as a time.
- */
-const relativeTime = (iso: string | null): string => {
-  if (iso === null) return "never";
-  const deltaMs = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(deltaMs)) return iso;
-  const magnitude = Math.abs(deltaMs);
-  const seconds = Math.round(magnitude / 1000);
-  const unit = seconds < 60
-    ? `${seconds}s`
-    : seconds < 3_600
-      ? `${Math.round(seconds / 60)}m`
-      : `${Math.round(seconds / 3_600)}h`;
-  return deltaMs >= 0 ? `${unit} ago` : `in ${unit}`;
-};
-
 export const renderSchedulerStatusHuman = (report: SchedulerStatusReport): string => {
   const state = classifyInstance(report.instance, report.instanceObservation);
   const lines: string[] = [];
@@ -137,7 +108,7 @@ export const renderSchedulerStatusHuman = (report: SchedulerStatusReport): strin
     return lines.join("\n");
   }
   lines.push(
-    pad(
+    renderTable(
       report.schedules.map((summary) => [
         summary.schedule.name,
         summary.schedule.enabled ? "enabled" : "disabled",

@@ -14,7 +14,7 @@ export class SourceParseError extends Schema.TaggedError<SourceParseError>()(
   "SourceParseError",
   {
     sourcePath: Schema.String,
-    kind: Schema.Literal(
+    kind: Schema.Literals([
       "identity",
       "personality",
       "agent",
@@ -23,7 +23,7 @@ export class SourceParseError extends Schema.TaggedError<SourceParseError>()(
       "sop",
       "tool",
       "hook",
-    ),
+    ]),
     message: Schema.String,
   },
 ) {}
@@ -33,13 +33,13 @@ export class UnknownReferenceError extends Schema.TaggedError<UnknownReferenceEr
   {
     agentName: Schema.String,
     sourcePath: Schema.String,
-    field: Schema.Literal(
+    field: Schema.Literals([
       "identity",
       "personality",
       "model",
       "skill",
       "phase.agent",
-    ),
+    ]),
     referenceName: Schema.String,
   },
 ) {}
@@ -82,10 +82,10 @@ export class UnsupportedTargetCapabilityError extends Schema.TaggedError<Unsuppo
   "UnsupportedTargetCapabilityError",
   {
     target: Schema.String,
-    capability: Schema.Literal(
+    capability: Schema.Literals([
       "compiled-agents",
       "hooks",
-    ),
+    ]),
     message: Schema.String,
   },
 ) {}
@@ -103,7 +103,7 @@ export class AgentValidationError extends Schema.TaggedError<AgentValidationErro
 export class DuplicateNameError extends Schema.TaggedError<DuplicateNameError>()(
   "DuplicateNameError",
   {
-    kind: Schema.Literal(
+    kind: Schema.Literals([
       "identity",
       "personality",
       "agent",
@@ -112,7 +112,7 @@ export class DuplicateNameError extends Schema.TaggedError<DuplicateNameError>()
       "sop",
       "tool",
       "hook",
-    ),
+    ]),
     name: Schema.String,
     firstPath: Schema.String,
     secondPath: Schema.String,
@@ -132,10 +132,10 @@ export class MissingTargetResolutionError extends Schema.TaggedError<MissingTarg
   "MissingTargetResolutionError",
   {
     agentName: Schema.String,
-    referenceKind: Schema.Literal(
+    referenceKind: Schema.Literals([
       "model-profile",
       "skill",
-    ),
+    ]),
     referenceName: Schema.String,
     target: Schema.String,
   },

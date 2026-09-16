@@ -621,7 +621,7 @@ const renderOpenCodeHookRuntime = (registrations: ReadonlyArray<HookRegistration
   if (registrations.length === 0) return [];
   const lines: string[] = [];
   lines.push(`const unwrapDecode = (decoded: any, label: string) => {`);
-  lines.push(`  if (decoded && decoded._tag === "Right") return decoded.right;`);
+  lines.push(`  if (decoded && decoded._tag === "Success") return decoded.success;`);
   lines.push(`  throw new Error("prism hook " + label + " validation failed");`);
   lines.push(`};`);
   lines.push(`const toPromise = (value: any) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);`);

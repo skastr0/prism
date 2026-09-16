@@ -304,8 +304,8 @@ const _sop: string = explore.sop;
 const _plugin: string = explore.plugin;
 const _criteria: ReadonlyArray<string> = explore.criteria ?? [];
 const _escalation: string | undefined = explore.framing?.escalation;
-const _input: Schema.Schema.Any | undefined = explore.input;
-const _output: Schema.Schema.Any | undefined = explore.output;
+const _input: Schema.Codec<unknown, unknown, never, never> | undefined = explore.input;
+const _output: Schema.Codec<unknown, unknown, never, never> | undefined = explore.output;
 void _name; void _sop; void _plugin; void _criteria; void _escalation; void _input; void _output;
 `,
     });
@@ -324,8 +324,8 @@ void _name; void _sop; void _plugin; void _criteria; void _escalation; void _inp
                   readonly name: "explore";
                   readonly sop: "beacon";
                   readonly plugin: "forge";
-                  readonly input: Schema.Schema.AnyNoContext;
-                  readonly output: Schema.Schema.AnyNoContext;
+                  readonly input: Schema.Codec<unknown, unknown, never, never>;
+                  readonly output: Schema.Codec<unknown, unknown, never, never>;
                   readonly criteria: ReadonlyArray<string>;
                   readonly framing: { readonly purpose?: string; readonly escalation?: string };
                 };
@@ -336,7 +336,7 @@ void _name; void _sop; void _plugin; void _criteria; void _escalation; void _inp
         };
       };
       const explore = mod.sops.forge.beacon.phases.explore;
-      const inputSchema = explore.input as Schema.Schema<unknown>;
+      const inputSchema = explore.input as Schema.Codec<unknown, unknown, never, never>;
       expect(Schema.decodeUnknownSync(inputSchema)({ brief: "hello" })).toEqual({ brief: "hello" });
       expect(() => Schema.decodeUnknownSync(inputSchema)({})).toThrow();
       expect(explore.criteria).toEqual(["Hypothesis is falsifiable"]);

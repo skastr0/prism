@@ -7,6 +7,7 @@ import { bindingFromToolSource } from "../compile/tool-bindings.js";
 import { writeToolCliCatalog } from "./catalog.js";
 import { invokeToolViaCli, ToolsCliInvokeError } from "./invoke.js";
 import { prismToolRuntimePath } from "./paths.js";
+import { effectImportPath } from "../testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
 
@@ -28,15 +29,6 @@ test("CLI invoke runs tools in-process without a daemon", async () => {
   const pluginName = "session-cleanup";
   const pluginRoot = join(root, "plugin");
   const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
-  const effectImportPath = join(
-    process.cwd(),
-    "node_modules",
-    "effect",
-    "dist",
-    "esm",
-    "index.js",
-  ).replace(/\\/g, "/");
-
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};

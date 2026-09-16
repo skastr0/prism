@@ -6,9 +6,9 @@
  * migration: see ToolAuthoritySchema in @skastr0/prism-sdk/compile-manifest).
  */
 
-import { Either, Schema } from "effect";
+import { Result, Schema } from "effect";
 import { describe, expect, test } from "bun:test";
-import { CanonicalTool, CanonicalToolSchema } from "./sources.js";
+import { CanonicalTool, CanonicalToolSchema, HookToolContextSchema } from "./sources.js";
 
 const STRICT_PARSE_OPTIONS = { onExcessProperty: "error" } as const;
 
@@ -21,7 +21,7 @@ const baseRawTool = {
 };
 
 const decode = (raw: unknown) =>
-  Schema.decodeUnknownEither(CanonicalToolSchema, STRICT_PARSE_OPTIONS)(raw);
+  Schema.decodeUnknownResult(CanonicalToolSchema, STRICT_PARSE_OPTIONS)(raw);
 
 describe("CanonicalToolSchema authority (PQ-075)", () => {
   test("accepts every declared authority class and preserves it", () => {
@@ -35,23 +35,23 @@ describe("CanonicalToolSchema authority (PQ-075)", () => {
 
     for (const authority of classes) {
       const result = decode({ ...baseRawTool, authority });
-      expect(Either.isRight(result)).toBe(true);
-      if (Either.isRight(result)) {
-        expect(result.right.authority).toBe(authority);
+      expect(Result.isSuccess(result)).toBe(true);
+      if (Result.isSuccess(result)) {
+        expect(result.success.authority).toBe(authority);
       }
     }
   });
 
   test("rejects a literal outside the declared authority classes", () => {
     const result = decode({ ...baseRawTool, authority: "mutatesEverything" });
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("omits authority cleanly when a tool source declares none (migration default)", () => {
     const result = decode({ ...baseRawTool });
-    expect(Either.isRight(result)).toBe(true);
-    if (Either.isRight(result)) {
-      expect(result.right.authority).toBeUndefined();
+    expect(Result.isSuccess(result)).toBe(true);
+    if (Result.isSuccess(result)) {
+      expect(result.success.authority).toBeUndefined();
     }
   });
 });
@@ -77,5 +77,44 @@ describe("CanonicalTool normalized class authority (PQ-075)", () => {
   test("leaves authority undefined when the source never declared one", () => {
     const tool = build(undefined);
     expect(tool.authority).toBeUndefined();
+  });
+});
+
+describe("hook tool context presence (v4)", () => {
+  const decodeToolContext = (raw: unknown) => Schema.decodeUnknownResult(HookToolContextSchema)(raw);
+
+  // v4 requires a non-optional Schema.Unknown field to be present, where v3
+  // treated absence as undefined. Harness payloads legitimately omit these, so
+  // they are optionalKey: absent, explicit undefined, and a value all decode.
+  test("accepts an absent value, an explicit undefined, and a value", () => {
+    expect(Result.isSuccess(decodeToolContext({ nativeName: "Read" }))).toBe(true);
+    expect(Result.isSuccess(decodeToolContext({ nativeName: "Read", input: undefined }))).toBe(true);
+    expect(Result.isSuccess(decodeToolContext({ nativeName: "Read", input: { a: 1 } }))).toBe(true);
+  });
+
+  test("still requires the fields that carry real meaning", () => {
+    expect(Result.isFailure(decodeToolContext({}))).toBe(true);
+  });
+});
+
+describe("required canonical tool fields name their remediation", () => {
+  test("an omitted handle reports the authored missing-key message", () => {
+    const { handle: _omitted, ...withoutHandle } = baseRawTool;
+    const result = decode(withoutHandle);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toContain(
+        "Declare a callable `handle` implementation for this tool.",
+      );
+    }
+  });
+
+  test("an omitted input reports the authored missing-key message", () => {
+    const { input: _omitted, ...withoutInput } = baseRawTool;
+    const result = decode(withoutInput);
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) {
+      expect(result.failure.message).toContain("Declare `input` with an Effect Schema");
+    }
   });
 });

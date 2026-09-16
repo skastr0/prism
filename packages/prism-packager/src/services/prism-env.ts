@@ -21,7 +21,7 @@ export interface PrismEnv {
   readonly home: string;
 }
 
-export class PrismHome extends Context.Tag("prism/PrismHome")<PrismHome, PrismEnv>() {}
+export class PrismHome extends Context.Service<PrismHome, PrismEnv>()("prism/PrismHome") {}
 
 /**
  * Live layer for the CLI edge. Reads the environment once when the layer is
@@ -47,10 +47,10 @@ export interface HarnessRootsEnv {
   readonly resolve: (harnessId: HarnessId) => string;
 }
 
-export class HarnessRoots extends Context.Tag("prism/HarnessRoots")<
+export class HarnessRoots extends Context.Service<
   HarnessRoots,
   HarnessRootsEnv
->() {}
+>()("prism/HarnessRoots") {}
 
 /** In-memory layer for tests — maps harnesses to caller-supplied roots. */
 export const HarnessRootsTest = (

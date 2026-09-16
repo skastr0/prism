@@ -25,7 +25,7 @@ test("decodeHookResultForEvent round-trips valid and rejects invalid results for
     // Test rejection of invalid result
     const invalidResult = { decision: "bogus" };
     const decodedInvalid = decodeHookResultForEvent(event, invalidResult);
-    expect(decodedInvalid._tag).toBe("Left");
+    expect(decodedInvalid._tag).toBe("Failure");
 
     // Test acceptance of valid result
     let validResult: any;
@@ -121,7 +121,7 @@ test("decodeHookResultForEvent round-trips valid and rejects invalid results for
     }
 
     const decodedValid = decodeHookResultForEvent(event, validResult);
-    expect(decodedValid._tag).toBe("Right");
+    expect(decodedValid._tag).toBe("Success");
   }
 });
 
@@ -142,7 +142,7 @@ test("decodeNativeHookPayloadForEvent decodes valid and rejects invalid payloads
       cwd: "/workspace",
     };
     const decodedInvalid = decodeNativeHookPayloadForEvent(event, invalidPayload);
-    expect(decodedInvalid._tag).toBe("Left");
+    expect(decodedInvalid._tag).toBe("Failure");
 
     // Test acceptance of valid payload
     let validPayload: any;
@@ -194,6 +194,6 @@ test("decodeNativeHookPayloadForEvent decodes valid and rejects invalid payloads
     }
 
     const decodedValid = decodeNativeHookPayloadForEvent(event, validPayload);
-    expect(decodedValid._tag).toBe("Right");
+    expect(decodedValid._tag).toBe("Success");
   }
 });

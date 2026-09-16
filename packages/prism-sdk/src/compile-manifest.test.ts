@@ -100,22 +100,22 @@ test("compile manifest decodes and encodes deterministically", () => {
   const encoded = encodeCompileManifest(manifest);
   const decoded = decodeCompileManifest(encoded);
 
-  expect(decoded._tag).toBe("Right");
-  if (decoded._tag !== "Right") throw new Error("manifest did not decode");
-  expect(encodeCompileManifest(decoded.right)).toBe(encoded);
-  expect(verifyCompileManifestHash(decoded.right)).toBe(true);
-  expect(verifyAgentManifestHash(decoded.right.agents["forge:builder"]!)).toBe(true);
+  expect(decoded._tag).toBe("Success");
+  if (decoded._tag !== "Success") throw new Error("manifest did not decode");
+  expect(encodeCompileManifest(decoded.success)).toBe(encoded);
+  expect(verifyCompileManifestHash(decoded.success)).toBe(true);
+  expect(verifyAgentManifestHash(decoded.success.agents["forge:builder"]!)).toBe(true);
   // tools populated as minimal identity refs, source-path free
-  expect(Object.keys(decoded.right.tools).sort()).toEqual(["agent-core:inspect", "core:create_commit", "forge:run_shell"]);
-  expect(decoded.right.tools["forge:run_shell"]).toEqual({ plugin: "forge", name: "run_shell" });
-  expect(decoded.right.tools["core:create_commit"]).toEqual({ plugin: "core", name: "create_commit" });
-  expect(JSON.stringify(decoded.right.tools)).not.toContain("sourcePath");
-  expect(JSON.stringify(decoded.right.tools)).not.toContain("input");
-  expect(JSON.stringify(decoded.right.tools)).not.toContain("handle");
-  expect(decoded.right.sops["forge:beacon"]?.phases[0]?.acceptanceCriteria).toEqual([
+  expect(Object.keys(decoded.success.tools).sort()).toEqual(["agent-core:inspect", "core:create_commit", "forge:run_shell"]);
+  expect(decoded.success.tools["forge:run_shell"]).toEqual({ plugin: "forge", name: "run_shell" });
+  expect(decoded.success.tools["core:create_commit"]).toEqual({ plugin: "core", name: "create_commit" });
+  expect(JSON.stringify(decoded.success.tools)).not.toContain("sourcePath");
+  expect(JSON.stringify(decoded.success.tools)).not.toContain("input");
+  expect(JSON.stringify(decoded.success.tools)).not.toContain("handle");
+  expect(decoded.success.sops["forge:beacon"]?.phases[0]?.acceptanceCriteria).toEqual([
     "Hypothesis is falsifiable",
   ]);
-  expect(decoded.right.sops["forge:beacon"]?.phases[0]?.input).toEqual({
+  expect(decoded.success.sops["forge:beacon"]?.phases[0]?.input).toEqual({
     type: "object",
     properties: { brief: { type: "string" } },
     required: ["brief"],
@@ -200,13 +200,13 @@ test("compile manifest invalid payload fails schema decode", () => {
   };
   const decoded = decodeCompileManifest(JSON.stringify(invalid));
 
-  expect(decoded._tag).toBe("Left");
+  expect(decoded._tag).toBe("Failure");
 });
 
 test("compile manifest malformed JSON fails schema decode", () => {
   const decoded = decodeCompileManifest("{");
 
-  expect(decoded._tag).toBe("Left");
+  expect(decoded._tag).toBe("Failure");
 });
 
 test("empty compile manifest carries a self-consistent hash", () => {

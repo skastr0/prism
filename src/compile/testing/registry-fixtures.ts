@@ -47,11 +47,11 @@ export interface BridgeSupportedSchemaOptions {
 
 export const arbitraryBridgeSupportedSchema = (
   opts: BridgeSupportedSchemaOptions = {},
-): fc.Arbitrary<Schema.Schema.AnyNoContext> => {
+): fc.Arbitrary<Schema.Top> => {
   const maxDepth = opts.maxDepth ?? 3;
   const maxProperties = opts.maxProperties ?? 4;
 
-  const primitive: fc.Arbitrary<Schema.Schema.AnyNoContext> = fc.oneof(
+  const primitive: fc.Arbitrary<Schema.Top> = fc.oneof(
     fc.constant(Schema.String),
     fc.constant(Schema.Number),
     fc.constant(Schema.Boolean),
@@ -61,9 +61,9 @@ export const arbitraryBridgeSupportedSchema = (
     fc.boolean().map((value) => Schema.Literal(value)),
   );
 
-  const leaf: fc.Arbitrary<Schema.Schema.AnyNoContext> = primitive;
+  const leaf: fc.Arbitrary<Schema.Top> = primitive;
 
-  const schemaAtDepth = (depth: number): fc.Arbitrary<Schema.Schema.AnyNoContext> => {
+  const schemaAtDepth = (depth: number): fc.Arbitrary<Schema.Top> => {
     if (depth <= 0) return leaf;
 
     const field = fc.record({
@@ -81,7 +81,7 @@ export const arbitraryBridgeSupportedSchema = (
 
     const enumSchema = fc
       .array(fc.string({ minLength: 1, maxLength: 12 }), { minLength: 1, maxLength: 4 })
-      .map((values) => Schema.Literal(...values));
+      .map((values) => Schema.Literals(values));
 
     return fc.oneof(
       { weight: 3, arbitrary: struct },

@@ -32,8 +32,8 @@
       "prism/refs/tools": [
         "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/tools.ts"
       ],
-      "effect": ["../../node_modules/effect/dist/dts/index.d.ts"],
-      "effect/*": ["../../node_modules/effect/dist/dts/*.d.ts"]
+      "effect": ["../../node_modules/effect/dist/index.d.ts"],
+      "effect/*": ["../../node_modules/effect/dist/*.d.ts"]
     }
   },
   "include": [

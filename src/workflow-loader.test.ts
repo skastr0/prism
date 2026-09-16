@@ -171,12 +171,12 @@ export default defineWorkflow({
 
 const failureCapturingWorkflowSource = () => {
   return `
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const reviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 const fusionOutput = Schema.Struct({
-  reviewerStatus: Schema.Literal("completed", "failed"),
+  reviewerStatus: Schema.Literals(["completed", "failed"]),
   verdict: Schema.Literal("needs-work"),
 });
 
@@ -189,8 +189,8 @@ export default defineWorkflow({
       output: reviewOutput,
       worker: { worker: "opencode" },
     });
-    const reviewed = yield* Effect.either(wf.runTask(review));
-    const reviewerStatus = Either.isRight(reviewed) ? "completed" as const : "failed" as const;
+    const reviewed = yield* Effect.result(wf.runTask(review));
+    const reviewerStatus = Result.isSuccess(reviewed) ? "completed" as const : "failed" as const;
     const fusion = yield* wf.runTask(defineTask({
       id: "fusion",
       prompt: \`Fuse reviewer status: \${reviewerStatus}\`,

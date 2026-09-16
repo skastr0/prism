@@ -151,7 +151,7 @@ describe("grok worker structured session id", () => {
       expect(calls[1]).toMatchObject({ resume: "grok-session-1", outputFormat: "json" });
       expect(calls[1]?.prompt).not.toContain("Build the slice.");
       expect(calls[1]?.prompt).toContain("[\"summary\"]");
-      expect(calls[1]?.prompt).toContain("is missing");
+      expect(calls[1]?.prompt).toContain("Missing key");
       expect(result.tasks[0]?.output).toEqual({ summary: "ok after repair" });
       expect(result.tasks[0]?.metadata).toMatchObject({
         adapter: "grok-cli",

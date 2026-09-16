@@ -27,7 +27,7 @@
  * Cache is mandatory — there is no cache-bypass flag; point `--store` at a
  * fresh path for a clean re-run instead.
  */
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import {
   defineTask,
   defineWorkflow,
@@ -250,21 +250,21 @@ const BLOCKED_PATTERNS: Partial<Record<Harness, RegExp>> = {
 const captureOutcome = (wf: WorkflowRuntime, harness: Harness) =>
   Effect.gen(function* () {
     // `as` (not an annotation) deliberately: this validate harness's TS
-    // resolution of `Effect.either(wf.runTask(...))` degrades to
-    // `Either<unknown, unknown>` for dynamic (`run:`) workflows — the same
+    // resolution of `Effect.result(wf.runTask(...))` degrades to
+    // `Result<unknown, unknown>` for dynamic (`run:`) workflows — the same
     // failure independently reproduces in the dynamic fan-out validation
     // fixture, so it is an environment limitation of the validate path, not
     // a real type error;
     // `wf.runTask`'s declared signature (`WorkflowRuntime.runTask`,
     // src/workflows.ts) already guarantees this shape.
-    const result = (yield* Effect.either(wf.runTask(councilTasks[harness]))) as Either.Either<
+    const result = (yield* Effect.result(wf.runTask(councilTasks[harness]))) as Result.Result<
       CouncilReport,
       WorkflowRuntimeError
     >;
-    if (Either.isRight(result)) {
-      return { harness, status: "completed" as const, report: result.right } satisfies HarnessOutcome;
+    if (Result.isSuccess(result)) {
+      return { harness, status: "completed" as const, report: result.success } satisfies HarnessOutcome;
     }
-    const message = errorToMessage(result.left);
+    const message = errorToMessage(result.failure);
     const blockedPattern = BLOCKED_PATTERNS[harness];
     if (blockedPattern !== undefined && blockedPattern.test(message)) {
       return { harness, status: "blocked" as const, reason: message } satisfies HarnessOutcome;

@@ -27,12 +27,12 @@ describe("astToJsonSchema", () => {
   test("maps the supported workflow output subset", () => {
     const schema = jsonSchemaFromEffectSchema(
       Schema.Struct({
-        summary: Schema.String.annotations({ description: "Short result summary" }),
+        summary: Schema.String.annotate({ description: "Short result summary" }),
         count: Schema.Number,
         ok: Schema.Boolean,
         tags: Schema.Array(Schema.String),
-        mode: Schema.Literal("pass", "fail"),
-        modes: Schema.Array(Schema.Literal("pass", "fail")),
+        mode: Schema.Literals(["pass", "fail"]),
+        modes: Schema.Array(Schema.Literals(["pass", "fail"])),
         maybeScore: Schema.optional(Schema.Number),
         nullableNote: Schema.NullOr(Schema.String),
       }),
@@ -64,7 +64,7 @@ describe("astToJsonSchema", () => {
   test("rejects mixed non-literal unions", () => {
     expectWorkflowError(
       () => jsonSchemaFromEffectSchema(
-        Schema.Struct({ value: Schema.Union(Schema.String, Schema.Number) }),
+        Schema.Struct({ value: Schema.Union([Schema.String, Schema.Number]) }),
         WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
       ),
       "Union",
@@ -102,7 +102,7 @@ describe("astToJsonSchema", () => {
 
     expectWorkflowError(
       () => jsonSchemaFromEffectSchema(
-        Schema.Struct({ label: Schema.String.pipe(Schema.minLength(1)) }),
+        Schema.Struct({ label: Schema.String.check(Schema.isMinLength(1)) }),
         WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
       ),
       "Refinement",
@@ -113,7 +113,7 @@ describe("astToJsonSchema", () => {
   test("rejects Record index signatures", () => {
     expectWorkflowError(
       () => jsonSchemaFromEffectSchema(
-        Schema.Struct({ counts: Schema.Record({ key: Schema.String, value: Schema.Number }) }),
+        Schema.Struct({ counts: Schema.Record(Schema.String, Schema.Number) }),
         WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
       ),
       "Record",
@@ -131,6 +131,56 @@ describe("astToJsonSchema", () => {
       () => jsonSchemaFromEffectSchema(recursive, WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS),
       "Suspend",
       "child",
+    );
+  });
+
+  test("rejects encoded schemas: Schema.Class and Schema.DateFromString", () => {
+    class User extends Schema.Class<User>("User")({ id: Schema.String }) {}
+
+    // A Class decodes to a class instance, not a plain JSON value, so the strict
+    // workflow policy rejects it exactly as v3 did (v3 Class was a Transformation).
+    expectWorkflowError(
+      () => jsonSchemaFromEffectSchema(User, WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS),
+      "Transformation",
+    );
+
+    expectWorkflowError(
+      () => jsonSchemaFromEffectSchema(
+        Schema.Struct({ createdAt: Schema.DateFromString }),
+        WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
+      ),
+      "Transformation",
+      "createdAt",
+    );
+  });
+
+  test("accepts a nominal brand and erases it from the wire schema", () => {
+    // A brand adds TypeScript identity but no runtime validation, so it does not
+    // change the wire shape. v3 behaved the same way (v3 brand was an annotation,
+    // not a Refinement).
+    expect(
+      jsonSchemaFromEffectSchema(
+        Schema.Struct({ id: Schema.String.pipe(Schema.brand("UserId")) }),
+        WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
+      ),
+    ).toEqual({
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    });
+  });
+
+  test("still rejects a branded schema that also carries a check", () => {
+    expectWorkflowError(
+      () => jsonSchemaFromEffectSchema(
+        Schema.Struct({
+          id: Schema.String.pipe(Schema.brand("UserId"), Schema.check(Schema.isMinLength(1))),
+        }),
+        WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
+      ),
+      "Refinement",
+      "id",
     );
   });
 

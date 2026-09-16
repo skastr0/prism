@@ -199,7 +199,7 @@ import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const Review = Schema.Struct({
-  verdict: Schema.Literal("ship", "revise", "block"),
+  verdict: Schema.Literals(["ship", "revise", "block"]),
   findings: Schema.Array(Schema.String),
   riskiestAssumption: Schema.String,
 });
@@ -229,7 +229,7 @@ Malformed JSON doesn't crash the run and doesn't get shipped: decode failures tr
 
 ### A workflow is an Effect
 
-Dynamic workflows get the full Effect toolkit — `Effect.gen`, structured concurrency, `Effect.either` per arm, spans on every step. This is a condensed version of a real council workflow that fans one brief across **four model vendors**, then synthesizes with a fifth:
+Dynamic workflows get the full Effect toolkit — `Effect.gen`, structured concurrency, `Effect.result` per arm, spans on every step. This is a condensed version of a real council workflow that fans one brief across **four model vendors**, then synthesizes with a fifth:
 
 ```ts
 export const workflow = defineWorkflow({
@@ -245,11 +245,11 @@ export const workflow = defineWorkflow({
 
       // Independent seats, one typed contract, failures isolated per arm
       const settled = yield* Effect.all(
-        seats.map((seat) => Effect.either(wf.runTask(councilTask(seat)))),
+        seats.map((seat) => Effect.result(wf.runTask(councilTask(seat)))),
         { concurrency: "unbounded" },
       ).pipe(Effect.withSpan("council.fanout"));
 
-      const reports = settled.flatMap((r) => (r._tag === "Right" ? [r.right] : []));
+      const reports = settled.flatMap((r) => (r._tag === "Success" ? [r.success] : []));
 
       // A fifth vendor synthesizes — reports are evidence, not authority
       return yield* wf.runTask(synthesisTask({

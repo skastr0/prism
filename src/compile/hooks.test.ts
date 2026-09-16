@@ -151,7 +151,7 @@ test("native hook payload decoding is event-specific", () => {
       target: { harness: "opencode", nativeEvent: "tool.execute.after" },
       tool: { name: "bash", input: {}, output: "ok" },
     })._tag,
-  ).toBe("Right");
+  ).toBe("Success");
 
   const sessionEnd = Schema.decodeUnknownSync(NativeSessionEndHookPayloadSchema)({
     target: { harness: "antigravity-cli", nativeEvent: "Stop" },
@@ -196,38 +196,38 @@ test("native hook payload schemas normalize prompt and permission events", () =>
       target: { harness: "codex-cli", nativeEvent: "UserPromptSubmit" },
       prompt: "hello",
     })._tag,
-  ).toBe("Right");
+  ).toBe("Success");
 
   expect(
     decodeNativeHookPayloadForEvent("permission.request", {
       target: { harness: "codex-cli", nativeEvent: "PermissionRequest" },
       tool: { name: "bash", input: {} },
     })._tag,
-  ).toBe("Right");
+  ).toBe("Success");
 });
 
 test("hook result validation is event-specific and conservative", () => {
   expect(decodeHookResultForEvent("tool.before", { decision: "block", message: "No" })._tag)
-    .toBe("Right");
+    .toBe("Success");
   expect(decodeHookResultForEvent("tool.after", { decision: "block", message: "No" })._tag)
-    .toBe("Left");
+    .toBe("Failure");
   expect(decodeHookResultForEvent("permission.request", { decision: "block", message: "No" })._tag)
-    .toBe("Right");
+    .toBe("Success");
   expect(decodeHookResultForEvent("permission.request", { decision: "allow" })._tag)
-    .toBe("Right");
+    .toBe("Success");
   expect(decodeHookResultForEvent("prompt.submit", { decision: "block", message: "No" })._tag)
-    .toBe("Right");
+    .toBe("Success");
   expect(decodeHookResultForEvent("tool.before", { decision: "allow" })._tag)
-    .toBe("Left");
+    .toBe("Failure");
   expect(
     decodeHookResultForEvent("prompt.submit", {
       decision: "continue",
       systemMessage: "system",
       additionalContext: "context",
     })._tag,
-  ).toBe("Right");
+  ).toBe("Success");
   expect(decodeHookResultForEvent("session.end", { decision: "continue" })._tag)
-    .toBe("Right");
+    .toBe("Success");
 });
 
 test("generated hook runtime decodes prompt and permission event contracts", async () => {
@@ -236,7 +236,7 @@ test("generated hook runtime decodes prompt and permission event contracts", asy
   await writeText(runtimePath, GENERATED_HOOK_RUNTIME);
   const runtime = await import(pathToFileURL(runtimePath).href) as {
     decodeNativeHookPayloadForEvent: (event: string, payload: unknown) => { _tag: string };
-    decodeHookResultForEvent: (event: string, result: unknown) => { _tag: string; right?: unknown };
+    decodeHookResultForEvent: (event: string, result: unknown) => { _tag: string; success?: unknown };
   };
 
   expect(
@@ -244,23 +244,23 @@ test("generated hook runtime decodes prompt and permission event contracts", asy
       target: { harness: "codex-cli", nativeEvent: "UserPromptSubmit" },
       prompt: "hello",
     })._tag,
-  ).toBe("Right");
+  ).toBe("Success");
   expect(
     runtime.decodeNativeHookPayloadForEvent("permission.request", {
       target: { harness: "codex-cli", nativeEvent: "PermissionRequest" },
       tool: { name: "bash", input: { command: "pwd" } },
     })._tag,
-  ).toBe("Right");
+  ).toBe("Success");
   expect(
     runtime.decodeHookResultForEvent("permission.request", {
       decision: "block",
       message: "No",
     })._tag,
-  ).toBe("Right");
+  ).toBe("Success");
   expect(
     runtime.decodeHookResultForEvent("permission.request", {
       decision: "allow",
-    }).right,
+    }).success,
   ).toEqual({
     decision: "allow",
     systemMessage: undefined,
@@ -269,7 +269,7 @@ test("generated hook runtime decodes prompt and permission event contracts", asy
     runtime.decodeHookResultForEvent("prompt.submit", {
       decision: "continue",
       additionalContext: "context",
-    }).right,
+    }).success,
   ).toEqual({
     decision: "continue",
     systemMessage: undefined,

@@ -179,9 +179,11 @@ class WorkflowEffectSpan implements Tracer.Span {
   readonly _tag = "Span" as const;
   readonly spanId = generateWorkflowSpanId();
   readonly traceId: string;
-  readonly context = Context.empty();
+  readonly annotations = Context.empty();
   readonly sampled = true;
   readonly attributes = new Map<string, unknown>();
+  readonly parent: Option.Option<Tracer.AnySpan>;
+  readonly kind: Tracer.SpanKind;
   links: Array<Tracer.SpanLink> = [];
   status: Tracer.SpanStatus;
   private readonly spanEvents: Array<WorkflowSpanEvent> = [];
@@ -190,11 +192,13 @@ class WorkflowEffectSpan implements Tracer.Span {
   constructor(
     private readonly recorder: WorkflowTraceRecorder,
     readonly name: string,
-    readonly parent: Option.Option<Tracer.AnySpan>,
-    readonly kind: Tracer.SpanKind,
+    parent: Option.Option<Tracer.AnySpan>,
+    kind: Tracer.SpanKind,
     startTime: bigint,
     parentSpanId: string | null,
   ) {
+    this.parent = parent;
+    this.kind = kind;
     this.traceId = Option.isSome(parent) ? parent.value.traceId : recorder.traceId;
     this.status = { _tag: "Started", startTime };
     recorder.recordSpanStart({
@@ -243,16 +247,17 @@ export const makeWorkflowEffectTracer = (
   options?: { readonly defaultParentSpanId?: string },
 ): Tracer.Tracer =>
   Tracer.make({
-    span: (name, parent, _context, _links, startTime, kind) =>
+    span: (spanOptions) =>
       new WorkflowEffectSpan(
         recorder,
-        name,
-        parent,
-        kind,
-        startTime,
-        Option.isSome(parent) ? parent.value.spanId : options?.defaultParentSpanId ?? null,
+        spanOptions.name,
+        spanOptions.parent,
+        spanOptions.kind,
+        spanOptions.startTime,
+        Option.isSome(spanOptions.parent)
+          ? spanOptions.parent.value.spanId
+          : options?.defaultParentSpanId ?? null,
       ),
-    context: (f, _fiber) => f(),
   });
 
 // ---------- trace tree rendering (pure; consumed by `prism workflow runs trace`) ----------

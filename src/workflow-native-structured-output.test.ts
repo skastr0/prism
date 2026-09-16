@@ -8,11 +8,11 @@ import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 
 const NativeReport = Schema.Struct({
   summary: Schema.String,
-  status: Schema.Literal("pass", "needs-work"),
+  status: Schema.Literals(["pass", "needs-work"]),
 });
 
 const UnsupportedReport = Schema.Struct({
-  value: Schema.Union(Schema.String, Schema.Number),
+  value: Schema.Union([Schema.String, Schema.Number]),
 });
 
 const task = {

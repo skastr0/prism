@@ -20,16 +20,19 @@ import {
 
 const STRICT_PARSE_OPTIONS = { onExcessProperty: "error" } as const;
 
-const expectDecodes = <A>(schema: Schema.Schema<A, any, never>, value: unknown): A => {
-  const result = Schema.decodeUnknownEither(schema, STRICT_PARSE_OPTIONS)(value);
-  expect(result._tag).toBe("Right");
-  if (result._tag === "Left") throw new Error(result.left.message);
-  return result.right;
+const expectDecodes = <A>(schema: Schema.Decoder<A, never>, value: unknown): A => {
+  const result = Schema.decodeUnknownResult(schema, STRICT_PARSE_OPTIONS)(value);
+  expect(result._tag).toBe("Success");
+  if (result._tag === "Failure") throw new Error(result.failure.message);
+  return result.success;
 };
 
-const expectRejects = (schema: Schema.Schema.AnyNoContext, value: unknown): void => {
-  const result = Schema.decodeUnknownEither(schema, STRICT_PARSE_OPTIONS)(value);
-  expect(result._tag).toBe("Left");
+const expectRejects = (
+  schema: Schema.Codec<unknown, unknown, never, never>,
+  value: unknown,
+): void => {
+  const result = Schema.decodeUnknownResult(schema, STRICT_PARSE_OPTIONS)(value);
+  expect(result._tag).toBe("Failure");
 };
 
 describe("public source contracts", () => {

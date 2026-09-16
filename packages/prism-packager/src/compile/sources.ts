@@ -12,10 +12,38 @@
  * - Personality   : personalities/*.personality.md
  */
 
-import { Schema } from "effect";
+import { Schema, SchemaTransformation } from "effect";
 import { ToolAuthoritySchema, type ToolAuthority } from "@skastr0/prism-sdk/compile-manifest";
 
 export type { ToolAuthority };
+
+/**
+ * A harness-native payload schema paired with the canonical payload it decodes
+ * into, keeping the v3 `transformHookPayload(from, to, { decode, encode })` call
+ * shape.
+ *
+ * v4 spells this `from.pipe(Schema.decodeTo(to, SchemaTransformation.transform(...)))`,
+ * which needs explicit transformation type arguments: `decodeTo` requires an
+ * invariant `Transformation<To["Encoded"], From["Type"]>`, and inference alone
+ * widens an object literal's optional keys to required ones, which then fails
+ * the contravariant check. Naming both schema types here pins them once instead
+ * of at every call site.
+ */
+const transformHookPayload = <From extends Schema.Top, To extends Schema.Top>(
+  from: From,
+  to: To,
+  transformation: {
+    readonly decode: (input: From["Type"]) => To["Encoded"];
+    readonly encode: (input: To["Encoded"]) => From["Type"];
+  },
+) =>
+  from.pipe(
+    Schema.decodeTo(
+      to,
+      SchemaTransformation.transform<To["Encoded"], From["Type"]>(transformation),
+    ),
+  );
+
 export const TargetId = Schema.String;
 export type TargetId = typeof TargetId.Type;
 
@@ -28,17 +56,17 @@ const NamedRefObjectSchema = Schema.Struct({
   name: Schema.String,
 });
 
-export const AgentRefInputSchema = Schema.Union(
+export const AgentRefInputSchema = Schema.Union([
   Schema.String,
   Schema.Struct({
     kind: Schema.Literal("agent-ref"),
     plugin: Schema.optional(Schema.String),
     name: Schema.String,
   }),
-);
+]);
 export type AgentRefInput = typeof AgentRefInputSchema.Type;
 
-export const ModelProfileRefInputSchema = Schema.Union(
+export const ModelProfileRefInputSchema = Schema.Union([
   Schema.String,
   Schema.Struct({
     kind: Schema.Literal("model-profile-ref"),
@@ -46,10 +74,10 @@ export const ModelProfileRefInputSchema = Schema.Union(
     modelspace: Schema.String,
     name: Schema.String,
   }),
-);
+]);
 export type ModelProfileRefInput = typeof ModelProfileRefInputSchema.Type;
 
-export const SkillRefInputSchema = Schema.Union(
+export const SkillRefInputSchema = Schema.Union([
   Schema.String,
   Schema.Struct({
     kind: Schema.Literal("skill-ref"),
@@ -62,14 +90,14 @@ export const SkillRefInputSchema = Schema.Union(
     skillspace: Schema.String,
     name: Schema.String,
   }),
-);
+]);
 export type SkillRefInput = typeof SkillRefInputSchema.Type;
 
 // ---------------------------------------------------------------------------
 // Hook refs, events, payloads, and results
 // ---------------------------------------------------------------------------
 
-export const HookEventSchema = Schema.Literal(
+export const HookEventSchema = Schema.Literals([
   "tool.before",
   "tool.after",
   "prompt.submit",
@@ -83,10 +111,10 @@ export const HookEventSchema = Schema.Literal(
   "compact.before",
   "compact.after",
   "notification",
-);
+]);
 export type HookEvent = typeof HookEventSchema.Type;
 
-export const HookToolMatcherInputSchema = Schema.Union(
+export const HookToolMatcherInputSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("hook-any-tool") }),
   Schema.Struct({
     kind: Schema.Literal("hook-native-tool"),
@@ -96,7 +124,7 @@ export const HookToolMatcherInputSchema = Schema.Union(
     kind: Schema.Literal("hook-canonical-tool"),
     ref: Schema.String,
   }),
-);
+]);
 export type HookToolMatcherInput = typeof HookToolMatcherInputSchema.Type;
 
 export const HookMatchInputSchema = Schema.Struct({
@@ -104,7 +132,7 @@ export const HookMatchInputSchema = Schema.Struct({
 });
 export type HookMatchInput = typeof HookMatchInputSchema.Type;
 
-export const NormalizedHookToolMatcherSchema = Schema.Union(
+export const NormalizedHookToolMatcherSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("any") }),
   Schema.Struct({
     kind: Schema.Literal("native-tool"),
@@ -114,7 +142,7 @@ export const NormalizedHookToolMatcherSchema = Schema.Union(
     kind: Schema.Literal("canonical-tool"),
     ref: Schema.String,
   }),
-);
+]);
 export type NormalizedHookToolMatcher = typeof NormalizedHookToolMatcherSchema.Type;
 
 export const NormalizedHookMatchSchema = Schema.Struct({
@@ -128,8 +156,10 @@ export const HookDefinitionSchema = Schema.Struct({
   event: HookEventSchema,
   targets: Schema.optional(Schema.Array(Schema.String)),
   match: Schema.optional(HookMatchInputSchema),
-  handle: Schema.Any,
-  onDegraded: Schema.optional(Schema.Literal("fail", "degrade", "skip")),
+  handle: Schema.Any.annotateKey({
+    messageMissingKey: "Declare a callable `handle` implementation for this hook.",
+  }),
+  onDegraded: Schema.optional(Schema.Literals(["fail", "degrade", "skip"])),
 });
 export type HookDefinition = typeof HookDefinitionSchema.Type;
 export const HookSourceSchema = HookDefinitionSchema;
@@ -147,16 +177,21 @@ export const HookSessionContextSchema = Schema.Struct({
 });
 export type HookSessionContext = typeof HookSessionContextSchema.Type;
 
-export const HookNativeContextSchema = Schema.Record({
-  key: Schema.String,
-  value: Schema.Unknown,
-});
+export const HookNativeContextSchema = Schema.Record(Schema.String, Schema.Unknown);
 export type HookNativeContext = typeof HookNativeContextSchema.Type;
 
+/**
+ * Tool context shared by every hook payload.
+ *
+ * `input`/`output`/`error` carry arbitrary harness data. They are
+ * `Schema.optional` because v4 requires a non-optional `Schema.Unknown` field to
+ * be present, while v3 treated absence as `undefined`; harness payloads
+ * legitimately omit them, and the generated hook runtime agrees.
+ */
 export const HookToolContextSchema = Schema.Struct({
   logical: Schema.optional(Schema.String),
   nativeName: Schema.String,
-  input: Schema.Unknown,
+  input: Schema.optionalKey(Schema.Unknown),
 });
 export type HookToolContext = typeof HookToolContextSchema.Type;
 
@@ -173,13 +208,11 @@ export type ToolBeforeEventPayload = typeof ToolBeforeEventPayloadSchema.Type;
 export const ToolAfterEventPayloadSchema = Schema.Struct({
   event: Schema.Literal("tool.after"),
   target: HookTargetContextSchema,
-  tool: Schema.extend(
-    HookToolContextSchema,
-    Schema.Struct({
-      output: Schema.Unknown,
-      success: Schema.optional(Schema.Boolean),
-    }),
-  ),
+  tool: Schema.Struct({
+    ...HookToolContextSchema.fields,
+    output: Schema.optionalKey(Schema.Unknown),
+    success: Schema.optional(Schema.Boolean),
+  }),
   cwd: Schema.optional(Schema.String),
   session: Schema.optional(HookSessionContextSchema),
   native: Schema.optional(HookNativeContextSchema),
@@ -228,12 +261,10 @@ export type SessionEndEventPayload = typeof SessionEndEventPayloadSchema.Type;
 export const ToolFailureEventPayloadSchema = Schema.Struct({
   event: Schema.Literal("tool.failure"),
   target: HookTargetContextSchema,
-  tool: Schema.extend(
-    HookToolContextSchema,
-    Schema.Struct({
-      error: Schema.Unknown,
-    }),
-  ),
+  tool: Schema.Struct({
+    ...HookToolContextSchema.fields,
+    error: Schema.optionalKey(Schema.Unknown),
+  }),
   cwd: Schema.optional(Schema.String),
   session: Schema.optional(HookSessionContextSchema),
   native: Schema.optional(HookNativeContextSchema),
@@ -311,7 +342,7 @@ export const NotificationEventPayloadSchema = Schema.Struct({
 });
 export type NotificationEventPayload = typeof NotificationEventPayloadSchema.Type;
 
-export const HookEventPayloadSchema = Schema.Union(
+export const HookEventPayloadSchema = Schema.Union([
   ToolBeforeEventPayloadSchema,
   ToolAfterEventPayloadSchema,
   PromptSubmitEventPayloadSchema,
@@ -325,24 +356,24 @@ export const HookEventPayloadSchema = Schema.Union(
   CompactBeforeEventPayloadSchema,
   CompactAfterEventPayloadSchema,
   NotificationEventPayloadSchema,
-);
+]);
 export type HookEventPayload = typeof HookEventPayloadSchema.Type;
 
 const NativeToolBeforeContextSchema = Schema.Struct({
   logical: Schema.optional(Schema.String),
   name: Schema.String,
-  input: Schema.Unknown,
+  input: Schema.optionalKey(Schema.Unknown),
 });
 
 const NativeToolAfterContextSchema = Schema.Struct({
   logical: Schema.optional(Schema.String),
   name: Schema.String,
-  input: Schema.Unknown,
-  output: Schema.Unknown,
+  input: Schema.optionalKey(Schema.Unknown),
+  output: Schema.optionalKey(Schema.Unknown),
   success: Schema.optional(Schema.Boolean),
 });
 
-export const NativeToolBeforeHookPayloadSchema = Schema.transform(
+export const NativeToolBeforeHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     tool: NativeToolBeforeContextSchema,
@@ -379,7 +410,7 @@ export const NativeToolBeforeHookPayloadSchema = Schema.transform(
 );
 export type NativeToolBeforeHookPayload = typeof NativeToolBeforeHookPayloadSchema.Type;
 
-export const NativeToolAfterHookPayloadSchema = Schema.transform(
+export const NativeToolAfterHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     tool: NativeToolAfterContextSchema,
@@ -420,7 +451,7 @@ export const NativeToolAfterHookPayloadSchema = Schema.transform(
 );
 export type NativeToolAfterHookPayload = typeof NativeToolAfterHookPayloadSchema.Type;
 
-export const NativeSessionStartHookPayloadSchema = Schema.transform(
+export const NativeSessionStartHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     cwd: Schema.optional(Schema.String),
@@ -446,7 +477,7 @@ export const NativeSessionStartHookPayloadSchema = Schema.transform(
 );
 export type NativeSessionStartHookPayload = typeof NativeSessionStartHookPayloadSchema.Type;
 
-export const NativePromptSubmitHookPayloadSchema = Schema.transform(
+export const NativePromptSubmitHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     cwd: Schema.optional(Schema.String),
@@ -475,7 +506,7 @@ export const NativePromptSubmitHookPayloadSchema = Schema.transform(
 );
 export type NativePromptSubmitHookPayload = typeof NativePromptSubmitHookPayloadSchema.Type;
 
-export const NativePermissionRequestHookPayloadSchema = Schema.transform(
+export const NativePermissionRequestHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     cwd: Schema.optional(Schema.String),
@@ -517,7 +548,7 @@ export const NativePermissionRequestHookPayloadSchema = Schema.transform(
 export type NativePermissionRequestHookPayload =
   typeof NativePermissionRequestHookPayloadSchema.Type;
 
-export const NativeSessionEndHookPayloadSchema = Schema.transform(
+export const NativeSessionEndHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     cwd: Schema.optional(Schema.String),
@@ -549,11 +580,11 @@ export type NativeSessionEndHookPayload = typeof NativeSessionEndHookPayloadSche
 const NativeToolFailureContextSchema = Schema.Struct({
   logical: Schema.optional(Schema.String),
   name: Schema.String,
-  input: Schema.Unknown,
-  error: Schema.Unknown,
+  input: Schema.optionalKey(Schema.Unknown),
+  error: Schema.optionalKey(Schema.Unknown),
 });
 
-export const NativeToolFailureHookPayloadSchema = Schema.transform(
+export const NativeToolFailureHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     tool: NativeToolFailureContextSchema,
@@ -592,7 +623,7 @@ export const NativeToolFailureHookPayloadSchema = Schema.transform(
 );
 export type NativeToolFailureHookPayload = typeof NativeToolFailureHookPayloadSchema.Type;
 
-export const NativeStopHookPayloadSchema = Schema.transform(
+export const NativeStopHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     stopHookActive: Schema.optional(Schema.Boolean),
@@ -621,7 +652,7 @@ export const NativeStopHookPayloadSchema = Schema.transform(
 );
 export type NativeStopHookPayload = typeof NativeStopHookPayloadSchema.Type;
 
-export const NativeSubagentStartHookPayloadSchema = Schema.transform(
+export const NativeSubagentStartHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     subagent: Schema.optional(
@@ -655,7 +686,7 @@ export const NativeSubagentStartHookPayloadSchema = Schema.transform(
 );
 export type NativeSubagentStartHookPayload = typeof NativeSubagentStartHookPayloadSchema.Type;
 
-export const NativeSubagentStopHookPayloadSchema = Schema.transform(
+export const NativeSubagentStopHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     subagent: Schema.optional(
@@ -689,7 +720,7 @@ export const NativeSubagentStopHookPayloadSchema = Schema.transform(
 );
 export type NativeSubagentStopHookPayload = typeof NativeSubagentStopHookPayloadSchema.Type;
 
-export const NativeCompactBeforeHookPayloadSchema = Schema.transform(
+export const NativeCompactBeforeHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     trigger: Schema.optional(Schema.String),
@@ -718,7 +749,7 @@ export const NativeCompactBeforeHookPayloadSchema = Schema.transform(
 );
 export type NativeCompactBeforeHookPayload = typeof NativeCompactBeforeHookPayloadSchema.Type;
 
-export const NativeCompactAfterHookPayloadSchema = Schema.transform(
+export const NativeCompactAfterHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     trigger: Schema.optional(Schema.String),
@@ -747,7 +778,7 @@ export const NativeCompactAfterHookPayloadSchema = Schema.transform(
 );
 export type NativeCompactAfterHookPayload = typeof NativeCompactAfterHookPayloadSchema.Type;
 
-export const NativeNotificationHookPayloadSchema = Schema.transform(
+export const NativeNotificationHookPayloadSchema = transformHookPayload(
   Schema.Struct({
     target: HookTargetContextSchema,
     message: Schema.optional(Schema.String),
@@ -779,7 +810,7 @@ export const NativeNotificationHookPayloadSchema = Schema.transform(
 );
 export type NativeNotificationHookPayload = typeof NativeNotificationHookPayloadSchema.Type;
 
-export const NativeHookPayloadSchema = Schema.Union(
+export const NativeHookPayloadSchema = Schema.Union([
   NativeToolBeforeHookPayloadSchema,
   NativeToolAfterHookPayloadSchema,
   NativePromptSubmitHookPayloadSchema,
@@ -793,10 +824,10 @@ export const NativeHookPayloadSchema = Schema.Union(
   NativeCompactBeforeHookPayloadSchema,
   NativeCompactAfterHookPayloadSchema,
   NativeNotificationHookPayloadSchema,
-);
+]);
 export type NativeHookPayload = typeof NativeHookPayloadSchema.Type;
 
-export const ToolBeforeHookResultSchema = Schema.Union(
+export const ToolBeforeHookResultSchema = Schema.Union([
   Schema.Struct({
     decision: Schema.Literal("continue"),
     updatedInput: Schema.optional(Schema.Unknown),
@@ -808,7 +839,7 @@ export const ToolBeforeHookResultSchema = Schema.Union(
     message: Schema.String,
     systemMessage: Schema.optional(Schema.String),
   }),
-);
+]);
 export type ToolBeforeHookResult = typeof ToolBeforeHookResultSchema.Type;
 
 export const ContinueHookResultSchema = Schema.Struct({
@@ -836,7 +867,7 @@ export const PermissionAllowHookResultSchema = Schema.Struct({
 });
 export type PermissionAllowHookResult = typeof PermissionAllowHookResultSchema.Type;
 
-export const PermissionRequestHookResultSchema = Schema.Union(
+export const PermissionRequestHookResultSchema = Schema.Union([
   ContinueHookResultSchema,
   PermissionAllowHookResultSchema,
   Schema.Struct({
@@ -847,10 +878,10 @@ export const PermissionRequestHookResultSchema = Schema.Union(
     decision: Schema.Literal("block"),
     message: Schema.String,
   }),
-);
+]);
 export type PermissionRequestHookResult = typeof PermissionRequestHookResultSchema.Type;
 
-export const StopHookResultSchema = Schema.Union(
+export const StopHookResultSchema = Schema.Union([
   Schema.Struct({
     decision: Schema.Literal("continue"),
     systemMessage: Schema.optional(Schema.String),
@@ -859,16 +890,16 @@ export const StopHookResultSchema = Schema.Union(
     decision: Schema.Literal("block"),
     message: Schema.String,
   }),
-);
+]);
 export type StopHookResult = typeof StopHookResultSchema.Type;
 
-export const BlockableHookResultSchema = Schema.Union(
+export const BlockableHookResultSchema = Schema.Union([
   ContinueHookResultSchema,
   Schema.Struct({
     decision: Schema.Literal("block"),
     message: Schema.String,
   }),
-);
+]);
 export type BlockableHookResult = typeof BlockableHookResultSchema.Type;
 
 export const PromptSubmitHookResultSchema = BlockableHookResultSchema;
@@ -880,7 +911,7 @@ export const NotificationHookResultSchema = Schema.Struct({
 });
 export type NotificationHookResult = typeof NotificationHookResultSchema.Type;
 
-export const HookEventResultSchema = Schema.Union(
+export const HookEventResultSchema = Schema.Union([
   Schema.Struct({
     event: Schema.Literal("tool.before"),
     result: ToolBeforeHookResultSchema,
@@ -933,10 +964,10 @@ export const HookEventResultSchema = Schema.Union(
     event: Schema.Literal("notification"),
     result: NotificationHookResultSchema,
   }),
-);
+]);
 export type HookEventResult = typeof HookEventResultSchema.Type;
 
-export const HookResultSchema = Schema.Union(
+export const HookResultSchema = Schema.Union([
   ToolBeforeHookResultSchema,
   ToolAfterHookResultSchema,
   BlockableHookResultSchema,
@@ -944,12 +975,12 @@ export const HookResultSchema = Schema.Union(
   ObservationalHookResultSchema,
   StopHookResultSchema,
   NotificationHookResultSchema,
-);
+]);
 export type HookResult = typeof HookResultSchema.Type;
 
 export const hookResultSchemaForEvent = (
   event: HookEvent,
-): Schema.Schema.AnyNoContext => {
+): Schema.Codec<unknown, unknown, never, never> => {
   switch (event) {
     case "tool.before":
       return ToolBeforeHookResultSchema;
@@ -981,11 +1012,11 @@ export const hookResultSchemaForEvent = (
 };
 
 export const decodeHookResultForEvent = (event: HookEvent, result: unknown) =>
-  Schema.decodeUnknownEither(hookResultSchemaForEvent(event))(result);
+  Schema.decodeUnknownResult(hookResultSchemaForEvent(event))(result);
 
 export const nativeHookPayloadSchemaForEvent = (
   event: HookEvent,
-): Schema.Schema.AnyNoContext => {
+): Schema.Codec<unknown, unknown, never, never> => {
   switch (event) {
     case "tool.before":
       return NativeToolBeforeHookPayloadSchema;
@@ -1017,7 +1048,7 @@ export const nativeHookPayloadSchemaForEvent = (
 };
 
 export const decodeNativeHookPayloadForEvent = (event: HookEvent, payload: unknown) =>
-  Schema.decodeUnknownEither(nativeHookPayloadSchemaForEvent(event))(payload);
+  Schema.decodeUnknownResult(nativeHookPayloadSchemaForEvent(event))(payload);
 
 export class Hook extends Schema.Class<Hook>("Hook")({
   name: Schema.String,
@@ -1026,8 +1057,10 @@ export class Hook extends Schema.Class<Hook>("Hook")({
   event: HookEventSchema,
   targets: Schema.Array(Schema.String),
   match: NormalizedHookMatchSchema,
-  handle: Schema.Any,
-  onDegraded: Schema.optional(Schema.Literal("fail", "degrade", "skip")),
+  handle: Schema.Any.annotateKey({
+    messageMissingKey: "Declare a callable `handle` implementation for this hook.",
+  }),
+  onDegraded: Schema.optional(Schema.Literals(["fail", "degrade", "skip"])),
 }) {}
 
 export interface RefNormalizationError {
@@ -1215,13 +1248,13 @@ export const OpenCodeModelTarget = Schema.Struct({
   top_p: Schema.optional(Schema.Number),
 });
 export const OpenCodeModelPoolTarget = Schema.Struct({
-  strategy: Schema.Literal("any-of", "round-robin", "ordered"),
+  strategy: Schema.Literals(["any-of", "round-robin", "ordered"]),
   models: Schema.Array(OpenCodeModelTarget),
 });
-export const OpenCodeModelTargetBlock = Schema.Union(
+export const OpenCodeModelTargetBlock = Schema.Union([
   OpenCodeModelTarget,
   OpenCodeModelPoolTarget,
-);
+]);
 export type OpenCodeModelTarget = typeof OpenCodeModelTargetBlock.Type;
 
 export const ClaudeCodeModelTarget = Schema.Struct({
@@ -1251,10 +1284,16 @@ export type ToolSlot = typeof ToolSlotSchema.Type;
 export const CanonicalToolSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
-  input: Schema.Unknown,
-  output: Schema.Unknown,
-  slots: Schema.optional(Schema.Record({ key: Schema.String, value: ToolSlotSchema })),
-  handle: Schema.Any,
+  input: Schema.Unknown.annotateKey({
+    messageMissingKey: "Declare `input` with an Effect Schema; use `Schema.Struct({})` for a tool with no arguments.",
+  }),
+  output: Schema.Unknown.annotateKey({
+    messageMissingKey: "Declare `output` with the Effect Schema for the handler's result.",
+  }),
+  slots: Schema.optional(Schema.Record(Schema.String, ToolSlotSchema)),
+  handle: Schema.Any.annotateKey({
+    messageMissingKey: "Declare a callable `handle` implementation for this tool.",
+  }),
   // PQ-075: side-effect authority (readOnly | mutatesExternalState |
   // mutatesHarnessConfig | startsDaemon | requiresHumanApproval). Optional
   // during the default-then-require migration — see ToolAuthoritySchema.
@@ -1268,10 +1307,16 @@ export class CanonicalTool extends Schema.Class<CanonicalTool>("CanonicalTool")(
   name: Schema.String,
   sourcePath: Schema.String,
   description: Schema.String,
-  input: Schema.Unknown,
-  output: Schema.Unknown,
-  slots: Schema.Record({ key: Schema.String, value: ToolSlotSchema }),
-  handle: Schema.Any,
+  input: Schema.Unknown.annotateKey({
+    messageMissingKey: "Declare `input` with an Effect Schema; use `Schema.Struct({})` for a tool with no arguments.",
+  }),
+  output: Schema.Unknown.annotateKey({
+    messageMissingKey: "Declare `output` with the Effect Schema for the handler's result.",
+  }),
+  slots: Schema.Record(Schema.String, ToolSlotSchema),
+  handle: Schema.Any.annotateKey({
+    messageMissingKey: "Declare a callable `handle` implementation for this tool.",
+  }),
   authority: Schema.optional(ToolAuthoritySchema),
 }) {}
 
@@ -1288,7 +1333,7 @@ export const AgentSchema = Schema.Struct({
   skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
   color: Schema.optional(Schema.String),
   targets: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.Object }),
+    Schema.Record(Schema.String, Schema.ObjectKeyword),
   ),
 });
 export const AgentSourceSchema = AgentSchema;
@@ -1303,7 +1348,7 @@ export class Agent extends Schema.Class<Agent>("Agent")({
   model: Schema.optional(Schema.String),
   skills: Schema.Array(Schema.String),
   color: Schema.optional(Schema.String),
-  targets: Schema.Record({ key: Schema.String, value: Schema.Object }),
+  targets: Schema.Record(Schema.String, Schema.ObjectKeyword),
 }) {}
 
 // ---------------------------------------------------------------------------
@@ -1329,14 +1374,14 @@ export class Contract extends Schema.Class<Contract>("Contract")({
 
 export const ModelProfileSchema = Schema.Struct({
   description: Schema.optional(Schema.String),
-  targets: Schema.Record({ key: Schema.String, value: Schema.Object }),
+  targets: Schema.Record(Schema.String, Schema.ObjectKeyword),
 });
 export type ModelProfile = typeof ModelProfileSchema.Type;
 
 export const ModelspaceSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
-  profiles: Schema.Record({ key: Schema.String, value: ModelProfileSchema }),
+  profiles: Schema.Record(Schema.String, ModelProfileSchema),
 });
 export const ModelspaceSourceSchema = ModelspaceSchema;
 export type ModelspaceSource = typeof ModelspaceSourceSchema.Type;
@@ -1345,7 +1390,7 @@ export class Modelspace extends Schema.Class<Modelspace>("Modelspace")({
   name: Schema.String,
   sourcePath: Schema.String,
   description: Schema.optional(Schema.String),
-  profiles: Schema.Record({ key: Schema.String, value: ModelProfileSchema }),
+  profiles: Schema.Record(Schema.String, ModelProfileSchema),
 }) {}
 
 // ---------------------------------------------------------------------------
@@ -1364,14 +1409,14 @@ export type SkillTargetBinding = typeof SkillTargetBindingSchema.Type;
 
 export const SkillDefinitionSchema = Schema.Struct({
   description: Schema.optional(Schema.String),
-  targets: Schema.Record({ key: Schema.String, value: SkillTargetBindingSchema }),
+  targets: Schema.Record(Schema.String, SkillTargetBindingSchema),
 });
 export type SkillDefinition = typeof SkillDefinitionSchema.Type;
 
 export const SkillspaceSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
-  skills: Schema.Record({ key: Schema.String, value: SkillDefinitionSchema }),
+  skills: Schema.Record(Schema.String, SkillDefinitionSchema),
 });
 export type SkillspaceInput = typeof SkillspaceSchema.Type;
 export const SkillspaceSourceSchema = SkillspaceSchema;
@@ -1381,7 +1426,7 @@ export class Skillspace extends Schema.Class<Skillspace>("Skillspace")({
   name: Schema.String,
   sourcePath: Schema.String,
   description: Schema.optional(Schema.String),
-  skills: Schema.Record({ key: Schema.String, value: SkillDefinitionSchema }),
+  skills: Schema.Record(Schema.String, SkillDefinitionSchema),
 }) {}
 
 // ---------------------------------------------------------------------------

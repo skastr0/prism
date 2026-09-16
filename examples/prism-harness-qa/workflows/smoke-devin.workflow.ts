@@ -30,12 +30,12 @@ const ReviewOutput = Schema.Struct({
   summary: Schema.String,
   findings: Schema.Array(
     Schema.Struct({
-      severity: Schema.Literal("high", "med", "low"),
+      severity: Schema.Literals(["high", "med", "low"]),
       loc: Schema.String,
       issue: Schema.String,
     }),
   ),
-  verdict: Schema.Literal("ship", "fix-then-ship", "block"),
+  verdict: Schema.Literals(["ship", "fix-then-ship", "block"]),
   evidence: Schema.Array(Schema.String),
 });
 

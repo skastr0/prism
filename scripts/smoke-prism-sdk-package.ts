@@ -95,8 +95,8 @@ const manifest = emptyCompileManifest();
 const encoded = encodeCompileManifest(manifest);
 const decoded = decodeCompileManifest(encoded);
 
-if (decoded._tag !== "Right") throw new Error("compile manifest did not decode");
-if (!verifyCompileManifestHash(decoded.right)) throw new Error("compile manifest hash did not verify");
+if (decoded._tag !== "Success") throw new Error("compile manifest did not decode");
+if (!verifyCompileManifestHash(decoded.success)) throw new Error("compile manifest hash did not verify");
 if (parseNamedRef("core:builder").pluginPrefix !== "core") throw new Error("named ref did not parse");
 if (parseSpaceItemRef("models/builder", "/")?.space !== "models") throw new Error("space item ref did not parse");
 if (!encodeSnapshotManifest(emptySnapshotManifest({ harness: "codex-cli", root: "/tmp" })).includes('"version": 1')) {

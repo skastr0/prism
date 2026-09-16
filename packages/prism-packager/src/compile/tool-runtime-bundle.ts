@@ -411,26 +411,24 @@ const describeToolAdapterSpec = (spec: ToolAdapterSpec): string =>
 const safeIdentifier = (value: string): string =>
   value.replace(/[^a-zA-Z0-9_$]/g, "_").replace(/^[^a-zA-Z_$]/, "_$&");
 
-const SCHEMA_ANNOTATION_HELPERS = `const extractStringAnnotation = (
-  ast: SchemaAST.AST,
-  annotationId: symbol,
-): string | undefined => {
-  const annotation = SchemaAST.getAnnotation<string>(annotationId)(ast);
-  return annotation._tag === "Some" ? annotation.value : undefined;
-};
+const SCHEMA_ANNOTATION_HELPERS = `const extractDescriptionOrTitle = (ast: SchemaAST.AST): string | undefined =>
+  SchemaAST.resolveDescription(ast) ?? SchemaAST.resolveTitle(ast);
 
-const extractDescriptionOrTitle = (ast: SchemaAST.AST): string | undefined =>
-  extractStringAnnotation(ast, SchemaAST.DescriptionAnnotationId) ??
-  extractStringAnnotation(ast, SchemaAST.TitleAnnotationId);`;
+/** A node's encoded side is its wire shape; refinements and transformations do not change it. */
+const encodedAstOf = (ast: SchemaAST.AST): SchemaAST.AST =>
+  ast.encoding === undefined ? ast : encodedAstOf(ast.encoding[ast.encoding.length - 1]!.to);
+
+const isFreeFormAst = (ast: SchemaAST.AST): boolean =>
+  SchemaAST.isUnknown(ast) || SchemaAST.isAny(ast);`;
 
 const TOOL_SURFACE_RUNTIME_TYPES = `type JsonSchema = Record<string, any>;
 type ZodSchema = z.ZodType<any, any>;
 type ToolSurface = {
   description?: string;
-  input?: Schema.Schema.AnyNoContext;
-  output?: Schema.Schema.AnyNoContext;
-  Input?: Schema.Schema.AnyNoContext;
-  Output?: Schema.Schema.AnyNoContext;
+  input?: Schema.Top;
+  output?: Schema.Top;
+  Input?: Schema.Top;
+  Output?: Schema.Top;
   handle: (input: unknown, context: ToolRuntimeContext) => Promise<unknown>;
 };
 
@@ -462,8 +460,8 @@ const astToJsonSchema = (ast: SchemaAST.AST): JsonSchema =>
     errorPrefix: schemaBridgeName,
   });
 
-const inputJsonSchemaFromEffectSchema = (schema: Schema.Schema.AnyNoContext): JsonSchema => {
-  if (schema.ast._tag !== "TypeLiteral") {
+const inputJsonSchemaFromEffectSchema = (schema: Schema.Top): JsonSchema => {
+  if (!SchemaAST.isObjects(schema.ast)) {
     unsupportedAst(schema.ast, "top-level Input must be a Schema.Struct");
   }
   return astToJsonSchema(schema.ast);
@@ -485,92 +483,74 @@ const unionToZod = (members: ZodSchema[]): ZodSchema => {
 };
 
 const astToZodSchema = (ast: SchemaAST.AST): ZodSchema => {
-  switch (ast._tag) {
-    case "StringKeyword":
-      return z.string();
-    case "NumberKeyword":
-      return z.number();
-    case "BooleanKeyword":
-      return z.boolean();
-    case "UnknownKeyword":
-      return z.any();
-    case "UndefinedKeyword":
-      return z.undefined();
-    case "Literal":
-      return literalToZod(ast.literal as string | number | boolean | null);
-    case "Union": {
-      const nonUndefined = ast.types.filter((type) => type._tag !== "UndefinedKeyword");
-      return unionToZod(nonUndefined.map(astToZodSchema));
-    }
-    case "TupleType": {
-      if (ast.elements.length === 0 && ast.rest.length === 1) {
-        return z.array(astToZodSchema(ast.rest[0]!.type));
-      }
-      unsupportedAst(ast, "tuple elements=" + ast.elements.length + ", rest=" + ast.rest.length);
-    }
-    case "TypeLiteral": {
-      // Pure Schema.Record → open string-keyed map (JSON Schema additionalProperties).
-      if (ast.propertySignatures.length === 0 && ast.indexSignatures.length > 0) {
-        const index = ast.indexSignatures[0]!;
-        if (index.type._tag === "UnknownKeyword" || index.type._tag === "AnyKeyword") {
-          return z.record(z.string(), z.unknown());
-        }
-        return z.record(z.string(), astToZodSchema(index.type));
-      }
-      const properties: Record<string, ZodSchema> = {};
-      for (const prop of ast.propertySignatures) {
-        const description = extractDescriptionOrTitle(prop.type);
-        let property = astToZodSchema(prop.type);
-        if (description) property = property.describe(description);
-        properties[String(prop.name)] = prop.isOptional ? property.optional() : property;
-      }
-      let objectSchema = z.object(properties);
-      if (ast.indexSignatures.length > 0) {
-        const index = ast.indexSignatures[0]!;
-        const value =
-          index.type._tag === "UnknownKeyword" || index.type._tag === "AnyKeyword"
-            ? z.unknown()
-            : astToZodSchema(index.type);
-        objectSchema = objectSchema.catchall(value);
-      }
-      return objectSchema;
-    }
-    case "Refinement":
-      return astToZodSchema(ast.from);
-    case "Transformation":
-      return astToZodSchema(ast.from);
-    case "Suspend":
-      return astToZodSchema(ast.f());
-    default:
-      unsupportedAst(ast);
+  const target = encodedAstOf(ast);
+  if (SchemaAST.isString(target)) return z.string();
+  if (SchemaAST.isNumber(target)) return z.number();
+  if (SchemaAST.isBoolean(target)) return z.boolean();
+  if (isFreeFormAst(target)) return z.any();
+  if (SchemaAST.isUndefined(target)) return z.undefined();
+  if (SchemaAST.isNull(target)) return z.null();
+  if (SchemaAST.isLiteral(target)) {
+    return literalToZod(target.literal as string | number | boolean | null);
   }
+  if (SchemaAST.isUnion(target)) {
+    const nonUndefined = target.types.filter((type) => !SchemaAST.isUndefined(type));
+    return unionToZod(nonUndefined.map(astToZodSchema));
+  }
+  if (SchemaAST.isArrays(target)) {
+    // A simple array has no fixed elements and exactly one rest element, which
+    // is the element AST itself (not a type wrapper as in v3).
+    if (target.elements.length === 0 && target.rest.length === 1) {
+      return z.array(astToZodSchema(target.rest[0]!));
+    }
+    unsupportedAst(target, "array elements=" + target.elements.length + ", rest=" + target.rest.length);
+  }
+  if (SchemaAST.isObjects(target)) {
+    // Pure Schema.Record → open string-keyed map (JSON Schema additionalProperties).
+    if (target.propertySignatures.length === 0 && target.indexSignatures.length > 0) {
+      const index = target.indexSignatures[0]!;
+      if (isFreeFormAst(index.type)) return z.record(z.string(), z.unknown());
+      return z.record(z.string(), astToZodSchema(index.type));
+    }
+    const properties: Record<string, ZodSchema> = {};
+    for (const prop of target.propertySignatures) {
+      const description = extractDescriptionOrTitle(prop.type);
+      let property = astToZodSchema(prop.type);
+      if (description) property = property.describe(description);
+      properties[String(prop.name)] = SchemaAST.isOptional(prop.type) ? property.optional() : property;
+    }
+    let objectSchema = z.object(properties);
+    if (target.indexSignatures.length > 0) {
+      const index = target.indexSignatures[0]!;
+      const value = isFreeFormAst(index.type) ? z.unknown() : astToZodSchema(index.type);
+      objectSchema = objectSchema.catchall(value);
+    }
+    return objectSchema;
+  }
+  if (SchemaAST.isSuspend(target)) return astToZodSchema(target.thunk());
+  return unsupportedAst(target);
 };
 
 const unwrapObjectAst = (ast: SchemaAST.AST): SchemaAST.AST => {
-  switch (ast._tag) {
-    case "Refinement":
-      return unwrapObjectAst(ast.from);
-    case "Transformation":
-      return unwrapObjectAst(ast.from);
-    case "Suspend":
-      return unwrapObjectAst(ast.f());
-    default:
-      return ast;
+  if (ast.encoding !== undefined) {
+    return unwrapObjectAst(ast.encoding[ast.encoding.length - 1]!.to);
   }
+  if (SchemaAST.isSuspend(ast)) return unwrapObjectAst(ast.thunk());
+  return ast;
 };
 
 const objectZodFromEffectSchema = (
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.Top,
   topLevelName: "Input/input" | "Output/output",
 ): ZodSchema => {
   const ast = unwrapObjectAst(schema.ast);
-  if (ast._tag !== "TypeLiteral") {
+  if (!SchemaAST.isObjects(ast)) {
     unsupportedAst(ast, "top-level " + topLevelName + " must be a Schema.Struct");
   }
   return astToZodSchema(ast);
 };
 
-const decodeWithSchema = <A>(schema: Schema.Schema<A, unknown, never>, raw: unknown): A =>
+const decodeWithSchema = <A>(schema: Schema.Codec<A, unknown, never, never>, raw: unknown): A =>
   Schema.decodeUnknownSync(schema)(raw);`;
 
 const AMP_TOOL_FACTORY_RUNTIME = `const runtimeContext = (): ToolRuntimeContext => ({
@@ -599,9 +579,9 @@ const createToolDefinition = (name: string, surface: ToolSurface) => {
     inputSchema: inputJsonSchema,
     async execute(rawArgs: Record<string, unknown>, ctx: { logger?: { log: (...args: unknown[]) => void } }) {
       try {
-        const input = decodeWithSchema(inputSchema as Schema.Schema<unknown, unknown, never>, rawArgs ?? {});
+        const input = decodeWithSchema(inputSchema as Schema.Codec<unknown, unknown, never, never>, rawArgs ?? {});
         const output = await surface.handle(input, runtimeContext());
-        const validatedOutput = decodeWithSchema(outputSchema as Schema.Schema<unknown, unknown, never>, output);
+        const validatedOutput = decodeWithSchema(outputSchema as Schema.Codec<unknown, unknown, never, never>, output);
         return JSON.stringify(validatedOutput, null, 2);
       } catch (error) {
         ctx.logger?.log("prism Amp tool failed", name, errorMessage(error));
@@ -674,9 +654,9 @@ const createToolDefinition = (name: string, surface: ToolSurface) => {
       _onUpdate?: unknown,
       ctx?: unknown,
     ) {
-      const input = decodeWithSchema(inputSchema as Schema.Schema<unknown, unknown, never>, rawArgs ?? {});
+      const input = decodeWithSchema(inputSchema as Schema.Codec<unknown, unknown, never, never>, rawArgs ?? {});
       const output = await surface.handle(input, runtimeContext(ctx, signal));
-      const validatedOutput = decodeWithSchema(outputSchema as Schema.Schema<unknown, unknown, never>, output);
+      const validatedOutput = decodeWithSchema(outputSchema as Schema.Codec<unknown, unknown, never, never>, output);
       return {
         content: [{ type: "text", text: JSON.stringify(validatedOutput, null, 2) }],
         details: { structuredContent: validatedOutput },

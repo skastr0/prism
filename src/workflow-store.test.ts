@@ -2852,7 +2852,7 @@ describe("workflow store", () => {
 
   test("unhandled dynamic task failure marks the run failed with no output", async () => {
     // PQ-166 run-status fix: an isolated task failure the program recovers from (e.g. via
-    // `Effect.either`) still marks the run 'completed' — see "isolates a crashed fan-out task"
+    // `Effect.result`) still marks the run 'completed' — see "isolates a crashed fan-out task"
     // in workflow-runner.test.ts. This pins the other half: when the author never isolates the
     // failure and it bubbles unhandled to the top of the dynamic program, the program itself
     // produced no output, so the run must be 'failed' — never read as a success by orchestrators.
@@ -2968,8 +2968,8 @@ describe("workflow store", () => {
           cacheKey: "dynamic-slow-cache",
         });
         yield* Effect.all([
-          Effect.either(wf.runTask(fail)),
-          Effect.either(wf.runTask(slow)),
+          Effect.result(wf.runTask(fail)),
+          Effect.result(wf.runTask(slow)),
         ], { concurrency: "unbounded" });
       }),
     });
@@ -3582,7 +3582,7 @@ describe("isWorkflowRunOutcomeSuccessful (PQ-174 exit code mapping)", () => {
 
   test("fails on a completed run that carries a fault-isolated failed or escalated task", () => {
     // PQ-166 fault isolation: the author program can recover from a task failure (e.g. via
-    // Effect.either) and the run itself finishes "completed" — that must still not read as
+    // Effect.result) and the run itself finishes "completed" — that must still not read as
     // success, since the underlying task failed.
     expect(isWorkflowRunOutcomeSuccessful("completed", ["completed", "failed"])).toBe(false);
     expect(isWorkflowRunOutcomeSuccessful("completed", ["completed", "escalated"])).toBe(false);

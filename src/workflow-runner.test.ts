@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Either, Fiber, Schema } from "effect";
+import { Effect, Result, Fiber, Schema } from "effect";
 import { compareCodePoint } from "@skastr0/prism-sdk/stable-json";
 import { WorkflowStore } from "./workflow-store.js";
 import { workflowTaskIdentity } from "./workflow-identity.js";
@@ -26,7 +26,7 @@ import {
 } from "./workflows.js";
 
 const PatchReport = Schema.Struct({ summary: Schema.String });
-const ReviewReport = Schema.Struct({ verdict: Schema.Literal("pass", "needs-work") });
+const ReviewReport = Schema.Struct({ verdict: Schema.Literals(["pass", "needs-work"]) });
 
 const contractMetadata = {
   contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
@@ -1176,7 +1176,7 @@ console.log(JSON.stringify(result));
     const workflow = defineWorkflow({
       name: "isolated-fanout-no-cancellation",
       run: (wf) => Effect.gen(function* () {
-        const isolated = Effect.either(
+        const isolated = Effect.result(
           wf.runTask(failure).pipe(
             Effect.tapError(() => Effect.sync(resolveIsolatedFailure)),
           ),
@@ -1249,7 +1249,7 @@ console.log(JSON.stringify(result));
       name: "bounded-fanout-isolation-smoke",
       run: (wf) => Effect.gen(function* () {
         return yield* Effect.all(
-          tasks.map((task) => Effect.either(wf.runTask(task))),
+          tasks.map((task) => Effect.result(wf.runTask(task))),
           { concurrency: "unbounded" },
         );
       }),
@@ -1504,11 +1504,11 @@ console.log(JSON.stringify(result));
         name: "fault-isolation-crash-fanout",
         run: (wf) => Effect.gen(function* () {
           const outcomes = yield* Effect.all(
-            [a, b, c].map((task) => Effect.either(wf.runTask(task))),
+            [a, b, c].map((task) => Effect.result(wf.runTask(task))),
             { concurrency: "unbounded" },
           );
           const verdict = yield* wf.runTask(fusion);
-          return { leaves: outcomes.map((outcome) => Either.isRight(outcome) ? "ok" : "failed"), verdict };
+          return { leaves: outcomes.map((outcome) => Result.isSuccess(outcome) ? "ok" : "failed"), verdict };
         }),
       });
 
@@ -1547,11 +1547,11 @@ console.log(JSON.stringify(result));
       name: "fault-isolation-repair-exhaustion-fanout",
       run: (wf) => Effect.gen(function* () {
         const outcomes = yield* Effect.all(
-          [a, b, c].map((task) => Effect.either(wf.runTask(task))),
+          [a, b, c].map((task) => Effect.result(wf.runTask(task))),
           { concurrency: "unbounded" },
         );
         const verdict = yield* wf.runTask(fusion);
-        return { leaves: outcomes.map((outcome) => Either.isRight(outcome) ? "ok" : "failed"), verdict };
+        return { leaves: outcomes.map((outcome) => Result.isSuccess(outcome) ? "ok" : "failed"), verdict };
       }),
     });
     let bCalls = 0;
@@ -1633,7 +1633,7 @@ console.log(JSON.stringify(result));
   });
 
   test("carries a worker adapter's failure metadata into an isolated fan-out result's metadata (OBS-006)", async () => {
-    // The dynamic/isolated path (Effect.either(wf.runTask(...))) settles a failed task into
+    // The dynamic/isolated path (Effect.result(wf.runTask(...))) settles a failed task into
     // WorkflowRunTaskResult via failedTaskResult — a second, separate call site from the one
     // above that also used to drop error.metadata down to bare contract metadata.
     class FakeAdapterError extends Error {
@@ -1653,8 +1653,8 @@ console.log(JSON.stringify(result));
     const workflow = defineWorkflow({
       name: "runner-obs-006-isolated-failure-metadata",
       run: (wf) => Effect.gen(function* () {
-        const outcomes = yield* Effect.all([a, b].map((task) => Effect.either(wf.runTask(task))), { concurrency: "unbounded" });
-        return { leaves: outcomes.map((outcome) => Either.isRight(outcome) ? "ok" : "failed") };
+        const outcomes = yield* Effect.all([a, b].map((task) => Effect.result(wf.runTask(task))), { concurrency: "unbounded" });
+        return { leaves: outcomes.map((outcome) => Result.isSuccess(outcome) ? "ok" : "failed") };
       }),
     });
 
@@ -1882,18 +1882,18 @@ console.log(JSON.stringify(result));
   });
 
   test("awaits forked task fibers so a failed fork does not orphan its result or the run", async () => {
-    // Effect.fork fan-out: both forked fibers are joined and their results recorded — the
+    // Effect.forkChild fan-out: both forked fibers are joined and their results recorded — the
     // failing fork is isolated, not orphaned, and the run completes.
     const a = defineTask({ id: "a", prompt: "Run a.", output: PatchReport });
     const b = defineTask({ id: "b", prompt: "Run b.", output: ReviewReport });
     const workflow = defineWorkflow({
       name: "forked-fanout-isolation",
       run: (wf) => Effect.gen(function* () {
-        const fiberA = yield* Effect.fork(wf.runTask(a));
-        const fiberB = yield* Effect.fork(Effect.either(wf.runTask(b)));
+        const fiberA = yield* Effect.forkChild(wf.runTask(a));
+        const fiberB = yield* Effect.forkChild(Effect.result(wf.runTask(b)));
         const outA = yield* Fiber.join(fiberA);
         const outB = yield* Fiber.join(fiberB);
-        return { a: outA.summary, b: Either.isRight(outB) ? "ok" : "failed" };
+        return { a: outA.summary, b: Result.isSuccess(outB) ? "ok" : "failed" };
       }),
     });
 

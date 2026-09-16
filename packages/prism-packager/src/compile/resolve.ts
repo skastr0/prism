@@ -58,19 +58,19 @@ const TEMPLATE_PARAMETER_PATTERN = /\$\{([^}]+)\}/g;
 const decodeResolvedTargetBlock = <A>(
   sourcePath: string,
   target: string,
-  schema: Schema.Schema<A, A, never>,
+  schema: Schema.Decoder<A, never>,
   value: unknown,
 ): A | SourceParseError => {
-  const result = Schema.decodeUnknownEither(schema)(value);
-  if (result._tag === "Left") {
+  const result = Schema.decodeUnknownResult(schema)(value);
+  if (result._tag === "Failure") {
     return new SourceParseError({
       sourcePath,
       kind: "modelspace",
-      message: `invalid '${target}' target block: ${result.left.message}`,
+      message: `invalid '${target}' target block: ${result.failure.message}`,
     });
   }
 
-  return result.right;
+  return result.success;
 };
 
 const stableModelPeerKey = (agent: Agent): string =>
@@ -504,7 +504,7 @@ const serializeSopPhaseContractSchema = (
   sop: Sop,
   phaseIndex: number,
   side: "input" | "output",
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.Top,
 ): Effect.Effect<Record<string, unknown>, CompileError> =>
   Effect.try({
     try: () => workflowJsonSchemaFromEffectSchema(schema),
@@ -527,7 +527,7 @@ const projectSopPhaseForManifest = (
           sop,
           phaseIndex,
           "input",
-          phase.input as Schema.Schema.AnyNoContext,
+          phase.input as Schema.Top,
         )
       : undefined;
     const output = phase.output
@@ -535,7 +535,7 @@ const projectSopPhaseForManifest = (
           sop,
           phaseIndex,
           "output",
-          phase.output as Schema.Schema.AnyNoContext,
+          phase.output as Schema.Top,
         )
       : undefined;
 

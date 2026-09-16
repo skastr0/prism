@@ -18,16 +18,16 @@ const schemaNode = (nodes: Record<string, unknown>, name: string): TestSchemaNod
 test("toolArgsFromSchema maps supported Effect schema shapes", () => {
   const args = toolArgsFromSchema(
     Schema.Struct({
-      name: Schema.String.annotations({ description: "User-visible name" }),
+      name: Schema.String.annotate({ description: "User-visible name" }),
       count: Schema.Number,
       enabled: Schema.Boolean,
       payload: Schema.Unknown,
-      payloadTitle: Schema.Unknown.annotations({ title: "Payload title" }),
-      mode: Schema.Literal("fast", "slow"),
+      payloadTitle: Schema.Unknown.annotate({ title: "Payload title" }),
+      mode: Schema.Literals(["fast", "slow"]),
       tags: Schema.Array(Schema.String),
       maybeCount: Schema.optional(Schema.Number),
       nested: Schema.Struct({
-        label: Schema.String.annotations({ description: "Nested label" }),
+        label: Schema.String.annotate({ description: "Nested label" }),
         optionalScore: Schema.optional(Schema.Number),
       }),
     }),
@@ -64,11 +64,11 @@ test("toolArgsFromSchema preserves unsupported union diagnostics", () => {
   expect(() =>
     toolArgsFromSchema(
       Schema.Struct({
-        value: Schema.Union(Schema.String, Schema.Number),
+        value: Schema.Union([Schema.String, Schema.Number]),
       }),
     ),
   ).toThrow(
-    "schema-bridge: only unions of literals or optional-wrapped types are supported, got StringKeyword | NumberKeyword",
+    "schema-bridge: only unions of literals or optional-wrapped types are supported, got String | Number",
   );
 });
 

@@ -9,11 +9,11 @@ describe("workflow output JSON Schema", () => {
   test("maps common task output schemas", () => {
     const schema = workflowJsonSchemaFromEffectSchema(
       Schema.Struct({
-        summary: Schema.String.annotations({ description: "Short result summary" }),
+        summary: Schema.String.annotate({ description: "Short result summary" }),
         count: Schema.Number,
         ok: Schema.Boolean,
         tags: Schema.Array(Schema.String),
-        mode: Schema.Literal("pass", "fail"),
+        mode: Schema.Literals(["pass", "fail"]),
         maybeScore: Schema.optional(Schema.Number),
         nullableNote: Schema.NullOr(Schema.String),
       }),
@@ -43,7 +43,7 @@ describe("workflow output JSON Schema", () => {
   test("keeps unsupported schemas opportunistic", () => {
     expect(tryWorkflowJsonSchemaFromEffectSchema(
       Schema.Struct({
-        value: Schema.Union(Schema.String, Schema.Number),
+        value: Schema.Union([Schema.String, Schema.Number]),
       }),
     )).toBeUndefined();
 
@@ -56,7 +56,7 @@ describe("workflow output JSON Schema", () => {
     )).toBeUndefined();
 
     expect(tryWorkflowJsonSchemaFromEffectSchema(
-      Schema.Struct({ counts: Schema.Record({ key: Schema.String, value: Schema.Number }) }),
+      Schema.Struct({ counts: Schema.Record(Schema.String, Schema.Number) }),
     )).toBeUndefined();
   });
 });

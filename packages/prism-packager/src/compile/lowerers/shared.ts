@@ -309,7 +309,7 @@ const renderHookWrapperNormalizePayload = (options: {
 const renderHookWrapperExecution = (
   event: Hook["event"],
 ): string => `const unwrapDecode = (decoded, label) => {
-  if (decoded && decoded._tag === "Right") return decoded.right;
+  if (decoded && decoded._tag === "Success") return decoded.success;
   throw new Error("prism hook " + label + " validation failed");
 };
 

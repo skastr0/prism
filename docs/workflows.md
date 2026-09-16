@@ -207,11 +207,11 @@ export const workflow = defineWorkflow({
   run: (wf) =>
     Effect.gen(function* () {
       const settled = yield* Effect.all(
-        seats.map((seat) => Effect.either(wf.runTask(councilTask(seat)))),
+        seats.map((seat) => Effect.result(wf.runTask(councilTask(seat)))),
         { concurrency: "unbounded" },
       ).pipe(Effect.withSpan("council.fanout"));
 
-      const reports = settled.flatMap((r) => (r._tag === "Right" ? [r.right] : []));
+      const reports = settled.flatMap((r) => (r._tag === "Success" ? [r.success] : []));
       return yield* wf.runTask(synthesisTask(reports));
     }),
 });
@@ -229,7 +229,7 @@ interface WorkflowRuntime {
 Composition is plain Effect — everything composes the way Effect always does:
 
 - `Effect.all([...], { concurrency })` — bounded or unbounded fan-out
-- `Effect.either(wf.runTask(t))` — isolate one arm's failure so a council survives a dead seat
+- `Effect.result(wf.runTask(t))` — isolate one arm's failure so a council survives a dead seat
 - `Effect.withSpan("name")` — author-level spans that land in the recorded trace next to the engine's own
 - Loops, conditionals, retries, races — ordinary Effect control flow around `runTask`
 

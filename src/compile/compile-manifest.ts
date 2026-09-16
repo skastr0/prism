@@ -60,9 +60,9 @@ export const readCompileManifest = async (
   if (!(await exists(path))) return { manifest: emptyCompileManifest() };
 
   const decoded = decodeCompileManifest(await readFile(path));
-  if (decoded && typeof decoded === "object" && "_tag" in decoded && decoded._tag === "Right") {
-    if (verifyManifestIntegrity(decoded.right)) {
-      return { manifest: decoded.right };
+  if (decoded && typeof decoded === "object" && "_tag" in decoded && decoded._tag === "Success") {
+    if (verifyManifestIntegrity(decoded.success)) {
+      return { manifest: decoded.success };
     }
   }
 

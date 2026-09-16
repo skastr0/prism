@@ -30,8 +30,8 @@ const listHarnessManifests = async (
     if (!name.endsWith(".json") || name.includes(".corrupt-")) continue;
     try {
       const decoded = decodeSnapshotManifest(await readFile(join(dir, name)));
-      if (decoded._tag === "Right" && decoded.right.harness === harness) {
-        out.push(decoded.right);
+      if (decoded._tag === "Success" && decoded.success.harness === harness) {
+        out.push(decoded.success);
       }
     } catch {
       // skip

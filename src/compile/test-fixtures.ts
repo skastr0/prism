@@ -1,14 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { effectBundleImportPath } from "./runtime-deps.js";
 
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js"
-).replace(/\\/g, "/");
+// Track whatever Effect release is installed instead of a fixed dist layout:
+// v3 shipped `dist/esm/index.js`, v4 ships `dist/index.js`.
+const effectImportPath = effectBundleImportPath().replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
@@ -330,13 +326,13 @@ export default {
   name: "create_glyph",
   description: "Create a protocol-owned glyph",
   input: Schema.Struct({
-    board: Schema.Literal("project-alpha", "project-beta"),
+    board: Schema.Literals(["project-alpha", "project-beta"]),
     id: Schema.String,
     title: Schema.String,
   }),
   output: Schema.Struct({
     acknowledged: Schema.Boolean,
-    board: Schema.Literal("project-alpha", "project-beta"),
+    board: Schema.Literals(["project-alpha", "project-beta"]),
     id: Schema.String,
   }),
   async handle(input, context) {

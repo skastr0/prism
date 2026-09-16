@@ -21,11 +21,17 @@ import {
   refreshHarnessTypes,
 } from "./harness-types-discover.js";
 import { renderHarnessModelsModule, type HarnessTypesSnapshot } from "./harness-types.js";
-import { buildWorkflowPaths } from "./workflow-tsconfig.js";
+import { buildWorkflowPaths, resolveWorkflowTypeDirs } from "./workflow-tsconfig.js";
 
 const ts = createRequire(import.meta.url)("typescript") as typeof TypeScript;
 const srcDir = dirname(fileURLToPath(import.meta.url));
-const effectDts = join(srcDir, "..", "node_modules", "effect", "dist", "dts", "index.d.ts");
+// Derived from the resolver so the test tracks the installed Effect layout
+// (v3 shipped dist/dts, v4 ships dist).
+const { effectDtsDir } = resolveWorkflowTypeDirs();
+if (effectDtsDir === undefined) {
+  throw new Error("harness-types.test.ts: effect declarations could not be resolved");
+}
+const effectDts = join(effectDtsDir, "index.d.ts");
 
 const typecheckPluginFreeWorkflow = async (
   model: string,

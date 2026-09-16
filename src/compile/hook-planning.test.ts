@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Cause, Effect, Option } from "effect";
 import { planHooksForTarget, type HookFidelityEntry } from "./hook-planning.js";
 import { Hook, type HookEvent } from "./sources.js";
 
@@ -62,12 +62,12 @@ describe("hook-planning 9-cell policy matrix", () => {
       const exit = Effect.runSyncExit(planHooksForTarget([hook], "pi"));
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
-        const error = exit.cause;
-        expect(error._tag).toBe("Fail");
-        if (error._tag === "Fail") {
-          expect(error.error._tag).toBe("SourceParseError");
-          if (error.error._tag === "SourceParseError") {
-            expect(error.error.message).toContain("dropped controls");
+        const error = Cause.findErrorOption(exit.cause);
+        expect(Option.isSome(error)).toBe(true);
+        if (Option.isSome(error)) {
+          expect(error.value._tag).toBe("SourceParseError");
+          if (error.value._tag === "SourceParseError") {
+            expect(error.value.message).toContain("dropped controls");
           }
         }
       }
@@ -115,12 +115,12 @@ describe("hook-planning 9-cell policy matrix", () => {
       const exit = Effect.runSyncExit(planHooksForTarget([hook], "openclaw"));
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
-        const error = exit.cause;
-        expect(error._tag).toBe("Fail");
-        if (error._tag === "Fail") {
-          expect(error.error._tag).toBe("SourceParseError");
-          if (error.error._tag === "SourceParseError") {
-            expect(error.error.message).toContain("is unsupported");
+        const error = Cause.findErrorOption(exit.cause);
+        expect(Option.isSome(error)).toBe(true);
+        if (Option.isSome(error)) {
+          expect(error.value._tag).toBe("SourceParseError");
+          if (error.value._tag === "SourceParseError") {
+            expect(error.value.message).toContain("is unsupported");
           }
         }
       }

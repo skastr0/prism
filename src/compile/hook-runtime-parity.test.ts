@@ -425,19 +425,19 @@ test("parity check: decodeNativeHookPayloadForEvent for all 13 events", () => {
         console.log("FAIL VALID PAYLOAD tag mismatch:", event, JSON.stringify(validPayload), "our:", ourResult, "ts:", tsResult);
       }
       expect(ourResult._tag).toBe(tsResult._tag);
-      if (ourResult._tag === "Right" && tsResult._tag === "Right") {
-        expect(ourResult.right).toEqual(tsResult.right);
+      if (ourResult._tag === "Success" && tsResult._tag === "Success") {
+        expect(ourResult.success).toEqual(tsResult.success);
       }
     }
     for (const invalidPayload of fixture.invalid) {
       const ourResult = generated.decodeNativeHookPayloadForEvent(event, invalidPayload);
       const tsResult = sources.decodeNativeHookPayloadForEvent(event, invalidPayload);
 
-      if (ourResult._tag !== "Left" || tsResult._tag !== "Left") {
+      if (ourResult._tag !== "Failure" || tsResult._tag !== "Failure") {
         console.log("FAIL INVALID PAYLOAD not Left:", event, JSON.stringify(invalidPayload), "our:", ourResult, "ts:", tsResult);
       }
-      expect(ourResult._tag).toBe("Left");
-      expect(tsResult._tag).toBe("Left");
+      expect(ourResult._tag).toBe("Failure");
+      expect(tsResult._tag).toBe("Failure");
     }
   }
 });
@@ -454,19 +454,19 @@ test("parity check: decodeHookResultForEvent for all 13 events", () => {
         console.log("FAIL VALID RESULT tag mismatch:", event, JSON.stringify(validResult), "our:", ourResult, "ts:", tsResult);
       }
       expect(ourResult._tag).toBe(tsResult._tag);
-      if (ourResult._tag === "Right" && tsResult._tag === "Right") {
-        expect(ourResult.right).toEqual(tsResult.right);
+      if (ourResult._tag === "Success" && tsResult._tag === "Success") {
+        expect(ourResult.success).toEqual(tsResult.success);
       }
     }
     for (const invalidResult of fixture.invalid) {
       const ourResult = generated.decodeHookResultForEvent(event, invalidResult);
       const tsResult = sources.decodeHookResultForEvent(event, invalidResult);
 
-      if (ourResult._tag !== "Left" || tsResult._tag !== "Left") {
+      if (ourResult._tag !== "Failure" || tsResult._tag !== "Failure") {
         console.log("FAIL INVALID RESULT not Left:", event, JSON.stringify(invalidResult), "our:", ourResult, "ts:", tsResult);
       }
-      expect(ourResult._tag).toBe("Left");
-      expect(tsResult._tag).toBe("Left");
+      expect(ourResult._tag).toBe("Failure");
+      expect(tsResult._tag).toBe("Failure");
     }
   }
 });

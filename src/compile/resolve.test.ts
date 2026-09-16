@@ -26,7 +26,7 @@ const getFailure = <E>(
   if (exit._tag !== "Failure") {
     throw new Error("Expected effect to fail");
   }
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) {
     throw new Error("Expected typed failure");
   }

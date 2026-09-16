@@ -186,7 +186,7 @@ export function defineWorkflow(definition) {
 }
 
 export const decodeTaskOutput = (task, value) =>
-  Schema.decodeUnknownEither(task.output)(value);
+  Schema.decodeUnknownResult(task.output)(value);
 `;
 
 let importRuntimePaths: Promise<{
@@ -978,7 +978,7 @@ const unsupportedHookFieldError = (
   return undefined;
 };
 
-const isEffectSchema = (value: unknown): value is Schema.Schema.AnyNoContext =>
+const isEffectSchema = (value: unknown): value is Schema.Top =>
   Schema.isSchema(value);
 
 
@@ -997,13 +997,13 @@ const parseIdentity = (sourcePath: string): Effect.Effect<Identity, CompileError
     }
 
     const { data, content } = matter(raw);
-    const result = Schema.decodeUnknownEither(IdentityFrontmatter)(data);
-    if (result._tag === "Left") {
+    const result = Schema.decodeUnknownResult(IdentityFrontmatter)(data);
+    if (result._tag === "Failure") {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind: "identity",
-          message: `invalid frontmatter: ${result.left.message}`,
+          message: `invalid frontmatter: ${result.failure.message}`,
         }),
       );
     }
@@ -1014,7 +1014,7 @@ const parseIdentity = (sourcePath: string): Effect.Effect<Identity, CompileError
     return new Identity({
       name,
       sourcePath,
-      description: result.right.description,
+      description: result.success.description,
       body: content.trim(),
     });
   });
@@ -1064,18 +1064,18 @@ const parsePersonality = (
     }
 
     const { data, content } = matter(raw);
-    const result = Schema.decodeUnknownEither(PersonalityFrontmatter)(data);
-    if (result._tag === "Left") {
+    const result = Schema.decodeUnknownResult(PersonalityFrontmatter)(data);
+    if (result._tag === "Failure") {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind: "personality",
-          message: `invalid frontmatter: ${result.left.message}`,
+          message: `invalid frontmatter: ${result.failure.message}`,
         }),
       );
     }
 
-    const fm = result.right;
+    const fm = result.success;
     return new Personality({
       name: fm.name,
       sourcePath,
@@ -1133,10 +1133,10 @@ const decodeAgentDefinition = (
   sourcePath: string,
   raw: unknown,
 ): AgentDefinitionInput | SourceParseError => {
-  const result = Schema.decodeUnknownEither(AgentSchema, STRICT_PARSE_OPTIONS)(raw);
-  if (result._tag === "Right") return result.right;
+  const result = Schema.decodeUnknownResult(AgentSchema, STRICT_PARSE_OPTIONS)(raw);
+  if (result._tag === "Success") return result.success;
 
-  return agentSourceParseError(sourcePath, result.left.message);
+  return agentSourceParseError(sourcePath, result.failure.message);
 };
 
 const validateAgentFileName = (
@@ -1276,22 +1276,22 @@ const parseModelspace = (
 ): Effect.Effect<Modelspace, CompileError> =>
   Effect.gen(function* () {
     const raw = yield* importTsModule<unknown>(sourcePath, "modelspace");
-    const result = Schema.decodeUnknownEither(ModelspaceSchema)(raw);
-    if (result._tag === "Left") {
+    const result = Schema.decodeUnknownResult(ModelspaceSchema)(raw);
+    if (result._tag === "Failure") {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind: "modelspace",
-          message: result.left.message,
+          message: result.failure.message,
         }),
       );
     }
 
     return new Modelspace({
-      name: result.right.name,
+      name: result.success.name,
       sourcePath,
-      description: result.right.description,
-      profiles: result.right.profiles,
+      description: result.success.description,
+      profiles: result.success.profiles,
     });
   });
 
@@ -1328,22 +1328,22 @@ const parseSkillspace = (
 ): Effect.Effect<Skillspace, CompileError> =>
   Effect.gen(function* () {
     const raw = yield* importTsModule<unknown>(sourcePath, "skillspace");
-    const result = Schema.decodeUnknownEither(SkillspaceSchema)(raw);
-    if (result._tag === "Left") {
+    const result = Schema.decodeUnknownResult(SkillspaceSchema)(raw);
+    if (result._tag === "Failure") {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind: "skillspace",
-          message: result.left.message,
+          message: result.failure.message,
         }),
       );
     }
 
     return new Skillspace({
-      name: result.right.name,
+      name: result.success.name,
       sourcePath,
-      description: result.right.description,
-      skills: result.right.skills,
+      description: result.success.description,
+      skills: result.success.skills,
     });
   });
 
@@ -1460,8 +1460,8 @@ const normalizeSopPhaseContract = (
   index: number,
 ): Pick<NormalizedSopPhase, "input" | "output"> | SourceParseError => {
   const normalized: {
-    input?: Schema.Schema.AnyNoContext;
-    output?: Schema.Schema.AnyNoContext;
+    input?: Schema.Top;
+    output?: Schema.Top;
   } = {};
 
   for (const side of ["input", "output"] as const) {
@@ -1507,18 +1507,18 @@ const parseSopDefinition = (
     const unsupported = unsupportedSopFieldError(sourcePath, raw);
     if (unsupported) return yield* Effect.fail(unsupported);
 
-    const result = Schema.decodeUnknownEither(SopDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
-    if (result._tag === "Left") {
+    const result = Schema.decodeUnknownResult(SopDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
+    if (result._tag === "Failure") {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind: "sop",
-          message: result.left.message,
+          message: result.failure.message,
         }),
       );
     }
 
-    const parsed = result.right;
+    const parsed = result.success;
     const fileStem = stripSuffix(basename(sourcePath), [SOP_SUFFIX_TS]);
     if (parsed.name !== fileStem) {
       return yield* Effect.fail(
@@ -1606,18 +1606,18 @@ const parseHook = (sourcePath: string): Effect.Effect<Hook, CompileError> =>
     const unsupported = unsupportedHookFieldError(sourcePath, raw);
     if (unsupported) return yield* Effect.fail(unsupported);
 
-    const result = Schema.decodeUnknownEither(HookDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
-    if (result._tag === "Left") {
+    const result = Schema.decodeUnknownResult(HookDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
+    if (result._tag === "Failure") {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind: "hook",
-          message: result.left.message,
+          message: result.failure.message,
         }),
       );
     }
 
-    const parsed = result.right;
+    const parsed = result.success;
     const fileStem = stripSuffix(basename(sourcePath), [HOOK_SUFFIX_TS]);
     if (parsed.name !== fileStem) {
       return yield* Effect.fail(
@@ -1825,18 +1825,18 @@ const readPluginManifest = (
 const parseCanonicalTool = (sourcePath: string): Effect.Effect<CanonicalTool, CompileError> =>
   Effect.gen(function* () {
     const raw = yield* importTsModule<unknown>(sourcePath, "tool");
-    const result = Schema.decodeUnknownEither(CanonicalToolSchema, STRICT_PARSE_OPTIONS)(raw);
-    if (result._tag === "Left") {
+    const result = Schema.decodeUnknownResult(CanonicalToolSchema, STRICT_PARSE_OPTIONS)(raw);
+    if (result._tag === "Failure") {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind: "tool",
-          message: result.left.message,
+          message: result.failure.message,
         }),
       );
     }
 
-    const parsed = result.right;
+    const parsed = result.success;
     const fileStem = stripSuffix(basename(sourcePath), [TOOL_SUFFIX_TS]);
     if (parsed.name !== fileStem) {
       return yield* Effect.fail(

@@ -7,7 +7,7 @@ import { exists, readFile } from "./fs.js";
 export const PRISM_CONFIG_SCHEMA_VERSION = 1;
 export const DEFAULT_BACKUP_RETENTION_PER_TARGET = 3;
 
-export const BackupModeSchema = Schema.Literal("always", "never");
+export const BackupModeSchema = Schema.Literals(["always", "never"]);
 export type BackupMode = typeof BackupModeSchema.Type;
 
 const RawPrismConfigSchema = Schema.Struct({
@@ -36,7 +36,7 @@ export interface PrismConfig {
  * Resolve the Prism home directory from an override or the environment.
  *
  * WS2+: new code must NOT call this from library modules — consume the
- * `PrismHome` Context.Tag from src/services/prism-env.ts instead; the env
+ * `PrismHome` service from src/services/prism-env.ts instead; the env
  * read happens exactly once at the CLI edge layer.
  */
 export const resolvePrismHome = (override?: string): string => {

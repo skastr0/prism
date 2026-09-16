@@ -207,8 +207,8 @@ const readAllSnapshots = async (
     if (!name.endsWith(".json") || name.includes(".corrupt-")) continue;
     const path = join(dir, name);
     const decoded = decodeSnapshotManifest(await readFile(path));
-    if (decoded._tag === "Right") results.push({ path, manifest: decoded.right });
-    else results.push({ path, error: String(decoded.left) });
+    if (decoded._tag === "Success") results.push({ path, manifest: decoded.success });
+    else results.push({ path, error: String(decoded.failure) });
   }
   return results;
 };

@@ -11,6 +11,7 @@ import { loadPlugin } from "./load.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent } from "./resolve.js";
+import { effectImportPath } from "../testing/prism-sandbox.js";
 import {
   Agent,
   Identity,
@@ -84,22 +85,13 @@ const getFailure = (
     throw new Error("Expected compile to fail");
   }
 
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) {
     throw new Error("Expected typed compile error");
   }
 
   return failure.value as CompileError;
 };
-
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
@@ -429,13 +421,13 @@ export default {
   name: "create_glyph",
   description: "Create a protocol-owned glyph",
   input: Schema.Struct({
-    board: Schema.Literal("project-alpha", "project-beta"),
+    board: Schema.Literals(["project-alpha", "project-beta"]),
     id: Schema.String,
     title: Schema.String,
   }),
   output: Schema.Struct({
     acknowledged: Schema.Boolean,
-    board: Schema.Literal("project-alpha", "project-beta"),
+    board: Schema.Literals(["project-alpha", "project-beta"]),
     id: Schema.String,
   }),
   async handle(input, context) {
@@ -2079,7 +2071,7 @@ export default {
   name: "echo",
   description: "Echo a message through Amp.",
   input: Schema.Struct({
-    message: Schema.String.annotations({ description: "Message to echo" }),
+    message: Schema.String.annotate({ description: "Message to echo" }),
   }),
   output: Schema.Struct({ echoed: Schema.String }),
   async handle(input) {

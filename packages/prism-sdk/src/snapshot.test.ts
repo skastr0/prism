@@ -25,9 +25,9 @@ test("migrateSnapshotManifest is identity for valid v1 payload", () => {
   };
   const migrated = migrateSnapshotManifest(manifest);
 
-  expect(migrated._tag).toBe("Right");
-  if (migrated._tag !== "Right") throw new Error("expected Right");
-  expect(migrated.right).toEqual(manifest);
+  expect(migrated._tag).toBe("Success");
+  if (migrated._tag !== "Success") throw new Error("expected Right");
+  expect(migrated.success).toEqual(manifest);
 });
 
 test("migrateSnapshotManifest rejects unsupported versions", () => {
@@ -37,7 +37,7 @@ test("migrateSnapshotManifest rejects unsupported versions", () => {
     entries: [],
   });
 
-  expect(migrated._tag).toBe("Left");
+  expect(migrated._tag).toBe("Failure");
 });
 
 test("migrateSnapshotManifest rejects missing version", () => {
@@ -47,7 +47,7 @@ test("migrateSnapshotManifest rejects missing version", () => {
     entries: [],
   });
 
-  expect(migrated._tag).toBe("Left");
+  expect(migrated._tag).toBe("Failure");
 });
 
 test("encodeSnapshotManifest sorts entries deterministically by targetPath then regionKey", () => {
@@ -75,25 +75,25 @@ test("encodeSnapshotManifest sorts entries deterministically by targetPath then 
   const encoded = encodeSnapshotManifest(manifest);
   const decoded = decodeSnapshotManifest(encoded);
 
-  expect(decoded._tag).toBe("Right");
-  if (decoded._tag !== "Right") throw new Error("expected Right");
-  expect(decoded.right.entries.map((entry) => entry.targetPath)).toEqual([
+  expect(decoded._tag).toBe("Success");
+  if (decoded._tag !== "Success") throw new Error("expected Right");
+  expect(decoded.success.entries.map((entry) => entry.targetPath)).toEqual([
     "/a.md",
     "/a.md",
     "/a.md",
     "/b.md",
   ]);
-  expect(decoded.right.entries.map((entry) => entry.regionKey)).toEqual([
+  expect(decoded.success.entries.map((entry) => entry.regionKey)).toEqual([
     undefined,
     "marker # a",
     "marker # z",
     undefined,
   ]);
-  expect(encodeSnapshotManifest(decoded.right)).toBe(encoded);
+  expect(encodeSnapshotManifest(decoded.success)).toBe(encoded);
 });
 
 test("decodeSnapshotManifest rejects malformed JSON", () => {
   const decoded = decodeSnapshotManifest("{ not json");
 
-  expect(decoded._tag).toBe("Left");
+  expect(decoded._tag).toBe("Failure");
 });

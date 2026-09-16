@@ -7,6 +7,7 @@ import type { CompileError } from "./errors.js";
 import { loadPlugin, prepareImportWrapper } from "./load.js";
 import type { PluginRegistry } from "./registry.js";
 import type { Agent } from "./sources.js";
+import { effectImportPath } from "../testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
 
@@ -28,22 +29,13 @@ const getFailure = (
     throw new Error("Expected load to fail");
   }
 
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) {
     throw new Error("Expected typed load error");
   }
 
   return failure.value as CompileError;
 };
-
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 

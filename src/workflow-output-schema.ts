@@ -10,12 +10,12 @@ export { WorkflowOutputSchemaError };
 export type { WorkflowJsonSchema };
 
 export const workflowJsonSchemaFromEffectSchema = (
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.Top,
 ): WorkflowJsonSchema =>
   jsonSchemaFromEffectSchema(schema, WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS);
 
 export const tryWorkflowJsonSchemaFromEffectSchema = (
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.Top,
 ): WorkflowJsonSchema | undefined => {
   try {
     return workflowJsonSchemaFromEffectSchema(schema);

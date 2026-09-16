@@ -1,7 +1,4 @@
-import { Effect, Schema } from "effect";
-import { isLeft } from "effect/Either";
-import type { Either } from "effect/Either";
-import type { ParseError } from "effect/ParseResult";
+import { Effect, Result, Schema } from "effect";
 import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
@@ -53,7 +50,19 @@ export interface WorkflowValidationSummary {
   readonly dynamic: boolean;
 }
 
-export type WorkflowOutputSchema = Schema.Schema.AnyNoContext;
+/**
+ * Constraint for a workflow task's output schema.
+ *
+ * The load-bearing part is `never, never`: a task output schema must decode and
+ * encode without services. `Type` stays `unknown` so the generic bound cannot
+ * silently turn decoded values into `any`.
+ *
+ * `WorkflowFinishOptions` consumes `Output` in contravariant callback positions,
+ * which makes a task invariant in its output type. A heterogeneous task tuple is
+ * therefore accepted only where the output type is erased, which happens at
+ * `AnyWorkflowTask` rather than here.
+ */
+export type WorkflowOutputSchema = Schema.Codec<unknown, unknown, never, never>;
 
 export type WorkflowFinishCriterionError = Error;
 
@@ -394,7 +403,7 @@ export interface WorkflowTaskDefinition<
   readonly phase?: string;
   readonly cacheKey?: string;
   readonly worker?: WorkflowTaskWorkerOptions;
-  readonly finish?: WorkflowFinishOptions<Schema.Schema.Type<Output>>;
+  readonly finish?: WorkflowFinishOptions<Output["Type"]>;
 }
 
 export type WorkflowTask<
@@ -404,9 +413,23 @@ export type WorkflowTask<
   readonly kind: "workflow-task";
 };
 
-export type AnyWorkflowTask = WorkflowTask<string, WorkflowOutputSchema>;
+/**
+ * A workflow task whose output type is erased.
+ *
+ * A task is invariant in its output type (`WorkflowFinishOptions` consumes it in
+ * callback positions), so `defineWorkflow({ tasks: [build, review] })` only
+ * accepts a heterogeneous tuple when the element bound erases that type. The
+ * erasure is deliberately local to this bound: `WorkflowOutputSchema` keeps
+ * `unknown` so ordinary authoring and `defineTask` inference stay precise, and
+ * `WorkflowTaskOutput<Task>` still reads the concrete output of a concrete task.
+ *
+ * The encoded side and the service-free requirement (`never, never`) are not
+ * erased. This is a deliberate loss of proof at the task-collection boundary,
+ * not sound existential quantification.
+ */
+export type AnyWorkflowTask = WorkflowTask<string, Schema.Codec<any, unknown, never, never>>;
 
-export type WorkflowTaskOutput<Task extends AnyWorkflowTask> = Schema.Schema.Type<Task["output"]>;
+export type WorkflowTaskOutput<Task extends AnyWorkflowTask> = Task["output"]["Type"];
 
 export const resolveWorkflowTaskSessionPersistence = (
   task: Pick<AnyWorkflowTask, "worker">,
@@ -492,7 +515,7 @@ export type PhaseTaskFinishOptions<Output> = WorkflowFinishOptions<Output> & {
 
 /** Decoded TypeScript value of a phase input contract (unknown when no contract). */
 export type PhaseTaskInputValue<Input extends WorkflowOutputSchema | undefined> =
-  Input extends WorkflowOutputSchema ? Schema.Schema.Type<Input> : unknown;
+  Input extends WorkflowOutputSchema ? Input["Type"] : unknown;
 
 export type PhaseTaskDefinition<
   Id extends string,
@@ -502,7 +525,7 @@ export type PhaseTaskDefinition<
   readonly input?: PhaseTaskInputValue<Input>;
   readonly output?: Output;
   readonly phase?: string;
-  readonly finish?: PhaseTaskFinishOptions<Schema.Schema.Type<Output>>;
+  readonly finish?: PhaseTaskFinishOptions<Output["Type"]>;
   readonly brief?: boolean;
 };
 
@@ -626,11 +649,11 @@ const createPhaseCtx = <
 
     let inputBlock = "";
     if (contract.input !== undefined) {
-      const decoded = Schema.decodeUnknownEither(contract.input)(taskInput);
-      if (isLeft(decoded)) {
-        return Effect.fail(new WorkflowTaskInputError(phaseKey, decoded.left));
+      const decoded = Schema.decodeUnknownResult(contract.input)(taskInput);
+      if (Result.isFailure(decoded)) {
+        return Effect.fail(new WorkflowTaskInputError(phaseKey, decoded.failure));
       }
-      inputBlock = renderPhaseInputBlock(decoded.right);
+      inputBlock = renderPhaseInputBlock(decoded.success);
     } else if (taskInput !== undefined) {
       inputBlock = renderPhaseInputBlock(taskInput);
     }
@@ -783,5 +806,5 @@ export function defineWorkflow<const Name extends string, Result, Err = Workflow
 export const decodeTaskOutput = <Task extends AnyWorkflowTask>(
   task: Task,
   value: unknown,
-): Either<Schema.Schema.Type<Task["output"]>, ParseError> =>
-  Schema.decodeUnknownEither(task.output)(value);
+): Result.Result<Task["output"]["Type"], Schema.SchemaError> =>
+  Schema.decodeUnknownResult(task.output)(value);

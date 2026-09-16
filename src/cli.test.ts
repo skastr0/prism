@@ -9,18 +9,10 @@ import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { deriveProjectKey } from "./project-key.js";
 import { WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore } from "./workflow-store.js";
 import { registerWorkflowStore } from "./workflow-store-registry.js";
+import { effectImportPath } from "./testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
 const repoRoot = process.cwd();
-
-const effectImportPath = join(
-  repoRoot,
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
 
 const prismImportPath = join(repoRoot, "src", "index.ts").replace(/\\/g, "/");
 
@@ -931,7 +923,7 @@ export const workflow = defineWorkflow({
 
 test("workflow run and runs wait exit non-zero when a run completes with a fault-isolated failed task (PQ-174)", async () => {
   // PQ-166 fault isolation lets an author's `run` program recover from a task failure (e.g.
-  // via Effect.either) and finish successfully, so the persisted run status reads
+  // via Effect.result) and finish successfully, so the persisted run status reads
   // "completed" even though a task failed. That must still surface as a process failure to a
   // caller checking $? — this is the exact regression PQ-174 fixes.
   const root = await createTempRoot();
@@ -953,13 +945,13 @@ const build = defineTask({
 export const workflow = defineWorkflow({
   name: "fault-isolated-exit-code-smoke",
   run: (wf) => Effect.gen(function* () {
-    const outcome = yield* Effect.either(wf.runTask(build));
-    return { isolated: outcome._tag === "Left" };
+    const outcome = yield* Effect.result(wf.runTask(build));
+    return { isolated: outcome._tag === "Failure" };
   }),
 });
 `);
   // Deliberately fails schema decode (missing "summary") to force the task to fail; the
-  // workflow's own Effect.either isolates it, so the run itself still completes.
+  // workflow's own Effect.result isolates it, so the run itself still completes.
   await writeFile(mockOutputPath, JSON.stringify({ build: { wrong: "shape" } }));
 
   const run = await runCli([

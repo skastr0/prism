@@ -13,14 +13,14 @@
 import { Context, Effect, Ref } from "effect";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 
-export class CompileContext extends Context.Tag("prism/CompileContext")<
+export class CompileContext extends Context.Service<
   CompileContext,
   {
     readonly target: string;
     readonly pluginPath: string;
     readonly registry: Ref.Ref<PluginRegistry>;
   }
->() {}
+>()("prism/CompileContext") {}
 
 export const makeCompileContext = (params: {
   target: string;

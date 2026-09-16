@@ -9,10 +9,10 @@ import {
 
 export const COMPILE_MANIFEST_VERSION = 1 as const;
 
-export const HarnessScopeSchema = Schema.Literal("global", "project");
+export const HarnessScopeSchema = Schema.Literals(["global", "project"]);
 export type HarnessScope = typeof HarnessScopeSchema.Type;
 
-export const HarnessIdSchema = Schema.Literal(
+export const HarnessIdSchema = Schema.Literals([
   "amp-code",
   "antigravity-cli",
   "claude-code",
@@ -27,7 +27,7 @@ export const HarnessIdSchema = Schema.Literal(
   "opencode2",
   "omp",
   "pi",
-);
+]);
 export type HarnessId = typeof HarnessIdSchema.Type;
 
 export const CompileManifestPluginSchema = Schema.Struct({
@@ -42,7 +42,7 @@ export const CompileManifestTargetSchema = Schema.Struct({
 });
 export type CompileManifestTarget = typeof CompileManifestTargetSchema.Type;
 
-const JsonSchemaObjectSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const JsonSchemaObjectSchema = Schema.Record(Schema.String, Schema.Unknown);
 
 export const CompileManifestSopPhaseSchema = Schema.Struct({
   name: Schema.String,
@@ -69,13 +69,13 @@ export type CompileManifestSop = typeof CompileManifestSopSchema.Type;
  * makes declaration mandatory (hard error, per AGENTS invariant 6) once
  * enforcement (preset fail-closed gating, dry-run surfacing) lands.
  */
-export const ToolAuthoritySchema = Schema.Literal(
+export const ToolAuthoritySchema = Schema.Literals([
   "readOnly",
   "mutatesExternalState",
   "mutatesHarnessConfig",
   "startsDaemon",
   "requiresHumanApproval",
-);
+]);
 export type ToolAuthority = typeof ToolAuthoritySchema.Type;
 
 export const CompileManifestCanonicalToolSchema = Schema.Struct({
@@ -96,13 +96,7 @@ export const CompileManifestModelspaceSchema = Schema.Struct({
   modelspace: Schema.String,
   profiles: Schema.Array(Schema.String),
   profilesData: Schema.optional(
-    Schema.Record({
-      key: Schema.String,
-      value: Schema.Record({
-        key: Schema.String,
-        value: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-      }),
-    }),
+    Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Unknown))),
   ),
 });
 export type CompileManifestModelspace = typeof CompileManifestModelspaceSchema.Type;
@@ -120,7 +114,7 @@ export const CompileManifestSkillspaceSchema = Schema.Struct({
 });
 export type CompileManifestSkillspace = typeof CompileManifestSkillspaceSchema.Type;
 
-const JsonRecordSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 
 export const CompileManifestPerTargetSchema = Schema.Struct({
   scope: HarnessScopeSchema,
@@ -136,7 +130,7 @@ export const CompileManifestAgentSchema = Schema.Struct({
   skills: Schema.Array(Schema.String),
   composed: Schema.Struct({
     modelBindings: CompileManifestModelBindingsSchema,
-    perTarget: Schema.Record({ key: Schema.String, value: CompileManifestPerTargetSchema }),
+    perTarget: Schema.Record(Schema.String, CompileManifestPerTargetSchema),
   }),
   manifestHash: Schema.String,
 });
@@ -144,13 +138,13 @@ export type CompileManifestAgent = typeof CompileManifestAgentSchema.Type;
 
 const CompileManifestV1Schema = Schema.Struct({
   version: Schema.Literal(COMPILE_MANIFEST_VERSION),
-  plugins: Schema.Record({ key: Schema.String, value: CompileManifestPluginSchema }),
+  plugins: Schema.Record(Schema.String, CompileManifestPluginSchema),
   compileTargets: Schema.Array(CompileManifestTargetSchema),
-  agents: Schema.Record({ key: Schema.String, value: CompileManifestAgentSchema }),
-  modelspaces: Schema.Record({ key: Schema.String, value: CompileManifestModelspaceSchema }),
-  skills: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestManagedSkillSchema, CompileManifestSkillspaceSchema) }),
-  tools: Schema.Record({ key: Schema.String, value: CompileManifestCanonicalToolSchema }),
-  sops: Schema.Record({ key: Schema.String, value: CompileManifestSopSchema }),
+  agents: Schema.Record(Schema.String, CompileManifestAgentSchema),
+  modelspaces: Schema.Record(Schema.String, CompileManifestModelspaceSchema),
+  skills: Schema.Record(Schema.String, Schema.Union([CompileManifestManagedSkillSchema, CompileManifestSkillspaceSchema])),
+  tools: Schema.Record(Schema.String, CompileManifestCanonicalToolSchema),
+  sops: Schema.Record(Schema.String, CompileManifestSopSchema),
   manifestHash: Schema.String,
 });
 
@@ -180,8 +174,8 @@ const versionFromJson = (json: string): unknown => {
     : undefined;
 };
 
-const decodeCompileManifestPayload = Schema.decodeUnknownEither(
-  Schema.parseJson(CompileManifestSchema),
+const decodeCompileManifestPayload = Schema.decodeUnknownResult(
+  Schema.fromJsonString(CompileManifestSchema),
 );
 export type CompileManifestDecodeResult = ReturnType<typeof decodeCompileManifestPayload>;
 

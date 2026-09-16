@@ -893,7 +893,7 @@ workflow
       });
       console.log(JSON.stringify(result, null, 2));
       // A run can complete (the author program itself succeeded, e.g. by isolating a task
-      // failure via Effect.either) while still carrying a failed/escalated task — that is not
+      // failure via Effect.result) while still carrying a failed/escalated task — that is not
       // a caller-visible success. Map the persisted terminal status to the process exit code
       // so a caller's `$?` reflects the real outcome instead of always reading 0.
       const finalRunStatus = store.getRun(executionRunId!)?.status ?? "unknown";

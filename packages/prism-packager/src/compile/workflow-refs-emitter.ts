@@ -377,8 +377,8 @@ export interface WorkflowSopPhase {
   readonly name: string;
   readonly sop: string;
   readonly plugin: string;
-  readonly input?: Schema.Schema.AnyNoContext;
-  readonly output?: Schema.Schema.AnyNoContext;
+  readonly input?: Schema.Codec<unknown, unknown, never, never>;
+  readonly output?: Schema.Codec<unknown, unknown, never, never>;
   readonly criteria?: ReadonlyArray<string>;
   readonly framing?: WorkflowSopPhaseFraming;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Either, Schema } from "effect";
+import { Context, Effect, Result, Schema, SchemaTransformation } from "effect";
 import {
   decodeTaskOutput,
   defineTask,
@@ -16,6 +16,7 @@ import {
   type WorkflowTaskWorkerOptions,
   type WorkflowWorkerId,
   type WorkflowRuntime,
+  type WorkflowOutputSchema,
   type WorkflowTaskOutput,
 } from "./workflows.js";
 import { workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
@@ -65,7 +66,55 @@ const Exploration = Schema.Struct({
   options: Schema.Array(Schema.String),
 });
 
+class Multiplier extends Context.Service<Multiplier, number>()("test/Multiplier") {}
+
 describe("workflow authoring primitives", () => {
+  test("a heterogeneous task tuple keeps each task's concrete output type", () => {
+    const build = defineTask({
+      id: "build",
+      prompt: "Build.",
+      output: Schema.Struct({ summary: Schema.String }),
+    });
+    const review = defineTask({
+      id: "review",
+      prompt: "Review.",
+      output: Schema.Struct({ verdict: Schema.Boolean }),
+    });
+
+    const workflow = defineWorkflow({ name: "heterogeneous", tasks: [build, review] as const });
+    expect(workflow.tasks.map((task) => task.id)).toEqual(["build", "review"]);
+
+    // The output erasure is confined to the task-collection bound: each task
+    // still exposes its own decoded output type.
+    const built: WorkflowTaskOutput<typeof build> = { summary: "ok" };
+    const reviewed: WorkflowTaskOutput<typeof review> = { verdict: true };
+    expect(built.summary).toBe("ok");
+    expect(reviewed.verdict).toBe(true);
+
+    const decoded = decodeTaskOutput(build, { summary: "ok" });
+    expect(Result.isSuccess(decoded) && decoded.success.summary).toBe("ok");
+  });
+
+  test("the output schema bound requires never decoding and encoding services", () => {
+    const serviceful = Schema.String.pipe(
+      Schema.decodeTo(
+        Schema.Number,
+        SchemaTransformation.transformEffect({
+          decode: (value: string) =>
+            Effect.gen(function* () {
+              const multiplier = yield* Multiplier;
+              return Number(value) * multiplier;
+            }),
+          encode: (value: number) => Effect.succeed(String(value)),
+        }),
+      ),
+    );
+
+    // @ts-expect-error WorkflowOutputSchema requires never decoding and encoding services.
+    const asOutput: WorkflowOutputSchema = serviceful;
+    void asOutput;
+  });
+
   test("workflow worker id includes antigravity", () => {
     const worker = "antigravity-cli";
     const liveWorker: WorkflowWorkerId = worker;
@@ -326,12 +375,12 @@ describe("workflow authoring primitives", () => {
       summary: "emitted workflow refs",
       filesChanged: ["src/compile/workflow-refs-emitter.ts"],
     });
-    expect(Either.isRight(decoded)).toBe(true);
+    expect(Result.isSuccess(decoded)).toBe(true);
 
     const rejected = decodeTaskOutput(build, {
       summary: "missing filesChanged",
     });
-    expect(Either.isLeft(rejected)).toBe(true);
+    expect(Result.isFailure(rejected)).toBe(true);
   });
 
   test("infers decoded output type from the task schema", () => {

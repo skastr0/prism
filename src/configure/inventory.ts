@@ -72,7 +72,7 @@ const listSnapshotManifests = async (
     const path = join(dir, name);
     try {
       const decoded = decodeSnapshotManifest(await readFile(path));
-      if (decoded._tag === "Right") out.push(decoded.right);
+      if (decoded._tag === "Success") out.push(decoded.success);
     } catch {
       // skip unreadable
     }

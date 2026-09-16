@@ -1,6 +1,7 @@
-import { Either, Schema } from "effect";
+import { Result, Schema } from "effect";
+import { workflowWorkerHarnessIds } from "./lowerer-capabilities.js";
 
-export const WorkflowContinuationAdapterIdSchema = Schema.Literal(
+export const WorkflowContinuationAdapterIdSchema = Schema.Literals([
   "amp-code",
   "antigravity-cli",
   "claude-code",
@@ -13,26 +14,20 @@ export const WorkflowContinuationAdapterIdSchema = Schema.Literal(
   "opencode-cli",
   "opencode2-cli",
   "omp-cli",
-);
+]);
 export type WorkflowContinuationAdapterId = typeof WorkflowContinuationAdapterIdSchema.Type;
 
-export const WorkflowContinuationWorkerIdSchema = Schema.Literal(
-  "amp-code",
-  "antigravity-cli",
-  "claude-code",
-  "codex-cli",
-  "cursor",
-  "devin",
-  "grok",
-  "hermes",
-  "kimi-code",
-  "opencode",
-  "opencode2",
-  "omp",
-);
+/**
+ * Workflow workers that can continue a session.
+ *
+ * Derived from the `workflowWorker` bit in lowerer-capabilities.ts — the single
+ * harness enumeration — rather than re-listed here, which is what
+ * scripts/harness-enumeration-guard.ts enforces.
+ */
+export const WorkflowContinuationWorkerIdSchema = Schema.Literals(workflowWorkerHarnessIds());
 export type WorkflowContinuationWorkerId = typeof WorkflowContinuationWorkerIdSchema.Type;
 
-export const StableSessionIdSchema = Schema.NonEmptyTrimmedString.pipe(
+export const StableSessionIdSchema = Schema.NonEmptyString.check(Schema.isTrimmed()).pipe(
   Schema.brand("StableSessionId"),
 );
 export type StableSessionId = typeof StableSessionIdSchema.Type;
@@ -43,15 +38,15 @@ export const WorkflowStableSessionSchema = Schema.Struct({
 });
 export type WorkflowStableSession = typeof WorkflowStableSessionSchema.Type;
 
-export const WorkflowHarnessContinuationSupportSchema = Schema.Union(
+export const WorkflowHarnessContinuationSupportSchema = Schema.Union([
   Schema.Struct({
     adapter: WorkflowContinuationAdapterIdSchema,
     workflowWorker: Schema.Boolean,
     stableSessionIds: Schema.Literal(true),
     exactSameSessionContinuation: Schema.Literal(true),
     sessionIdField: Schema.Literal("sessionId"),
-    continueCommand: Schema.NonEmptyTrimmedString,
-    capture: Schema.NonEmptyTrimmedString,
+    continueCommand: Schema.NonEmptyString.check(Schema.isTrimmed()),
+    capture: Schema.NonEmptyString.check(Schema.isTrimmed()),
   }),
   Schema.Struct({
     adapter: WorkflowContinuationAdapterIdSchema,
@@ -59,9 +54,9 @@ export const WorkflowHarnessContinuationSupportSchema = Schema.Union(
     stableSessionIds: Schema.Literal(false),
     exactSameSessionContinuation: Schema.Literal(false),
     sessionIdField: Schema.Literal("sessionId"),
-    reason: Schema.NonEmptyTrimmedString,
+    reason: Schema.NonEmptyString.check(Schema.isTrimmed()),
   }),
-);
+]);
 export type WorkflowHarnessContinuationSupport = typeof WorkflowHarnessContinuationSupportSchema.Type;
 
 export const workflowContinuationAdapterByWorker = {
@@ -199,20 +194,20 @@ export const workflowHarnessContinuationSupport = {
 } as const satisfies Record<WorkflowContinuationAdapterId, WorkflowHarnessContinuationSupport>;
 
 const decodeAdapter = (value: unknown): WorkflowContinuationAdapterId | undefined => {
-  const result = Schema.decodeUnknownEither(WorkflowContinuationAdapterIdSchema)(value);
-  return Either.isRight(result) ? result.right : undefined;
+  const result = Schema.decodeUnknownResult(WorkflowContinuationAdapterIdSchema)(value);
+  return Result.isSuccess(result) ? result.success : undefined;
 };
 
 export const stableSessionIdFromUnknown = (value: unknown): StableSessionId | undefined => {
-  const result = Schema.decodeUnknownEither(StableSessionIdSchema)(value);
-  return Either.isRight(result) ? result.right : undefined;
+  const result = Schema.decodeUnknownResult(StableSessionIdSchema)(value);
+  return Result.isSuccess(result) ? result.success : undefined;
 };
 
 export const workflowContinuationAdapterForWorker = (
   worker: string,
 ): WorkflowContinuationAdapterId | undefined => {
-  const result = Schema.decodeUnknownEither(WorkflowContinuationWorkerIdSchema)(worker);
-  return Either.isRight(result) ? workflowContinuationAdapterByWorker[result.right] : undefined;
+  const result = Schema.decodeUnknownResult(WorkflowContinuationWorkerIdSchema)(worker);
+  return Result.isSuccess(result) ? workflowContinuationAdapterByWorker[result.success] : undefined;
 };
 
 export const workflowContinuationSupportForAdapter = (

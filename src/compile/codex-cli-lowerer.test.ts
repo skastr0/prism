@@ -12,17 +12,9 @@ import { planSync } from "../sync/plan.js";
 import { readSnapshot } from "../state/store.js";
 import { emptySnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion } from "../sync/desired.js";
+import { effectImportPath } from "../testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
-
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 

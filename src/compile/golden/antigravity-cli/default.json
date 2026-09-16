@@ -17,7 +17,7 @@
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/hooks.json"
     },
     {
-      "content": "<BUNDLE_HASH:29e8cd2793d578e8af9a51e667890f6b3eebb4c5c5dad2e9fba8c7c23859df07>",
+      "content": "<BUNDLE_HASH:6afbd5be7f7c26d94cb80859efaffb4d34692cce18447e766c8ef150390e79c1>",
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/hooks/session-start.mjs"
     },
     {

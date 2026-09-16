@@ -5,20 +5,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { computeContentHash } from "./content-hash.js";
 import { packagePluginForTarget } from "./packager.js";
+import { effectImportPath } from "./testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
 const originalPrismHome = process.env.PRISM_HOME;
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
-
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-package-"));
   tempRoots.push(root);

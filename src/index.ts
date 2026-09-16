@@ -50,7 +50,7 @@ export interface SkillspaceRefDefinition {
 export type AgentRefInput = string | AgentRefDefinition;
 export type ModelProfileRefInput = string | ModelProfileRefDefinition;
 export type SkillRefInput = SkillRefDefinition | SkillspaceRefDefinition;
-export type EffectSchemaValue = import("effect").Schema.Schema.AnyNoContext;
+export type EffectSchemaValue = import("effect").Schema.Top;
 
 export interface AgentDefinition {
   readonly name: string;

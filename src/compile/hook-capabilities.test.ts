@@ -1,23 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { SchemaAST } from "effect";
 import { getAllHarnessIds } from "../harnesses.js";
 import { HOOK_CAPABILITIES } from "./hook-capabilities.js";
 import { HookEventSchema, type HookEvent } from "./sources.js";
 
-const getHookEventsFromSchema = (): HookEvent[] => {
-  const ast = HookEventSchema.ast;
-  if (ast._tag === "Union") {
-    return ast.types.map((t) => {
-      if (t._tag === "Literal") {
-        return t.literal as HookEvent;
-      }
-      throw new Error(`Expected Literal AST, got ${t._tag}`);
-    });
-  } else if (ast._tag === "Literal") {
-    return [ast.literal as HookEvent];
-  }
-  throw new Error(`Expected Union or Literal AST, got ${ast._tag}`);
-};
+/**
+ * `HookEventSchema` is `Schema.Literals([...])`, so v4 types its AST as a union
+ * of literal nodes and the literal membership is checked statically.
+ */
+const getHookEventsFromSchema = (): HookEvent[] =>
+  HookEventSchema.ast.types.map((t) => t.literal as HookEvent);
 
 describe("hook-capabilities", () => {
   test("runtime completeness", () => {

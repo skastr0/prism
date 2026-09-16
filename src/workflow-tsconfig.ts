@@ -7,7 +7,7 @@
  *   "prism"           → <platform-package>/types/index.d.ts  (the emitted prism.d.ts)
  *   "prism/refs"      → ~/.prism/state/projects/<key>/generated/sops.ts  (per-project refs)
  *   "prism/harnesses" → ~/.prism/state/harness-types/harness-models.ts  (global, not project-keyed)
- *   "effect"          → <platform-package>/node_modules/effect/dist/dts/index.d.ts
+ *   "effect"          → <platform-package>/node_modules/effect/dist/index.d.ts
  *
  * Resolution strategy:
  *
@@ -221,7 +221,7 @@ const resolvePrismTypesDir = (): string | undefined => {
 };
 
 /**
- * Resolve effect's dist/dts directory via real node resolution from a root that
+ * Resolve effect's declaration directory via real node resolution from a root that
  * owns effect as a dependency. This handles npm's dependency HOISTING: when the
  * platform package is npm-installed, `effect` is lifted to a parent
  * node_modules rather than nested under the platform package, so a fixed
@@ -232,7 +232,7 @@ const effectDtsViaResolution = (fromRoot: string | undefined): string | undefine
   if (!fromRoot || !existsSync(join(fromRoot, "package.json"))) return undefined;
   try {
     const requireFrom = createRequire(join(fromRoot, "package.json"));
-    const candidate = join(dirname(requireFrom.resolve("effect/package.json")), "dist", "dts");
+    const candidate = join(dirname(requireFrom.resolve("effect/package.json")), "dist");
     if (existsSync(join(candidate, "index.d.ts"))) return candidate;
   } catch {
     // effect not resolvable from this root
@@ -241,7 +241,7 @@ const effectDtsViaResolution = (fromRoot: string | undefined): string | undefine
 };
 
 /**
- * Find the shipped effect .d.ts directory (node_modules/effect/dist/dts/).
+ * Find the shipped effect .d.ts directory (node_modules/effect/dist/).
  * Tries, in order, the runtime-deps root the wrapper points the binary at, the
  * platform package root (installed binary), and the repo root (source checkout).
  * For each it checks the directly-nested layout first, then falls back to node
@@ -255,7 +255,7 @@ const resolveEffectDtsDir = (): string | undefined => {
   ];
   for (const root of roots) {
     if (!root) continue;
-    const nested = join(root, "node_modules", "effect", "dist", "dts");
+    const nested = join(root, "node_modules", "effect", "dist");
     if (existsSync(join(nested, "index.d.ts"))) return nested;
     const resolved = effectDtsViaResolution(root);
     if (resolved) return resolved;
@@ -273,7 +273,7 @@ const resolveEffectDtsDir = (): string | undefined => {
 export interface WorkflowTypeDirs {
   /** Directory holding the shipped prism declarations (types/index.d.ts). */
   readonly prismTypesDir: string | undefined;
-  /** Directory holding the effect declarations (dist/dts/index.d.ts). */
+  /** Directory holding the effect declarations (dist/index.d.ts). */
   readonly effectDtsDir: string | undefined;
 }
 
@@ -380,7 +380,7 @@ export interface GeneratedWorkflowTsconfig {
   readonly path: string;
   /** Absolute path to the prism types directory (types/index.d.ts). */
   readonly prismTypesDir: string | undefined;
-  /** Absolute path to the effect dts directory (dist/dts/index.d.ts). */
+  /** Absolute path to the effect dts directory (dist/index.d.ts). */
   readonly effectDtsDir: string | undefined;
 }
 

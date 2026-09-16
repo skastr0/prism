@@ -454,7 +454,7 @@ const runAgyWithRetry = (input: {
   readonly backoffMs: number;
 }): Effect.Effect<AgyRetryResult, AntigravityWorkflowWorkerError, never> =>
   Effect.tryPromise({
-    try: async () => {
+    try: async (): Promise<AgyRetryResult> => {
       const startedAt = Date.now();
       let conversationId = input.initialConversationId;
       let usePty = input.usePty;
@@ -561,7 +561,7 @@ export const runAntigravityWorkflowTask = async (
   const tempRoot = await mkdtemp(join(tmpdir(), "prism-workflow-agy-"));
 
   try {
-    const attempted = await Effect.runPromise(Effect.either(runAgyWithRetry({
+    const attempted = await Effect.runPromise(Effect.result(runAgyWithRetry({
       command,
       cwd: options.cwd,
       abortSignal: options.abortSignal,
@@ -577,8 +577,8 @@ export const runAntigravityWorkflowTask = async (
       backoffMs,
       preflight: options.preflight !== false,
     })));
-    if (attempted._tag === "Left") throw attempted.left;
-    const result = attempted.right;
+    if (attempted._tag === "Failure") throw attempted.failure;
+    const result = attempted.success;
     const sessionId = result.sessionId;
 
     const metadata = antigravityMetadata({

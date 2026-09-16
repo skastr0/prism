@@ -1,5 +1,5 @@
 import { cpus } from "node:os";
-import { Cause, Effect, Either, Exit, Layer, Option } from "effect";
+import { Cause, Effect, Exit, Option, Result } from "effect";
 import { compareCodePoint } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import {
@@ -558,7 +558,7 @@ const failedTaskResult = (
     // OBS-006: reads whatever forensics the adapter attached to error.metadata (stderr
     // excerpt, harness session id, ...) the same way the persisted-task-record path already
     // does via normalizedAttemptMetadata — this is the isolated/dynamic-fanout result path
-    // (e.g. Effect.either(wf.runTask(...))), a separate call site that previously fell back
+    // (e.g. Effect.result(wf.runTask(...))), a separate call site that previously fell back
     // to bare contract metadata regardless of what the adapter knew about the failure.
     metadata: normalizedAttemptMetadata(undefined, error),
   };
@@ -566,11 +566,11 @@ const failedTaskResult = (
 
 /**
  * The failure surfaced by {@link WorkflowRuntime.runTask} for a task that crashed, timed out,
- * or exhausted repair. Authors may isolate it per-arm (e.g. `Effect.either`); its `message`
+ * or exhausted repair. Authors may isolate it per-arm (e.g. `Effect.result`); its `message`
  * mirrors the underlying task error so author-side `error.message` reads unchanged.
  *
  * Two distinct outcomes follow depending on whether the author isolates it:
- * - **Isolated** (author catches it, e.g. `Effect.either`, and the program still succeeds):
+ * - **Isolated** (author catches it, e.g. `Effect.result`, and the program still succeeds):
  *   the run status is `"completed"` with the partial results already recorded — a single
  *   task's failure never aborts the whole run.
  * - **Unhandled** (the author lets it bubble to the top of the dynamic program): the
@@ -1329,8 +1329,8 @@ const executeWorkflowTask = async (input: {
 
       recordEvent(store, runId, task.id, "task.decode.started", { attempt: repairs });
       const decoded = decodeTaskOutput(task, rawOutput);
-      if (Either.isLeft(decoded)) {
-        const error = decoded.left;
+      if (Result.isFailure(decoded)) {
+        const error = decoded.failure;
         if (decodeRepairs < maxDecodeRepairs) {
           finishFailedAttempt("decode", error);
           recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error), attemptedOutput: rawOutput });
@@ -1356,7 +1356,7 @@ const executeWorkflowTask = async (input: {
         throw decodeError;
       }
 
-      decodedOutput = decoded.right;
+      decodedOutput = decoded.success;
       recordEvent(store, runId, task.id, "task.decode.completed", { attempt: repairs });
       let finish: WorkflowFinishCriteriaResult;
       try {
@@ -1721,12 +1721,14 @@ const runDynamicWorkflow = async (input: {
   // Provide the run's tracer to the author program so Effect.withSpan / Effect.fn spans
   // land in the same trace as engine spans, all rooted under the run root span.
   const program = input.tracing.enabled
-    ? input.workflow.run(runtime).pipe(
-      Effect.withSpan("workflow.program", { attributes: { workflow: input.workflow.name } }),
-      Effect.provide(Layer.setTracer(makeWorkflowEffectTracer(
+    ? Effect.withTracer(
+      input.workflow.run(runtime).pipe(
+        Effect.withSpan("workflow.program", { attributes: { workflow: input.workflow.name } }),
+      ),
+      makeWorkflowEffectTracer(
         input.tracing,
         input.rootSpanId !== undefined ? { defaultParentSpanId: input.rootSpanId } : {},
-      ))),
+      ),
     )
     : input.workflow.run(runtime);
   const exit = await awaitRunScoped(Effect.runPromiseExit(program), input.cancellation);
@@ -1753,7 +1755,7 @@ const runDynamicWorkflow = async (input: {
     throw error;
   }
   if (error instanceof WorkflowTaskFailure) {
-    // Effect.either and other author-level recovery produce a successful program exit and
+    // Effect.result and other author-level recovery produce a successful program exit and
     // never reach this branch. An unhandled task failure is terminal only after every
     // sibling executor and its durable attempt row have settled.
     const status = error.taskError instanceof WorkflowTaskEscalatedError ? "escalated" : "failed";

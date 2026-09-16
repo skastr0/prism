@@ -20,7 +20,7 @@
     "@opencode-ai/plugin": "^1.15.13",
     "@opentui/core-darwin-x64": "0.4.1",
     "@skastr0/prism-sdk": "0.5.1",
-    "effect": "^3.21.1",
+    "effect": "4.0.0-rc.115",
     "typescript": "^5.8.3",
     "zod": "4.4.3"
   },

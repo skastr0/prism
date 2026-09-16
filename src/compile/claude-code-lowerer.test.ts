@@ -7,17 +7,9 @@ import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/claude-code.js";
 import type { DesiredFile } from "../sync/desired.js";
+import { effectImportPath } from "../testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
-
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 

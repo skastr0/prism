@@ -1,7 +1,7 @@
 {
   "files": [
     {
-      "content": "<BUNDLE_HASH:91d43065640805572c327cac43b98fa1ff213d25c4e2ff696175921a67fb2583>",
+      "content": "<BUNDLE_HASH:d9b79f021aa3da771bd4943146e58b53113abbc71b6632bf7dabe795817076ca>",
       "mode": 493,
       "path": "<HARNESS_ROOT>/plugins/managed/prism-generated-canonical-compile-fixture/hooks/session-start.mjs"
     },

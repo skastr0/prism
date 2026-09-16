@@ -78,7 +78,7 @@ export interface SopPhaseReferenceFile {
 }
 
 const renderSchemaSummary = (
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.Top,
 ): string | undefined => {
   const json = tryWorkflowJsonSchemaFromEffectSchema(schema);
   if (!json) {
@@ -98,7 +98,7 @@ const renderSchemaSummary = (
 
 const renderSchemaSection = (
   heading: string,
-  schema: Schema.Schema.AnyNoContext | undefined,
+  schema: Schema.Top | undefined,
   lines: string[],
 ): void => {
   if (!schema) return;
@@ -141,8 +141,8 @@ export const renderDerivedSopPhaseReferences = (
     );
 
     lines.push("## Purpose", "", phase.purpose.trim(), "");
-    renderSchemaSection("Input", phase.input as Schema.Schema.AnyNoContext | undefined, lines);
-    renderSchemaSection("Output", phase.output as Schema.Schema.AnyNoContext | undefined, lines);
+    renderSchemaSection("Input", phase.input as Schema.Top | undefined, lines);
+    renderSchemaSection("Output", phase.output as Schema.Top | undefined, lines);
     renderAcceptanceCriteria(phase, lines);
     renderEscalation(phase, lines);
 

@@ -103,7 +103,7 @@ export const readSnapshot = async (options: {
   }
 
   const decoded = migrateSnapshotManifest(parsed);
-  if (decoded._tag === "Right") return { manifest: decoded.right };
+  if (decoded._tag === "Success") return { manifest: decoded.success };
 
   const quarantinedPath = `${path}.corrupt-${Date.now()}.json`;
   await rename(path, quarantinedPath);
@@ -179,11 +179,11 @@ export const gcSnapshots = async (prismHome: string): Promise<SnapshotGcResult> 
       continue;
     }
     const decoded = migrateSnapshotManifest(parsed);
-    if (decoded._tag === "Left") {
+    if (decoded._tag === "Failure") {
       await rename(path, `${path}.corrupt-${Date.now()}.json`);
       continue;
     }
-    const manifest = decoded.right;
+    const manifest = decoded.success;
     if (!(await exists(manifest.root))) {
       await removeFile(path);
       dropped.push({ path, root: manifest.root });

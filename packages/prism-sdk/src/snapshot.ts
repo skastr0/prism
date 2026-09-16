@@ -28,7 +28,7 @@ export const SNAPSHOT_MANIFEST_VERSION = 1 as const;
  *    names the fragment and `contentHash` hashes the rendered fragment, not
  *    the whole file.
  */
-export const SnapshotEntryMode = Schema.Literal("owned", "region");
+export const SnapshotEntryMode = Schema.Literals(["owned", "region"]);
 export type SnapshotEntryMode = typeof SnapshotEntryMode.Type;
 
 export const SnapshotEntrySchema = Schema.Struct({
@@ -54,11 +54,11 @@ const SnapshotManifestV1 = Schema.Struct({
 export const SnapshotManifestSchema = SnapshotManifestV1;
 export type SnapshotManifest = typeof SnapshotManifestSchema.Type;
 
-export const decodeSnapshotManifest = Schema.decodeUnknownEither(
-  Schema.parseJson(SnapshotManifestSchema),
+export const decodeSnapshotManifest = Schema.decodeUnknownResult(
+  Schema.fromJsonString(SnapshotManifestSchema),
 );
 
-const decodeSnapshotManifestUnknown = Schema.decodeUnknownEither(SnapshotManifestSchema);
+const decodeSnapshotManifestUnknown = Schema.decodeUnknownResult(SnapshotManifestSchema);
 
 /**
  * Migrate a parsed snapshot manifest to the latest version.

@@ -12,17 +12,9 @@ import { cliToolNameForBinding } from "./tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { CanonicalTool } from "./sources.js";
 import type { DesiredFile } from "../sync/desired.js";
+import { effectImportPath } from "../testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
-
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 const GROK_MAX_TOOL_NAME_LENGTH = 64;

@@ -1,3 +1,13 @@
+import { effectBundleImportPath } from "../compile/runtime-deps.js";
+
+/**
+ * Absolute path to the installed Effect entry point, for test fixtures that
+ * import Effect by path. Derived from the resolver rather than a fixed `dist`
+ * layout, so it tracks the installed release (v3 shipped `dist/esm/index.js`,
+ * v4 ships `dist/index.js`).
+ */
+export const effectImportPath = effectBundleImportPath();
+
 /**
  * Prism test sandbox — isolated filesystem universe for integration tests.
  *

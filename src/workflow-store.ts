@@ -333,6 +333,82 @@ export function isWorkflowRunOutcomeSuccessful(
   return runStatus === "completed" && taskStatuses.every((status) => status === "completed");
 }
 
+/**
+ * Provenance for a run the scheduler launched, rather than one a human started.
+ *
+ * Absent on a hand-run workflow. That absence is the honest answer — there was
+ * no execution and no occurrence — so it is modelled as an optional parameter
+ * and a nullable column, not as a sentinel string.
+ */
+export interface WorkflowRunScheduling {
+  /** The scheduler execution that launched this run. */
+  readonly executionId: string;
+  /** The installed schedule the execution belongs to. */
+  readonly scheduleId: string;
+  /** The cron occurrence this run represents, as an ISO-8601 instant. */
+  readonly scheduledFor: string | null;
+}
+
+/** The triple that identifies a runner process without relying on the pid alone. */
+export interface WorkflowRunRunnerIdentity {
+  readonly pid: number;
+  readonly bootId: string | null;
+  readonly startId: string | null;
+}
+
+/**
+ * The scheduler's read-only view of a run it owns.
+ *
+ * Purpose-built rather than reusing `WorkflowRunRecord`: reconciliation needs
+ * the runner identity and the launch-authorization state, which are internal to
+ * the scheduling protocol and not part of the general run surface.
+ */
+export interface WorkflowScheduledRunState {
+  readonly runId: string;
+  readonly workflow: string;
+  readonly status: WorkflowRunStatus;
+  readonly schedulingExecutionId: string | null;
+  readonly schedulingScheduleId: string | null;
+  readonly scheduledFor: string | null;
+  readonly runner: WorkflowRunRunnerIdentity | null;
+  /**
+   * Whether a runner consumed this run's launch authorization.
+   *
+   * Meaningful only when `schedulingExecutionId` is set. The scheduler always
+   * issues an authorization token before spawning, so for a scheduled run a
+   * present token means no runner ever consumed it, and a consumed token means
+   * a runner did. A hand-run workflow has no token to consume and no execution
+   * to reconcile, so this field is not consulted for one.
+   */
+  readonly launchAuthorized: boolean;
+  readonly terminalCause: WorkflowRunTerminalCause | null;
+  readonly finishedAt: string | null;
+  readonly heartbeatAt: string | null;
+}
+
+/** The outcome of a runner attempting to consume its launch authorization. */
+export type WorkflowRunLaunchAuthorization =
+  | { readonly kind: "authorized" }
+  | { readonly kind: "not-found" }
+  | { readonly kind: "unauthorized"; readonly reason: string }
+  | { readonly kind: "terminal"; readonly status: WorkflowRunStatus };
+
+interface ScheduledRunRow {
+  readonly run_id: string;
+  readonly workflow: string;
+  readonly status: WorkflowRunStatus;
+  readonly finished_at: string | null;
+  readonly heartbeat_at: string | null;
+  readonly terminal_cause_json: string | null;
+  readonly scheduling_execution_id: string | null;
+  readonly scheduling_schedule_id: string | null;
+  readonly scheduled_for: string | null;
+  readonly runner_pid: number | null;
+  readonly runner_boot_id: string | null;
+  readonly runner_start_id: string | null;
+  readonly authorization_consumed: number;
+}
+
 export interface WorkflowEventRecord {
   readonly sequence: number;
   readonly runId: string;
@@ -558,7 +634,7 @@ export const projectWorkflowStoreDir = (prismHome: string, cwd: string = process
 export const defaultWorkflowStorePath = (prismHome: string, cwd: string = process.cwd()): string =>
   join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
-export const WORKFLOW_STORE_SCHEMA_VERSION = 6;
+export const WORKFLOW_STORE_SCHEMA_VERSION = 7;
 
 /**
  * AR-001: the task-cache resource identity used to key `workflow_task_records`
@@ -1780,6 +1856,39 @@ const migrateWorkflowStoreToVersion6 = (db: WorkflowDatabase): void => {
   })();
 };
 
+/**
+ * v7 — scheduling provenance and runner identity.
+ *
+ * Two things arrive together because they are one protocol:
+ *
+ *   1. **Provenance.** A run launched by the scheduler records which execution
+ *      and which installed schedule produced it, and which occurrence it
+ *      represents. Hand-run workflows leave all three null, which is the honest
+ *      answer rather than a sentinel.
+ *   2. **Runner identity.** The runner records its own pid plus boot and start
+ *      identity in the same transaction that consumes its launch authorization,
+ *      so "a runner exists" and "a runner was authorized" cannot disagree.
+ *
+ * `scheduling_execution_id` is also the marker that transfers reconciliation
+ * ownership to the scheduler: `failDeadPidRuns` and `failStaleRuns` exclude
+ * scheduled runs, because an observer deciding from heartbeat age alone would
+ * be guessing at exactly the thing the scheduler is equipped to establish.
+ */
+const migrateWorkflowStoreToVersion7 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
+    addColumnIfMissing(db, "alter table workflow_runs add column scheduling_execution_id text");
+    addColumnIfMissing(db, "alter table workflow_runs add column scheduling_schedule_id text");
+    addColumnIfMissing(db, "alter table workflow_runs add column scheduled_for text");
+    addColumnIfMissing(db, "alter table workflow_runs add column runner_boot_id text");
+    addColumnIfMissing(db, "alter table workflow_runs add column runner_start_id text");
+    db.exec(`
+      create index if not exists workflow_runs_scheduling_execution_idx
+        on workflow_runs (scheduling_execution_id);
+    `);
+    db.exec("pragma user_version = 7;");
+  })();
+};
+
 export class WorkflowStore {
   initialRetentionCleanup: WorkflowRetentionCleanupReport | null = null;
 
@@ -1864,6 +1973,9 @@ export class WorkflowStore {
       }
       if (schemaVersion <= 5) {
         migrateWorkflowStoreToVersion6(db);
+      }
+      if (schemaVersion <= 6) {
+        migrateWorkflowStoreToVersion7(db);
       }
     } catch (error) {
       db?.close();
@@ -2354,11 +2466,164 @@ export class WorkflowStore {
       }));
   }
 
-  createRun(workflow: string, runId: string = randomUUID()): string {
+  /**
+   * Create a run row.
+   *
+   * `scheduling` records provenance for a run the scheduler launched. It is
+   * written in the same transaction as the row itself, because a run that
+   * exists without its provenance would be a run the scheduler cannot claim
+   * during reconciliation.
+   */
+  createRun(
+    workflow: string,
+    runId: string = randomUUID(),
+    scheduling?: WorkflowRunScheduling,
+  ): string {
     const persistedWorkflow = redactWorkflowText(workflow);
-    this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, persistedWorkflow);
-    this.recordEvent({ runId, type: "run.started", payload: { workflow: persistedWorkflow } });
+    this.db.transaction(() => {
+      this.db.query(`
+        insert into workflow_runs
+          (run_id, workflow, status, scheduling_execution_id, scheduling_schedule_id, scheduled_for)
+        values (?, ?, 'running', ?, ?, ?)
+      `).run(
+        runId,
+        persistedWorkflow,
+        scheduling?.executionId ?? null,
+        scheduling?.scheduleId ?? null,
+        scheduling?.scheduledFor ?? null,
+      );
+      this.recordEvent({
+        runId,
+        type: "run.started",
+        payload: {
+          workflow: persistedWorkflow,
+          ...(scheduling !== undefined
+            ? {
+                scheduling: {
+                  executionId: scheduling.executionId,
+                  scheduleId: scheduling.scheduleId,
+                  scheduledFor: scheduling.scheduledFor,
+                },
+              }
+            : {}),
+        },
+      });
+    })();
     return runId;
+  }
+
+  /**
+   * Consume a run's launch authorization and record the runner's identity.
+   *
+   * This is the linearization point of the launch protocol, and it is one
+   * transaction on purpose. "A runner was authorized" and "here is the runner's
+   * identity" must not be able to disagree, or reconciliation would face a
+   * window where a runner may have imported user code but left no identity to
+   * observe — an ambiguity with no honest resolution.
+   *
+   * The token comparison is timing-safe and the update is a compare-and-set on
+   * the token column, so two runners racing for the same authorization produce
+   * exactly one winner and one `unauthorized`.
+   */
+  beginScheduledRun(input: {
+    readonly runId: string;
+    readonly token: string;
+    readonly runnerPid: number;
+    readonly runnerBootId: string | null;
+    readonly runnerStartId: string | null;
+  }): WorkflowRunLaunchAuthorization {
+    return this.db.transaction((): WorkflowRunLaunchAuthorization => {
+      const row = this.db.query<{
+        readonly status: WorkflowRunStatus;
+        readonly handoff_token: string | null;
+      }, [string]>(
+        "select status, handoff_token from workflow_runs where run_id = ?",
+      ).get(input.runId);
+      if (row === null) return { kind: "not-found" };
+      if (row.status !== "running") return { kind: "terminal", status: row.status };
+      if (row.handoff_token === null) {
+        return {
+          kind: "unauthorized",
+          reason: "launch authorization was already consumed, or none was issued for this run",
+        };
+      }
+      const expected = Buffer.from(row.handoff_token, "utf8");
+      const provided = Buffer.from(digestWorkflowSecret(input.token), "utf8");
+      if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) {
+        return { kind: "unauthorized", reason: "launch authorization token does not match" };
+      }
+
+      const claimed = this.db.query<{ readonly run_id: string }, [
+        number,
+        string | null,
+        string | null,
+        string,
+        string,
+      ]>(`
+        update workflow_runs
+        set handoff_token = null,
+            runner_pid = ?,
+            runner_boot_id = ?,
+            runner_start_id = ?,
+            heartbeat_at = datetime('now')
+        where run_id = ? and status = 'running' and handoff_token = ?
+        returning run_id
+      `).get(
+        input.runnerPid,
+        input.runnerBootId,
+        input.runnerStartId,
+        input.runId,
+        row.handoff_token,
+      );
+      if (claimed === null) {
+        return { kind: "unauthorized", reason: "launch authorization was consumed concurrently" };
+      }
+
+      this.recordEvent({
+        runId: input.runId,
+        type: "runner.authorized",
+        payload: {
+          runnerPid: input.runnerPid,
+          runnerBootId: input.runnerBootId,
+          runnerStartId: input.runnerStartId,
+        },
+      });
+      return { kind: "authorized" };
+    })();
+  }
+
+  /**
+   * The scheduler's reconciliation view of one run. Null when the run does not
+   * exist — which is itself meaningful, since the scheduler creates the run
+   * before it spawns anything.
+   */
+  scheduledRunState(runId: string): WorkflowScheduledRunState | null {
+    const row = this.db.query<ScheduledRunRow, [string]>(`
+      select run_id, workflow, status, finished_at, heartbeat_at, terminal_cause_json,
+             scheduling_execution_id, scheduling_schedule_id, scheduled_for,
+             runner_pid, runner_boot_id, runner_start_id,
+             case when handoff_token is null then 1 else 0 end as authorization_consumed
+      from workflow_runs
+      where run_id = ?
+    `).get(runId);
+    if (row === null) return null;
+    return {
+      runId: row.run_id,
+      workflow: row.workflow,
+      status: row.status,
+      schedulingExecutionId: row.scheduling_execution_id,
+      schedulingScheduleId: row.scheduling_schedule_id,
+      scheduledFor: row.scheduled_for,
+      runner: row.runner_pid === null
+        ? null
+        : { pid: row.runner_pid, bootId: row.runner_boot_id, startId: row.runner_start_id },
+      launchAuthorized: row.authorization_consumed === 1,
+      terminalCause: row.terminal_cause_json === null
+        ? null
+        : JSON.parse(row.terminal_cause_json) as WorkflowRunTerminalCause,
+      finishedAt: row.finished_at,
+      heartbeatAt: row.heartbeat_at,
+    };
   }
 
   recordRunSnapshot(input: {
@@ -2976,6 +3241,7 @@ export class WorkflowStore {
       from workflow_runs
       where status = 'running'
         and runner_pid is not null
+        and scheduling_execution_id is null
     `).all();
     const dead = candidates.filter((row) => row.runner_pid !== null && !processIsAlive(row.runner_pid));
     if (dead.length === 0) return [];
@@ -3025,6 +3291,7 @@ export class WorkflowStore {
                created_at
         from workflow_runs
         where status = 'running'
+          and scheduling_execution_id is null
           and datetime(coalesce(heartbeat_at, created_at)) < datetime(?)
         order by created_at asc, run_id asc
       `).all(staleBefore);

@@ -917,9 +917,12 @@ workflow
         terminationHandlers[signal] = handler;
         process.once(signal, handler);
       }
-      // A run authorized through the launch protocol already recorded its
-      // runner identity in the same transaction; a hand-run one records it here.
-      if (!runnerAuthorized) store.markRunRunnerStarted(executionRunId, process.pid);
+      // The readiness marker, published only now that the workflow module has
+      // loaded. An authorized run already recorded its identity (and consumed
+      // its authorization) before the import; this is what a detached launcher
+      // waits on, so it must not be satisfiable by a runner that is about to die
+      // while importing.
+      store.markRunRunnerStarted(executionRunId, process.pid);
       heartbeat = setInterval(() => store?.heartbeatRun(executionRunId!), 2_000);
       const outputs = options.mockOutput
         ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>

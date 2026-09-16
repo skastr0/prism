@@ -2520,6 +2520,13 @@ export class WorkflowStore {
    * The token comparison is timing-safe and the update is a compare-and-set on
    * the token column, so two runners racing for the same authorization produce
    * exactly one winner and one `unauthorized`.
+   *
+   * This deliberately does **not** touch `heartbeat_at`. The heartbeat is the
+   * *readiness* marker a detached launcher waits on, and readiness means "the
+   * runner is executing", not "the runner claimed the run" — so it is published
+   * by `markRunRunnerStarted` after the workflow module has loaded. Publishing it
+   * here would make a workflow whose top-level code exits look like a successful
+   * start, because authorization now happens before the import.
    */
   beginScheduledRun(input: {
     readonly runId: string;
@@ -2560,8 +2567,7 @@ export class WorkflowStore {
         set handoff_token = null,
             runner_pid = ?,
             runner_boot_id = ?,
-            runner_start_id = ?,
-            heartbeat_at = datetime('now')
+            runner_start_id = ?
         where run_id = ? and status = 'running' and handoff_token = ?
         returning run_id
       `).get(
@@ -3141,6 +3147,28 @@ export class WorkflowStore {
       return row;
     });
     const row = restart();
+    return row === null ? null : runRecordFromRow(row);
+  }
+
+  /**
+   * Read a run **without** observer reconciliation.
+   *
+   * The detached launcher polls its own run while it waits for the readiness
+   * handshake, and during startup it is the authority on that run. `getRun`
+   * runs `failDeadPidRuns` first, so a launcher polling its own child would
+   * terminalize the run as `dead-runner-pid` the instant the child died —
+   * preempting the launcher's own, more specific `runner-start-failed` cause and
+   * the stderr evidence it captured. Reconciliation is for observers, not for
+   * the process that owns the handshake.
+   */
+  peekRun(runId: string): WorkflowRunRecord | null {
+    const row = this.db.query<RunRow, [string]>(`
+      select run_id, workflow, status, terminal_cause_json, finished_at,
+             runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+             usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
+      from workflow_runs
+      where run_id = ?
+    `).get(runId);
     return row === null ? null : runRecordFromRow(row);
   }
 

@@ -2640,7 +2640,9 @@ export default defineWorkflow({
     ]);
 
     expect(matchingRunMarkerExitCode).not.toBe(0);
-    expect(matchingRunMarkerStderr).toContain("invalid detached workflow run handoff");
+    // The rejection now names the run and the specific reason rather than
+    // reporting one generic handoff failure for every way a claim can fail.
+    expect(matchingRunMarkerStderr).toContain("was not authorized to start");
   });
 
   test("CLI uses task-level worker models before the CLI fallback model", async () => {

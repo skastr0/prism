@@ -265,7 +265,7 @@ export const startDetachedWorkflowRun = async (
     const deadline = Date.now() + DETACHED_RUNNER_READINESS_TIMEOUT_MS;
     const exited = child.exited.then((code) => ({ kind: "exited" as const, code }));
     while (true) {
-      const persisted = store.getRun(run.runId);
+      const persisted = store.peekRun(run.runId);
       if (persisted === null) {
         throw new Error(`detached workflow run disappeared during startup: ${run.runId}`);
       }
@@ -297,7 +297,7 @@ export const startDetachedWorkflowRun = async (
         delay(Math.min(DETACHED_RUNNER_READINESS_POLL_MS, remaining)).then(() => ({ kind: "poll" as const })),
       ]);
       if (next.kind === "exited") {
-        const durable = store.getRun(run.runId);
+        const durable = store.peekRun(run.runId);
         if (
           durable !== null &&
           durable.runnerPid === child.pid &&
@@ -327,7 +327,7 @@ export const startDetachedWorkflowRun = async (
     } catch (error) {
       terminationError = error;
     } finally {
-      if (store.getRun(run.runId)?.status === "running") {
+      if (store.peekRun(run.runId)?.status === "running") {
         store.finishRun(run.runId, "crashed", {
           kind: "crashed",
           reason: "runner-start-failed",

@@ -169,7 +169,9 @@ describe("workflow run launch authorization", () => {
       expect(state?.launchAuthorized).toBe(true);
       expect(state?.runner).toEqual({ pid: process.pid, bootId: "boot-1", startId: "start-1" });
       expect(state?.status).toBe("running");
-      expect(state?.heartbeatAt).not.toBeNull();
+      // Authorization does not publish the readiness heartbeat: that marker
+      // belongs to markRunRunnerStarted, after the workflow module loads.
+      expect(state?.heartbeatAt).toBeNull();
       expect(store.listRunEvents(runId).some((event) => event.type === "runner.authorized")).toBe(true);
     } finally {
       store.close();

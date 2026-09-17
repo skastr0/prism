@@ -106,7 +106,9 @@ export type JevScoreKey<C extends JevScoreCriteria> = number extends C["length"]
 export type JevResultFor<Q extends JevQuestion> = Q extends JevChoiceQuestion<infer C>
   ? {
       readonly type: "choice";
-      readonly choice: keyof C & string;
+      // Wire labels are always strings: numeric criteria keys (JS object keys)
+      // arrive stringified, so the answer's choice union stringifies them too.
+      readonly choice: `${keyof C & (string | number)}`;
       readonly confidence: number;
       readonly probabilities: { readonly [K in keyof C]: number };
     }

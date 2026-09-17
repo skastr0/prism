@@ -22,6 +22,7 @@ import {
   parseJevRequest,
   score,
   type JevResult,
+  type JevResultFor,
 } from "./jev.js";
 
 const questions = {
@@ -386,5 +387,36 @@ describe("tool presentation schemas render through the MCP JSON-schema bridge", 
     expect(() =>
       jsonSchemaFromEffectSchema(JevSystemOneResultSchema, MCP_AST_TO_JSON_SCHEMA_OPTIONS),
     ).not.toThrow();
+  });
+});
+
+describe("numeric choice criteria keys", () => {
+  const numeric = choice({ instructions: "Pick.", criteria: { 1: "low", 2: "high" } });
+
+  // Compile-time assertion: wire labels are always strings, so the answer's
+  // choice union must be the stringified criteria keys. If the type ever
+  // collapses to `never` (e.g. `keyof C & string` on numeric keys), the
+  // labelOk assignment stops compiling.
+  type NumericChoice = JevResultFor<typeof numeric> extends { readonly choice: infer C } ? C : never;
+  const labelOk: NumericChoice = "1";
+  // @ts-expect-error — a label outside the criteria is not assignable
+  const labelBad: NumericChoice = "3";
+  void labelOk;
+  void labelBad;
+
+  test("runtime labels for numeric criteria keys are their stringified form", () => {
+    const parsed = Schema.decodeUnknownSync(jevResultSchema({ pick: numeric }))({
+      model: "m",
+      answers: {
+        pick: {
+          type: "choice",
+          choice: "1",
+          confidence: 0.9,
+          probabilities: { "1": 0.9, "2": 0.1 },
+        },
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }) as JevResult<{ pick: typeof numeric }>;
+    expect(parsed.answers.pick.choice).toBe("1");
   });
 });

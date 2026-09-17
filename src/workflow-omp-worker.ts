@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exists, expandPath } from "./fs.js";
 import type {
-  AnyWorkflowTask,
+  AnyWorkflowWorkerTask,
   WorkflowPermissionMode,
   WorkflowSessionPersistence,
 } from "./workflows.js";
@@ -224,7 +224,7 @@ export const parseOmpJsonStream = (stdout: string): OmpJsonStreamResult => {
 };
 
 export const runOmpWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: OmpWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   assertOmpWorkflowModel(options.model);

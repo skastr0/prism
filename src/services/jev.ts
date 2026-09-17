@@ -200,6 +200,24 @@ export interface JevClientShape {
   ) => Effect.Effect<JevResult<Q>, JevError>;
 }
 
+/**
+ * Resolve the non-secret Jev configuration (base URL + default model) without
+ * touching the API key. Identity hashing, workflow snapshots, and the CLI use
+ * this so a jev task's cache identity is computable without credentials.
+ */
+export type JevEnvLike = {
+  readonly TYPESAFE_BASE_URL?: string | undefined;
+  readonly TYPESAFE_DEFAULT_MODEL?: string | undefined;
+  readonly [key: string]: string | undefined;
+};
+
+export const resolveJevPublicConfig = (
+  env: JevEnvLike = process.env,
+): JevPublicConfig => ({
+  baseURL: normalizeBaseUrl(env.TYPESAFE_BASE_URL),
+  defaultModel: normalizeModel(env.TYPESAFE_DEFAULT_MODEL),
+});
+
 export class JevClient extends Context.Service<JevClient, JevClientShape>()(
   "prism/JevClient",
 ) {}

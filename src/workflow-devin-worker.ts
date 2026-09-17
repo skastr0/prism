@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type { AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
@@ -181,7 +181,7 @@ const bestEffortDevinSessionId = async (
 };
 
 export const runDevinWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: DevinWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_DEVIN_BIN ?? "devin";

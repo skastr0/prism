@@ -10,6 +10,8 @@ import {
   resolveWorkflowTaskModelResolution,
   workflowSummary,
   WorkflowModelResolutionError,
+  type AnyWorkflowTask,
+  type AnyWorkflowWorkerTask,
   type PhaseContract,
   type WorkflowModelProfileRef,
   type WorkflowPermissionMode,
@@ -544,7 +546,7 @@ describe("workflow phase DSL", () => {
     });
 
     const result = await Effect.runPromise(workflow.run!(mockRuntime((task) => Effect.sync(() => {
-      prompts.push(task.prompt);
+      prompts.push((task as AnyWorkflowWorkerTask).prompt);
       return { assumption: "typed default", options: ["a"] };
     }) as never)));
 
@@ -625,7 +627,7 @@ describe("workflow phase DSL", () => {
     });
 
     await Effect.runPromise(workflow.run!(mockRuntime((task) => Effect.sync(() => {
-      capturedCriteria = (task.finish?.criteria ?? []) as never;
+      capturedCriteria = ((task as AnyWorkflowWorkerTask).finish?.criteria ?? []) as never;
       return { assumption: "a", options: [] };
     }) as never)));
     const inherited = capturedCriteria.find((criterion) => criterion.name === "phase-contract");
@@ -646,7 +648,7 @@ describe("workflow phase DSL", () => {
     });
 
     await Effect.runPromise(workflow.run!(mockRuntime((task) => Effect.sync(() => {
-      prompts.push(task.prompt);
+      prompts.push((task as AnyWorkflowWorkerTask).prompt);
       return { assumption: "a", options: [] };
     }) as never)));
     expect(prompts[0]).toBe("Bare prompt only.\n\n## Input\n\n```json\n{\n  \"brief\": \"typed\"\n}\n```");

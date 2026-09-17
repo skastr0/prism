@@ -33,6 +33,7 @@ const taskSnapshot = (runId: string, taskId: string = "build", ordinal: number =
   runId,
   ordinal,
   taskId,
+  kind: "workflow-task" as const,
   prompt: "Build with password=prompt-secret",
   cacheKey: `${taskId}-cache`,
   promptHash: "a".repeat(64),

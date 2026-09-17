@@ -1,4 +1,4 @@
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type { AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import {
   summarizeWorkflowWorkerStderrForSession,
@@ -159,7 +159,7 @@ export const buildCursorArgs = (input: {
 };
 
 export const runCursorWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: CursorWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CURSOR_BIN ?? "agent";

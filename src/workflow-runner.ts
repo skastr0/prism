@@ -7,8 +7,11 @@ import {
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
   decodeTaskOutput,
   resolveWorkflowTaskSessionPersistence,
+  type AnyJevTask,
   type AnyWorkflowDefinition,
   type AnyWorkflowTask,
+  type AnyWorkflowWorkerTask,
+  isJevTask,
   type WorkflowJudgeCriterionContext,
   type WorkflowJudgeFinishCriterion,
   type WorkflowJudgeTaskMetadata,
@@ -29,6 +32,7 @@ import {
   type WorkflowJudgeIdentity,
   type WorkflowTaskIdentity,
 } from "./workflow-identity.js";
+import type { JevPublicConfig } from "./services/jev.js";
 import type {
   WorkflowRunTerminalCause,
   WorkflowRunStatus,
@@ -171,12 +175,29 @@ export type WorkflowTaskExecutor = (
 ) => Promise<unknown | WorkflowTaskExecution>;
 
 /**
+ * The worker-shaped half of {@link WorkflowTaskExecutor}: worker adapters and
+ * the mock-output path only ever receive workflow worker tasks. Jev tasks are
+ * dispatched separately by kind (see workflow-executors.ts).
+ */
+export type WorkflowWorkerTaskExecutor = (
+  task: AnyWorkflowWorkerTask,
+  context?: WorkflowTaskExecutionContext,
+) => Promise<unknown | WorkflowTaskExecution>;
+
+/**
  * Internal scheduler pacing, not a budget: excess live tasks queue and run as
  * slots free, so this never fails a task. Sized to the machine because each
  * live task is a full harness process. Deliberately not an option — nothing
  * about a workflow's intent belongs in this number.
  */
 export const WORKFLOW_TASK_CONCURRENCY = Math.max(4, Math.min(16, cpus().length - 2));
+
+/**
+ * Jev tasks are one HTTP call (not a harness process), so they run on a
+ * separate, wider run-scoped limiter than worker tasks. Same semantics: queue,
+ * never fail.
+ */
+export const WORKFLOW_JEV_CONCURRENCY = 32;
 
 // No default prompt ceiling: prompt size is a property of the work, not a risk
 // to police. A limit applies only when a run asks for one via
@@ -193,7 +214,7 @@ const assertWorkflowRepairBudget = (
   }
 };
 
-const assertWorkflowTaskRepairBudgets = (task: AnyWorkflowTask): void => {
+const assertWorkflowTaskRepairBudgets = (task: AnyWorkflowWorkerTask): void => {
   assertWorkflowTaskSessionPersistence(task);
   assertWorkflowRepairBudget("maxRepairs", task.finish?.maxRepairs);
   assertWorkflowRepairBudget("maxDecodeRepairs", task.finish?.maxDecodeRepairs);
@@ -247,7 +268,7 @@ const hasNonContractMetadata = (metadata: Record<string, unknown> | undefined): 
 };
 
 const repairExecutionPlan = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   metadata: Record<string, unknown> | undefined,
 ): WorkflowTaskRepairPlan => {
   if (
@@ -364,7 +385,7 @@ const judgeCriterionDefinition = (criterion: WorkflowJudgeFinishCriterion<unknow
   evaluate: criterion.evaluate.toString(),
 });
 
-const taskJudgeMetadata = (task: AnyWorkflowTask): WorkflowJudgeTaskMetadata => ({
+const taskJudgeMetadata = (task: AnyWorkflowWorkerTask): WorkflowJudgeTaskMetadata => ({
   id: task.id,
   ...(task.cacheKey !== undefined ? { cacheKey: task.cacheKey } : {}),
   ...(task.worker !== undefined ? { worker: task.worker } : {}),
@@ -427,7 +448,7 @@ const recordEvent = (
 };
 
 const executeOrReuseTask = async (input: {
-  readonly task: AnyWorkflowTask;
+  readonly task: AnyWorkflowWorkerTask;
   readonly cached: { readonly output: unknown; readonly metadata?: Record<string, unknown> } | null | undefined;
   readonly executeTask: WorkflowTaskExecutor;
   readonly context?: WorkflowTaskExecutionContext;
@@ -470,7 +491,7 @@ const executeOrReuseTask = async (input: {
 };
 
 const executeLiveTaskAttempt = async (input: {
-  readonly task: AnyWorkflowTask;
+  readonly task: AnyWorkflowWorkerTask;
   readonly executeTask: WorkflowTaskExecutor;
   readonly runSignal: AbortSignal;
   readonly repair?: WorkflowTaskRepairContext;
@@ -591,7 +612,7 @@ class WorkflowTaskFailure extends Error {
   }
 }
 
-const appendRepairPrompt = (task: AnyWorkflowTask, repairPrompt: string): AnyWorkflowTask => ({
+const appendRepairPrompt = (task: AnyWorkflowWorkerTask, repairPrompt: string): AnyWorkflowWorkerTask => ({
   ...task,
   prompt: `${task.prompt}\n\nYou are still inside the same Prism workflow task. Your previous response did not satisfy the task finish requirements.\n\n${repairPrompt}\n\nReturn the corrected final response now.`,
 });
@@ -613,7 +634,7 @@ type WorkflowFinishCriteriaResult =
 const runJudgeCriterion = async (input: {
   readonly criterion: WorkflowJudgeFinishCriterion<unknown, unknown>;
   readonly workflowIdentity: WorkflowTaskIdentity;
-  readonly task: AnyWorkflowTask;
+  readonly task: AnyWorkflowWorkerTask;
   readonly output: unknown;
   readonly metadata?: Record<string, unknown>;
   readonly store: WorkflowStore | undefined;
@@ -708,7 +729,7 @@ const runJudgeCriterion = async (input: {
 };
 
 const runFinishCriteria = async (input: {
-  readonly task: AnyWorkflowTask;
+  readonly task: AnyWorkflowWorkerTask;
   readonly workflowIdentity: WorkflowTaskIdentity;
   readonly output: unknown;
   readonly rawOutput: unknown;
@@ -799,7 +820,7 @@ const recordCacheLookup = (
   task: AnyWorkflowTask,
   identity: WorkflowTaskIdentity,
   mockOutput: boolean,
-): { readonly cached: { readonly output: unknown } | null | undefined; readonly cacheHit: boolean } => {
+): { readonly cached: { readonly output: unknown; readonly metadata?: Record<string, unknown> } | null | undefined; readonly cacheHit: boolean } => {
   recordEvent(store, runId, task.id, "task.cache_lookup.started", identity);
   const cached = store?.getCompleted(identity, { allowMockSourced: mockOutput });
   const cacheHit = cached !== undefined && cached !== null;
@@ -852,7 +873,7 @@ const assertRunStillRunning = (
 const createRunCancellationBarrier = (
   store: WorkflowStore | undefined,
   runId: string | null,
-  limiter: TaskExecutionLimiter,
+  limiters: ReadonlyArray<TaskExecutionLimiter>,
   externalAbortSignal?: AbortSignal,
 ): RunCancellationBarrier => {
   const controller = new AbortController();
@@ -872,7 +893,7 @@ const createRunCancellationBarrier = (
     eventReason = nextEventReason;
     for (const taskId of activeTaskCounts.keys()) recordTaskAbort(taskId);
     controller.abort(reason);
-    limiter.cancelPending(reason);
+    for (const limiter of limiters) limiter.cancelPending(reason);
   };
   const onExternalAbort = (): void => {
     abort(externalAbortSignal?.reason ?? new Error("workflow run aborted"), "runner-termination-signal");
@@ -967,12 +988,12 @@ const classifyWorkflowExecutorFailure = (error: unknown): WorkflowExecutorFailur
   return "terminal";
 };
 
-const resolveWorkflowExecutorRetryMaxAttempts = (task: AnyWorkflowTask): number =>
+const resolveWorkflowExecutorRetryMaxAttempts = (task: AnyWorkflowWorkerTask): number =>
   task.worker?.retry?.maxAttempts
   ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_EXECUTOR_RETRY_MAX_ATTEMPTS)
   ?? DEFAULT_WORKFLOW_EXECUTOR_RETRY_MAX_ATTEMPTS;
 
-const resolveWorkflowExecutorRetryBackoffMs = (task: AnyWorkflowTask): number =>
+const resolveWorkflowExecutorRetryBackoffMs = (task: AnyWorkflowWorkerTask): number =>
   task.worker?.retry?.backoffMs
   ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS)
   ?? DEFAULT_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS;
@@ -996,6 +1017,50 @@ const waitForWorkflowExecutorRetryBackoff = async (input: {
   });
 };
 
+/**
+ * One abort-raced live invocation of a jev task's executor. Mirrors
+ * {@link executeLiveTaskAttempt}'s cancellation semantics (linked controller,
+ * late-settlement observer, raced rejection) without the worker-only session
+ * metadata normalization and progress reporting.
+ */
+const executeJevLiveAttempt = async (input: {
+  readonly task: AnyJevTask;
+  readonly executeTask: WorkflowTaskExecutor;
+  readonly runSignal: AbortSignal;
+}): Promise<{ readonly rawOutput: unknown; readonly metadata?: Record<string, unknown> }> => {
+  const controller = new AbortController();
+  const abortFromRun = (): void => {
+    if (!controller.signal.aborted) controller.abort(input.runSignal.reason);
+  };
+  if (input.runSignal.aborted) abortFromRun();
+  else input.runSignal.addEventListener("abort", abortFromRun, { once: true });
+  let rejectOnAbort!: (reason: unknown) => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectOnAbort = reject;
+  });
+  const onAbort = (): void => rejectOnAbort(controller.signal.reason);
+  if (controller.signal.aborted) onAbort();
+  else controller.signal.addEventListener("abort", onAbort, { once: true });
+  const execution = Promise.resolve().then(async () =>
+    await input.executeTask(input.task, { abortSignal: controller.signal }));
+  // Keep a rejection observer attached while Promise.race returns promptly on
+  // abort; a late-settling executor promise must never be unhandled.
+  void execution.catch(() => undefined);
+  try {
+    const executed = await Promise.race([execution, aborted]);
+    if (!isWorkflowTaskExecution(executed)) {
+      return { rawOutput: executed };
+    }
+    return {
+      rawOutput: executed.output,
+      ...(executed.metadata !== undefined ? { metadata: executed.metadata } : {}),
+    };
+  } finally {
+    input.runSignal.removeEventListener("abort", abortFromRun);
+    controller.signal.removeEventListener("abort", onAbort);
+  }
+};
+
 const executeWorkflowTask = async (input: {
   readonly ordinal: number;
   readonly task: AnyWorkflowTask;
@@ -1005,6 +1070,7 @@ const executeWorkflowTask = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly mockOutput: boolean;
   readonly runtimeOptions: WorkflowRuntimeOptions;
+  readonly jev?: JevPublicConfig;
   readonly limiter?: TaskExecutionLimiter;
   readonly cancellation: RunCancellationBarrier;
   readonly tracing: WorkflowTraceRecorder;
@@ -1029,6 +1095,7 @@ const executeWorkflowTask = async (input: {
       workflow: identity.workflow,
       task,
       runtimeOptions: input.runtimeOptions,
+      ...(input.jev !== undefined ? { jev: input.jev } : {}),
     }));
   }
   recordEvent(store, runId, task.id, "task.started", { cacheKey: identity.cacheKey });
@@ -1037,7 +1104,202 @@ const executeWorkflowTask = async (input: {
   let taskFailureEvidence: WorkflowTaskFailureEvidence | undefined;
   let lastAttempt = 0;
 
-  const runTaskBoundary = async (): Promise<WorkflowRunTaskResult> => {
+  // Jev boundary: no finish criteria, no repair/judge loop, no session
+  // continuation, no WFE-009 executor retry — JevClient retries transient
+  // HTTP failures internally, and a schema/protocol mismatch is terminal
+  // because there is no worker process to re-prompt. One live attempt then
+  // decode; snapshot/attempt/events/rows/cache persist exactly like worker
+  // tasks so resume and inspect behave uniformly.
+  const runJevTaskBoundary = async (jevTask: AnyJevTask): Promise<WorkflowRunTaskResult> => {
+    let metadata: Record<string, unknown> | undefined;
+    const finishAttempt = (
+      status: Exclude<WorkflowTaskAttemptStatus, "running">,
+      attemptMetadata: Record<string, unknown> | undefined,
+      failure?: WorkflowTaskAttemptFailure,
+    ): void => {
+      if (cacheHit || store === undefined || runId === null) return;
+      const persistedAttempt = store.listRunTaskAttempts(runId).find(
+        (record) => record.ordinal === ordinal && record.attempt === 1,
+      );
+      if (store.getRun(runId)?.status === "running" && persistedAttempt?.status === "running") {
+        try {
+          store.recordTaskAttemptFinished({
+            runId,
+            ordinal,
+            attempt: 1,
+            status,
+            ...(attemptMetadata !== undefined ? { metadata: attemptMetadata } : {}),
+            ...(failure !== undefined ? { failure } : {}),
+          });
+        } catch (error) {
+          const current = store.listRunTaskAttempts(runId).find(
+            (record) => record.ordinal === ordinal && record.attempt === 1,
+          );
+          if (current === undefined || current.status === "running") throw error;
+        }
+      }
+    };
+    const failAttempt = (
+      kind: Extract<WorkflowTaskAttemptFailureKind, "executor" | "decode">,
+      error: unknown,
+    ): void => {
+      const interruption = input.cancellation.attemptInterruption();
+      if (interruption !== undefined) {
+        finishAttempt(interruption.status, normalizedAttemptMetadata(metadata, error), interruption.failure);
+        return;
+      }
+      finishAttempt("failed", normalizedAttemptMetadata(metadata, error), {
+        kind,
+        message: errorMessage(error),
+      });
+      taskFailureEvidence = {
+        taskId: jevTask.id,
+        ordinal,
+        attempt: lastAttempt,
+        errorName: errorName(error),
+        message: errorMessage(error),
+      };
+    };
+    let rawOutput: unknown;
+    const executorSpan = cacheHit ? undefined : tracing.startSpan("task.executor", {
+      parentSpanId: taskSpan.spanId,
+      taskId: jevTask.id,
+      attributes: { "executor.attempt": 0 },
+    });
+    try {
+      if (cacheHit) {
+        rawOutput = cached?.output;
+        metadata = {
+          ...(cached?.metadata ?? {}),
+          cachedFrom: "workflow_task_records",
+        };
+      } else {
+        input.cancellation.throwIfAborted();
+        assertRunStillRunning(store, runId);
+        if (store !== undefined && runId !== null) {
+          store.recordTaskAttemptStarted({ runId, ordinal, attempt: 1, taskId: jevTask.id });
+        }
+        lastAttempt = 1;
+        recordEvent(store, runId, jevTask.id, "task.executor.started", { attempt: 0 });
+        const stopTracking = input.cancellation.trackTask(jevTask.id);
+        try {
+          ({ rawOutput, metadata } = await executeJevLiveAttempt({
+            task: jevTask,
+            executeTask: input.executeTask,
+            runSignal: input.cancellation.signal,
+          }));
+        } finally {
+          stopTracking();
+        }
+        input.cancellation.throwIfAborted();
+        recordEvent(store, runId, jevTask.id, "task.executor.completed", { attempt: 0, ...(metadata ?? {}) });
+        if (executorSpan !== undefined) {
+          for (const key of ["adapter", "model", "sessionId"] as const) {
+            const value = metadata?.[key];
+            if (typeof value === "string") executorSpan.annotate(`worker.${key}`, value);
+          }
+          executorSpan.end("ok");
+        }
+      }
+    } catch (error) {
+      metadata = normalizedAttemptMetadata(metadata, error);
+      executorSpan?.end("error", error);
+      failAttempt("executor", error);
+      recordEvent(store, runId, jevTask.id, "task.executor.failed", {
+        attempt: 0,
+        error: errorMessage(error),
+        ...(metadata ?? {}),
+      });
+      recordRunTaskIfPersisted({
+        store,
+        runId,
+        ordinal,
+        identity,
+        status: "failed",
+        cached: false,
+        output: { error: errorMessage(error) },
+        metadata: normalizedAttemptMetadata(metadata, error),
+      });
+      throw error;
+    }
+
+    recordEvent(store, runId, jevTask.id, "task.decode.started", { attempt: 0 });
+    const decoded = decodeTaskOutput(jevTask, rawOutput);
+    if (Result.isFailure(decoded)) {
+      // Schema/protocol mismatch on a jev result is terminal: re-asking the
+      // model is the JevClient retry layer's job, and it has already run.
+      const decodeError = new WorkflowTaskDecodeError(jevTask.id, decoded.failure);
+      metadata = normalizedAttemptMetadata(metadata, decodeError);
+      failAttempt("decode", decodeError);
+      recordEvent(store, runId, jevTask.id, "task.decode.failed", {
+        attempt: 0,
+        error: String(decoded.failure),
+        attemptedOutput: rawOutput,
+      });
+      recordRunTaskIfPersisted({
+        store,
+        runId,
+        ordinal,
+        identity,
+        status: "failed",
+        cached: cacheHit,
+        output: rawOutput,
+        ...(metadata !== undefined ? { metadata } : {}),
+      });
+      throw decodeError;
+    }
+    const decodedOutput = decoded.success;
+    recordEvent(store, runId, jevTask.id, "task.decode.completed", { attempt: 0 });
+    const finalMetadata = { ...(metadata ?? {}) };
+    try {
+      input.cancellation.throwIfAborted();
+      assertRunStillRunning(store, runId);
+      finishAttempt("completed", finalMetadata);
+    } catch (error) {
+      const interruption = input.cancellation.attemptInterruption();
+      if (interruption !== undefined) {
+        finishAttempt(interruption.status, normalizedAttemptMetadata(finalMetadata, error), interruption.failure);
+      } else {
+        finishAttempt("failed", normalizedAttemptMetadata(finalMetadata, error), {
+          kind: "executor",
+          message: errorMessage(error),
+        });
+      }
+      throw error;
+    }
+    if (!cacheHit) {
+      const cacheWrite = store?.recordCompleted({
+        identity,
+        output: decodedOutput,
+        metadata: finalMetadata,
+        ...(mockOutput ? { outputSource: "mock-output" as const } : {}),
+      });
+      if (cacheWrite?.stored === false) {
+        recordEvent(store, runId, jevTask.id, "task.cache_write.skipped_sensitive", {
+          cacheKey: identity.cacheKey,
+          findingCount: cacheWrite.findingCount,
+        });
+      } else {
+        recordEvent(store, runId, jevTask.id, "task.cache_write.completed", {
+          cacheKey: identity.cacheKey,
+          ...(mockOutput ? { outputSource: "mock-output" } : {}),
+        });
+      }
+    }
+    recordRunTaskIfPersisted({
+      store,
+      runId,
+      ordinal,
+      identity,
+      status: "completed",
+      cached: cacheHit,
+      output: decodedOutput,
+      metadata: finalMetadata,
+    });
+    return { id: jevTask.id, output: decodedOutput, cached: cacheHit, status: "completed", metadata: finalMetadata };
+  };
+
+  const runWorkerTaskBoundary = async (task: AnyWorkflowWorkerTask): Promise<WorkflowRunTaskResult> => {
     let rawOutput: unknown;
     let decodedOutput: unknown = undefined;
     let metadata: Record<string, unknown> | undefined;
@@ -1511,6 +1773,10 @@ const executeWorkflowTask = async (input: {
     return { id: task.id, output: decodedOutput, cached: cacheHit, status: "completed", metadata: finalMetadata };
   };
 
+  const runTaskBoundary = isJevTask(task)
+    ? () => runJevTaskBoundary(task)
+    : () => runWorkerTaskBoundary(task);
+
   try {
     const result = cacheHit || input.limiter === undefined
       ? await runTaskBoundary()
@@ -1613,14 +1879,21 @@ const runStaticWorkflow = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly mockOutput: boolean;
   readonly limiter: TaskExecutionLimiter;
+  readonly jevLimiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
+  readonly jev?: JevPublicConfig;
   readonly cancellation: RunCancellationBarrier;
   readonly tracing: WorkflowTraceRecorder;
   readonly rootSpanId?: string;
 }): Promise<ReadonlyArray<WorkflowRunTaskResult>> => {
   const tasks: WorkflowRunTaskResult[] = [];
   for (const [index, task] of input.workflow.tasks.entries()) {
-    const identity = workflowTaskIdentity(input.workflow.name, task, input.runtimeOptions);
+    const identity = workflowTaskIdentity(
+      input.workflow.name,
+      task,
+      input.runtimeOptions,
+      ...(input.jev !== undefined ? [input.jev] : []),
+    );
     // A static pipeline is sequential: a failed task must stop the downstream chain, so its
     // captured failure is terminalized after its invocation settles and then re-thrown.
     const outcome = await executeWorkflowTask({
@@ -1632,7 +1905,8 @@ const runStaticWorkflow = async (input: {
       executeTask: input.executeTask,
       mockOutput: input.mockOutput,
       runtimeOptions: input.runtimeOptions,
-      limiter: input.limiter,
+      ...(input.jev !== undefined ? { jev: input.jev } : {}),
+      limiter: isJevTask(task) ? input.jevLimiter : input.limiter,
       cancellation: input.cancellation,
       tracing: input.tracing,
       ...(input.rootSpanId !== undefined ? { parentSpanId: input.rootSpanId } : {}),
@@ -1662,7 +1936,9 @@ const runDynamicWorkflow = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly mockOutput: boolean;
   readonly limiter: TaskExecutionLimiter;
+  readonly jevLimiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
+  readonly jev?: JevPublicConfig;
   readonly cancellation: RunCancellationBarrier;
   readonly tracing: WorkflowTraceRecorder;
   readonly rootSpanId?: string;
@@ -1682,7 +1958,7 @@ const runDynamicWorkflow = async (input: {
     // The author's current span (if any) becomes the task span's parent, so tasks nest
     // under author-side Effect.withSpan/Effect.fn structure in the run's trace.
     runTask: (task) => Effect.flatMap(Effect.option(Effect.currentSpan), (currentSpan) => Effect.suspend(() => {
-      assertWorkflowTaskRepairBudgets(task);
+      if (!isJevTask(task)) assertWorkflowTaskRepairBudgets(task);
       const parentSpanId = Option.isSome(currentSpan) ? currentSpan.value.spanId : input.rootSpanId;
       const taskOrdinal = ordinal++;
       // Record the settled result the moment the task finishes — inside the promise chain,
@@ -1692,13 +1968,19 @@ const runDynamicWorkflow = async (input: {
       const taskRun = executeWorkflowTask({
         ordinal: taskOrdinal,
         task,
-        identity: workflowTaskIdentity(input.workflow.name, task, input.runtimeOptions),
+        identity: workflowTaskIdentity(
+          input.workflow.name,
+          task,
+          input.runtimeOptions,
+          ...(input.jev !== undefined ? [input.jev] : []),
+        ),
         runId: input.runId,
         store: input.store,
         executeTask: input.executeTask,
         mockOutput: input.mockOutput,
           runtimeOptions: input.runtimeOptions,
-        limiter: input.limiter,
+        ...(input.jev !== undefined ? { jev: input.jev } : {}),
+        limiter: isJevTask(task) ? input.jevLimiter : input.limiter,
         cancellation: input.cancellation,
           tracing: input.tracing,
         ...(parentSpanId !== undefined ? { parentSpanId } : {}),
@@ -1783,15 +2065,19 @@ export const runWorkflow = async (
     readonly mockOutput?: boolean;
     readonly runId?: string;
     readonly runtimeOptions?: WorkflowRuntimeOptions;
+    readonly jev?: JevPublicConfig;
     readonly abortSignal?: AbortSignal;
   },
 ): Promise<WorkflowRunResult> => {
   const mockOutput = options.mockOutput === true;
   const runtimeOptions = options.runtimeOptions ?? {};
   if (!("run" in workflow)) {
-    for (const task of workflow.tasks) assertWorkflowTaskRepairBudgets(task);
+    for (const task of workflow.tasks) {
+      if (!isJevTask(task)) assertWorkflowTaskRepairBudgets(task);
+    }
   }
   const limiter = createTaskLimiter(WORKFLOW_TASK_CONCURRENCY);
+  const jevLimiter = createTaskLimiter(WORKFLOW_JEV_CONCURRENCY);
   const runId = options.store === undefined ? null : options.runId ?? options.store.createRun(workflow.name);
   const tracing = createWorkflowTraceRecorder({
     ...(options.store !== undefined ? { store: options.store } : {}),
@@ -1816,7 +2102,7 @@ export const runWorkflow = async (
       status === "failed" || status === "escalated" || status === "crashed" ? "error" : "ok",
     );
   };
-  const cancellation = createRunCancellationBarrier(options.store, runId, limiter, options.abortSignal);
+  const cancellation = createRunCancellationBarrier(options.store, runId, [limiter, jevLimiter], options.abortSignal);
   try {
     if ("run" in workflow) {
       const result = await runDynamicWorkflow({
@@ -1828,7 +2114,9 @@ export const runWorkflow = async (
         executeTask: options.executeTask,
         mockOutput,
         limiter,
+        jevLimiter,
         runtimeOptions,
+        ...(options.jev !== undefined ? { jev: options.jev } : {}),
         cancellation,
         tracing,
         ...(rootSpanId !== undefined ? { rootSpanId } : {}),
@@ -1843,7 +2131,9 @@ export const runWorkflow = async (
       executeTask: options.executeTask,
       mockOutput,
       limiter,
+      jevLimiter,
       runtimeOptions,
+      ...(options.jev !== undefined ? { jev: options.jev } : {}),
       cancellation,
       tracing,
       ...(rootSpanId !== undefined ? { rootSpanId } : {}),

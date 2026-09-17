@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { HarnessTypesSnapshot } from "./harness-types.js";
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type { AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
@@ -122,7 +122,7 @@ export const findExistingAmpCatalogMode = async (
 };
 
 export const ampWorkerPins = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
 ): { readonly catalogModel?: string; readonly effort?: string } => {
   const worker = task.worker;
   if (worker === undefined || worker.worker !== "amp-code") return {};
@@ -136,7 +136,7 @@ export const ampWorkerPins = (
 
 /** Fail closed when a snapshot lists the catalog row and effort is not on that row. */
 export const validateAmpCatalogPins = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   snapshot: HarnessTypesSnapshot | undefined,
 ): string | undefined => {
   if (snapshot === undefined) return undefined;
@@ -406,7 +406,7 @@ export const ampSessionId = (stdout: string, stderr: string): string | undefined
     ]);
 
 export const runAmpWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: AmpWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_AMP_BIN ?? "amp";

@@ -10,7 +10,15 @@ import {
 } from "./workflow-grok-worker.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
-import { defineTask, defineWorkflow } from "./workflows.js";
+import { defineTask, defineWorkflow, type AnyWorkflowWorkerTask } from "./workflows.js";
+import type { WorkflowTaskExecutor } from "./workflow-runner.js";
+
+/** These suites only ever run worker tasks; narrow the union for the worker executor. */
+const grokExecutor = (cwd: string): WorkflowTaskExecutor => async (task, context) =>
+  createWorkflowWorkerExecutor({ worker: "grok", cwd })(
+    task as AnyWorkflowWorkerTask,
+    context,
+  );
 
 const task = {
   kind: "workflow-task" as const,
@@ -136,7 +144,7 @@ describe("grok worker structured session id", () => {
       });
       const workflow = defineWorkflow({ name: "runner-grok-native-repair", tasks: [repairTask] as const });
       const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "grok", cwd: root }),
+        executeTask: grokExecutor(root),
       });
 
       const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
@@ -204,7 +212,7 @@ describe("grok worker structured session id", () => {
       });
       const workflow = defineWorkflow({ name: "runner-grok-native-parse-repair", tasks: [repairTask] as const });
       const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "grok", cwd: root }),
+        executeTask: grokExecutor(root),
       });
 
       const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {

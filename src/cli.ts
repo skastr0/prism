@@ -119,6 +119,8 @@ import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
 import { runConfigureTui } from "./configure/index.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
+import { createWorkflowTaskExecutor } from "./workflow-executors.js";
+import { JevClientLive, resolveJevPublicConfig } from "./services/jev.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
 import {
   currentCliCommand,
@@ -931,7 +933,13 @@ workflow
         ? parseWorkflowPermissionMode(options.permission)
         : undefined;
       const workerExecutor = outputs === null
-        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model, fallbackPermission: parsedPermission })
+        ? createWorkflowTaskExecutor({
+          executeWorkflowTask: createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model, fallbackPermission: parsedPermission }),
+          // Always wired: JevClientLive builds its SDK client lazily, so a
+          // workflow without jev tasks never touches credentials, and a jev
+          // task without TYPESAFE_API_KEY fails with a clear configuration error.
+          jev: JevClientLive,
+        })
         : null;
       const result = await runWorkflow(workflow, {
         store,
@@ -943,6 +951,9 @@ workflow
           fallbackModel: options.model,
           fallbackPermission: parsedPermission,
         },
+        // Public (non-secret) jev config, resolved without the API key so
+        // identity/snapshot hashing works in mock mode and validate too.
+        jev: resolveJevPublicConfig(),
         executeTask: async (task, context) => {
           if (outputs === null) return trackWorkerExecution(workerExecutor!(task, context));
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {

@@ -22,6 +22,7 @@ import {
   typecheckWorkflowFile,
 } from "./workflow-typecheck.js";
 import {
+  isJevTask,
   isWorkflowDefinition,
   resolveWorkflowTaskModelResolution,
   workflowSummary,
@@ -99,6 +100,15 @@ const resolveTaskModelRow = (
   task: AnyWorkflowTask,
   snapshot?: ReturnType<typeof loadHarnessTypesSnapshot>,
 ): WorkflowTaskModelResolutionRow => {
+  // A jev task has no worker pin, permission mode, or harness model to
+  // resolve; its model is resolved against the Jev service config at run time.
+  if (isJevTask(task)) {
+    return {
+      id: task.id,
+      worker: "jev",
+      ...(task.model !== undefined ? { model: task.model } : {}),
+    };
+  }
   const pins = ampWorkerPins(task);
   const pinFields = {
     ...(pins.catalogModel !== undefined ? { catalogModel: pins.catalogModel } : {}),

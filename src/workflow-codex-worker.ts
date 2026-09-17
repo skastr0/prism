@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
-  AnyWorkflowTask,
+  AnyWorkflowWorkerTask,
   WorkflowPermissionMode,
   WorkflowSessionPersistence,
 } from "./workflows.js";
@@ -152,7 +152,7 @@ export const codexSessionId = (stdout: string, stderr: string): string | undefin
 };
 
 export const runCodexWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: CodexWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const sessionPersistence = options.sessionPersistence ?? "persistent";

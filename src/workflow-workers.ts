@@ -2,7 +2,7 @@ import {
   resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
   resolveWorkflowTaskSessionPersistence,
-  type AnyWorkflowTask,
+  type AnyWorkflowWorkerTask,
   type WorkflowPermissionMode,
   type WorkflowWorkerId,
 } from "./workflows.js";
@@ -21,7 +21,7 @@ import type {
   WorkflowTaskExecution,
   WorkflowTaskExecutionContext,
   WorkflowTaskExecutionContextWithoutRepair,
-  WorkflowTaskExecutor,
+  WorkflowWorkerTaskExecutor,
 } from "./workflow-runner.js";
 import {
   workflowContinuationAdapterForWorker,
@@ -53,7 +53,7 @@ export type WorkflowWorkerAdapterOptions<Worker extends WorkflowWorkerId = Workf
 export interface WorkflowWorkerAdapter<Worker extends WorkflowWorkerId = WorkflowWorkerId> {
   readonly id: Worker;
   readonly runTask: (
-    task: AnyWorkflowTask,
+    task: AnyWorkflowWorkerTask,
     options: WorkflowWorkerAdapterOptions<Worker>,
   ) => Promise<WorkflowTaskExecution>;
 }
@@ -253,7 +253,7 @@ export function getWorkflowWorkerAdapter(worker: string): WorkflowWorkerAdapter 
 }
 
 export const resolveWorkflowTaskPermission = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   fallbackPermission?: WorkflowPermissionMode,
 ): WorkflowPermissionMode =>
   task.worker?.permission ?? fallbackPermission ?? "permissive";
@@ -316,7 +316,7 @@ export const createWorkflowWorkerExecutor = (input: {
   readonly cwd: string;
   readonly model?: string;
   readonly fallbackPermission?: WorkflowPermissionMode;
-}): WorkflowTaskExecutor => {
+}): WorkflowWorkerTaskExecutor => {
   if (input.worker !== undefined) {
     getWorkflowWorkerAdapter(input.worker);
   }

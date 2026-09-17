@@ -269,20 +269,29 @@ function DetailPane({
     if (task === null) {
       lines.push("No task selected.");
     } else {
+      const snapshot = task.snapshot;
+      const workerSnapshot = snapshot?.kind === "workflow-task" ? snapshot : undefined;
+      const jevSnapshot = snapshot?.kind === "jev" ? snapshot : undefined;
       lines.push(
         `task ${task.taskId}`,
         `phase ${task.phase ?? "-"}`,
         `status ${task.status}`,
-        `worker ${task.workerAdapter ?? task.snapshot?.worker?.worker ?? "-"}`,
-        `model ${task.model ?? task.snapshot?.worker?.model ?? "-"}`,
+        `worker ${task.workerAdapter ?? workerSnapshot?.worker?.worker ?? (jevSnapshot !== undefined ? "jev" : "-")}`,
+        `model ${task.model ?? workerSnapshot?.worker?.model ?? jevSnapshot?.request.model ?? "-"}`,
         `cache ${badgeText(task.badges)}`,
-        `cache key ${task.cacheKey ?? task.snapshot?.cacheKey ?? "-"}`,
+        `cache key ${task.cacheKey ?? snapshot?.cacheKey ?? "-"}`,
         `last event ${task.lastEventType ?? "-"}`,
         `last activity ${task.lastEventAt ?? "-"}`,
         `external session ${task.externalSessionPointer ?? "-"}`,
         "",
-        "prompt",
-        truncate(task.prompt ?? task.snapshot?.prompt ?? "-", 1_000),
+        workerSnapshot !== undefined ? "prompt" : "request",
+        truncate(
+          task.prompt
+            ?? workerSnapshot?.prompt
+            ?? (jevSnapshot !== undefined ? JSON.stringify(jevSnapshot.request) : undefined)
+            ?? "-",
+          1_000,
+        ),
         "",
         "output",
         task.output === undefined ? "-" : jsonBlock(task.output, 1_500),

@@ -24,8 +24,24 @@ import {
   redactWorkflowText,
 } from "./workflow-data-policy.js";
 import type { WorkflowJudgeVerdict } from "./workflows.js";
-import type { WorkflowJudgeIdentity, WorkflowRunTaskSnapshot, WorkflowTaskIdentity } from "./workflow-identity.js";
-export { workflowRunTaskSnapshotForTask, workflowTaskIdentity, type WorkflowJudgeIdentity, type WorkflowRunTaskSnapshot, type WorkflowTaskIdentity } from "./workflow-identity.js";
+import type {
+  JevRunTaskSnapshot,
+  WorkflowJudgeIdentity,
+  WorkflowRunTaskSnapshot,
+  WorkflowRunTaskSnapshotInput,
+  WorkflowTaskIdentity,
+  WorkflowWorkerRunTaskSnapshot,
+} from "./workflow-identity.js";
+export {
+  workflowRunTaskSnapshotForTask,
+  workflowTaskIdentity,
+  type JevRunTaskSnapshot,
+  type WorkflowJudgeIdentity,
+  type WorkflowRunTaskSnapshot,
+  type WorkflowRunTaskSnapshotInput,
+  type WorkflowTaskIdentity,
+  type WorkflowWorkerRunTaskSnapshot,
+} from "./workflow-identity.js";
 import { openWorkflowDatabase, type WorkflowDatabase } from "./workflow-runtime.js";
 import {
   readRedactedWorkflowRunnerLog,
@@ -621,6 +637,8 @@ interface RunTaskSnapshotRow {
   readonly worker_json: string | null;
   readonly output_schema_json: string | null;
   readonly finish_criteria_json: string;
+  readonly task_kind: string | null;
+  readonly request_json: string | null;
   readonly created_at: string;
 }
 
@@ -630,7 +648,7 @@ export const projectWorkflowStoreDir = (prismHome: string, cwd: string = process
 export const defaultWorkflowStorePath = (prismHome: string, cwd: string = process.cwd()): string =>
   join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
-export const WORKFLOW_STORE_SCHEMA_VERSION = 7;
+export const WORKFLOW_STORE_SCHEMA_VERSION = 8;
 
 /**
  * AR-001: the task-cache resource identity used to key `workflow_task_records`
@@ -1885,6 +1903,31 @@ const migrateWorkflowStoreToVersion7 = (db: WorkflowDatabase): void => {
   })();
 };
 
+/**
+ * v8: native Jev decision tasks. `task_kind` discriminates snapshot variants
+ * (worker rows keep the default `'workflow-task'`); `request_json` carries the
+ * redacted native request for `kind: "jev"` rows. Jev rows write `prompt = ""`
+ * and `finish_criteria_json = "[]"` as physical placeholders only — the public
+ * snapshot union never exposes them.
+ */
+const migrateWorkflowStoreToVersion8 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
+    const snapshotColumns = db.query<{ readonly name: string }, []>(
+      "pragma table_info(workflow_run_task_snapshots);",
+    ).all();
+    const hasColumn = (name: string): boolean => snapshotColumns.some((column) => column.name === name);
+    if (!hasColumn("task_kind")) {
+      db.exec(
+        "alter table workflow_run_task_snapshots add column task_kind text not null default 'workflow-task';",
+      );
+    }
+    if (!hasColumn("request_json")) {
+      db.exec("alter table workflow_run_task_snapshots add column request_json text;");
+    }
+    db.exec("pragma user_version = 8;");
+  })();
+};
+
 export class WorkflowStore {
   initialRetentionCleanup: WorkflowRetentionCleanupReport | null = null;
 
@@ -1972,6 +2015,9 @@ export class WorkflowStore {
       }
       if (schemaVersion <= 6) {
         migrateWorkflowStoreToVersion7(db);
+      }
+      if (schemaVersion <= 7) {
+        migrateWorkflowStoreToVersion8(db);
       }
     } catch (error) {
       db?.close();
@@ -2713,12 +2759,14 @@ export class WorkflowStore {
     };
   }
 
-  recordRunTaskSnapshot(input: Omit<WorkflowRunTaskSnapshot, "createdAt">): void {
+  recordRunTaskSnapshot(input: WorkflowRunTaskSnapshotInput): void {
+    const isJev = input.kind === "jev";
     this.db.query(`
       insert into workflow_run_task_snapshots (
         run_id, ordinal, task_id, phase, prompt, cache_key, prompt_hash,
-        worker_json, output_schema_json, finish_criteria_json
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        worker_json, output_schema_json, finish_criteria_json,
+        task_kind, request_json
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       on conflict(run_id, ordinal)
       do update set
         task_id = excluded.task_id,
@@ -2728,18 +2776,22 @@ export class WorkflowStore {
         prompt_hash = excluded.prompt_hash,
         worker_json = excluded.worker_json,
         output_schema_json = excluded.output_schema_json,
-        finish_criteria_json = excluded.finish_criteria_json
+        finish_criteria_json = excluded.finish_criteria_json,
+        task_kind = excluded.task_kind,
+        request_json = excluded.request_json
     `).run(
       input.runId,
       input.ordinal,
       input.taskId,
       input.phase ?? null,
-      redactWorkflowText(input.prompt),
+      isJev ? "" : redactWorkflowText(input.prompt),
       input.cacheKey,
       input.promptHash,
-      input.worker === undefined ? null : redactedJson(input.worker),
+      !isJev && input.worker !== undefined ? redactedJson(input.worker) : null,
       input.outputSchema === undefined ? null : redactedJson(input.outputSchema),
-      redactedJson(input.finishCriteria),
+      isJev ? "[]" : redactedJson(input.finishCriteria),
+      input.kind,
+      isJev ? redactedJson(input.request) : null,
     );
   }
 
@@ -2747,24 +2799,39 @@ export class WorkflowStore {
     const rows = this.db.query<RunTaskSnapshotRow, [string]>(`
       select run_id, ordinal, task_id, phase, prompt, cache_key, prompt_hash,
              worker_json, output_schema_json,
-             finish_criteria_json, created_at
+             finish_criteria_json, task_kind, request_json, created_at
       from workflow_run_task_snapshots
       where run_id = ?
       order by ordinal asc
     `).all(runId);
-    return rows.map((row) => ({
-      runId: row.run_id,
-      ordinal: row.ordinal,
-      taskId: row.task_id,
-      ...(row.phase !== null ? { phase: row.phase } : {}),
-      prompt: row.prompt,
-      cacheKey: row.cache_key,
-      promptHash: row.prompt_hash,
-      ...(row.worker_json !== null ? { worker: JSON.parse(row.worker_json) as WorkflowRunTaskSnapshot["worker"] } : {}),
-      ...(row.output_schema_json !== null ? { outputSchema: JSON.parse(row.output_schema_json) as unknown } : {}),
-      finishCriteria: JSON.parse(row.finish_criteria_json) as string[],
-      createdAt: row.created_at,
-    }));
+    return rows.map((row) => {
+      const base = {
+        runId: row.run_id,
+        ordinal: row.ordinal,
+        taskId: row.task_id,
+        ...(row.phase !== null ? { phase: row.phase } : {}),
+        cacheKey: row.cache_key,
+        promptHash: row.prompt_hash,
+        ...(row.output_schema_json !== null ? { outputSchema: JSON.parse(row.output_schema_json) as unknown } : {}),
+        createdAt: row.created_at,
+      };
+      // Rows predating v7 read as null task_kind; they are worker snapshots by
+      // construction (the union did not exist before this schema version).
+      if (row.task_kind === "jev" && row.request_json !== null) {
+        return {
+          ...base,
+          kind: "jev",
+          request: JSON.parse(row.request_json) as JevRunTaskSnapshot["request"],
+        };
+      }
+      return {
+        ...base,
+        kind: "workflow-task",
+        prompt: row.prompt,
+        ...(row.worker_json !== null ? { worker: JSON.parse(row.worker_json) as WorkflowWorkerRunTaskSnapshot["worker"] } : {}),
+        finishCriteria: JSON.parse(row.finish_criteria_json) as string[],
+      };
+    });
   }
 
   setRunHandoffToken(runId: string, token: string): void {
@@ -3825,7 +3892,7 @@ export class WorkflowStore {
         ...(ordinal !== undefined ? { ordinal } : {}),
         ...(snapshot?.phase !== undefined ? { phase: snapshot.phase } : {}),
         ...(snapshot?.cacheKey !== undefined ? { cacheKey: snapshot.cacheKey } : {}),
-        ...(snapshot?.prompt !== undefined ? { prompt: snapshot.prompt } : {}),
+        ...(snapshot?.kind === "workflow-task" && snapshot.prompt !== undefined ? { prompt: snapshot.prompt } : {}),
         ...(row !== undefined ? { output: row.output } : {}),
         ...(row?.metadata !== undefined ? { metadata: row.metadata } : {}),
         badges: taskBadges(task, taskEvents),

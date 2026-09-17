@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
-import type { AntigravityWorkflowPermissionMode, AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type { AntigravityWorkflowPermissionMode, AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
@@ -199,7 +199,7 @@ const agyPrintFailureMessage = (input: {
 };
 
 const antigravityMetadata = (input: {
-  readonly task: AnyWorkflowTask;
+  readonly task: AnyWorkflowWorkerTask;
   readonly model?: string;
   readonly durationMs: number;
   readonly printTimeout: string;
@@ -542,7 +542,7 @@ const runAgyWithRetry = (input: {
   });
 
 export const runAntigravityWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: AntigravityWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_ANTIGRAVITY_BIN ?? "agy";

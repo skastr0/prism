@@ -1,6 +1,15 @@
 import { Effect, Result, Schema } from "effect";
 import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
 import { isWorkflowSchedule, parseWorkflowSchedule, type WorkflowSchedule } from "./workflow-scheduler/schedule.js";
+import {
+  jevResultSchema,
+  normalizeJevRequest,
+  type JevEntry,
+  type JevQuestions,
+  type JevRequest,
+  type JevResult,
+  type JevResultCodec,
+} from "./jev.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
 export {
@@ -316,7 +325,7 @@ const describeModelRef = (ref: WorkflowModelProfileRef | WorkflowModelRef): stri
  * (e.g. opencode) keep doing so.
  */
 export const resolveWorkflowTaskModelResolution = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: { readonly worker?: string; readonly fallbackModel?: string } = {},
 ): WorkflowTaskModelResolution | undefined => {
   const explicit = task.worker?.model;
@@ -338,7 +347,7 @@ export const resolveWorkflowTaskModelResolution = (
 };
 
 export const resolveWorkflowTaskModel = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: { readonly worker?: string; readonly fallbackModel?: string } = {},
 ): string | undefined => resolveWorkflowTaskModelResolution(task, options)?.model;
 
@@ -437,12 +446,107 @@ export type WorkflowTask<
  * erased. This is a deliberate loss of proof at the task-collection boundary,
  * not sound existential quantification.
  */
-export type AnyWorkflowTask = WorkflowTask<string, Schema.Codec<any, unknown, never, never>>;
+export type AnyWorkflowWorkerTask = WorkflowTask<string, Schema.Codec<any, unknown, never, never>>;
+
+/**
+ * A Jev task whose question types are erased. Like the worker erasure above,
+ * this keeps heterogeneous `tasks: [...] tuples writable while concrete
+ * `jev(...)` calls keep their precise inferred output.
+ */
+export type AnyJevTask = JevTask<string, any>;
+
+export type AnyWorkflowTask =
+  | AnyWorkflowWorkerTask
+  | AnyJevTask;
 
 export type WorkflowTaskOutput<Task extends AnyWorkflowTask> = Task["output"]["Type"];
 
+// ---------------------------------------------------------------------------
+// Jev decision tasks (kind: "jev")
+//
+// A Jev task is a native first-class decision step: it calls the TypeSafe
+// System One API in-process through the JevClient service (src/services/jev.ts)
+// instead of spawning a harness worker. Its output schema is derived from the
+// questions map — authors cannot supply or override it, so the decoded output
+// type always matches the request contract. Jev tasks have no prompt, worker
+// options, finish criteria, or repair semantics: a low-confidence answer is a
+// successful decision, and routing is workflow code, not a retry loop.
+// ---------------------------------------------------------------------------
+
+export interface JevTaskDefinition<
+  Id extends string,
+  Q extends JevQuestions,
+> extends JevRequest<Q> {
+  readonly id: Id;
+  /** Per-HTTP-attempt timeout override passed to the JevClient call. */
+  readonly timeoutMs?: number;
+  readonly phase?: string;
+  readonly cacheKey?: string;
+}
+
+export type JevTask<
+  Id extends string = string,
+  Q extends JevQuestions = JevQuestions,
+> = JevTaskDefinition<Id, Q> & {
+  readonly kind: "jev";
+  readonly output: JevResultCodec<Q>;
+};
+
+const JEV_TASK_DEFINITION_KEYS = new Set([
+  "id",
+  "state",
+  "questions",
+  "model",
+  "timeoutMs",
+  "phase",
+  "cacheKey",
+]);
+
+/**
+ * Construct a native Jev decision task. The state/questions are validated,
+ * deep-copied, and frozen immediately so identity hashing and execution can
+ * never disagree, and the output codec is derived from the questions.
+ */
+export const jev = <const Id extends string, const Q extends JevQuestions>(
+  definition: JevTaskDefinition<Id, Q>,
+): JevTask<Id, Q> => {
+  for (const key of Object.keys(definition)) {
+    if (!JEV_TASK_DEFINITION_KEYS.has(key)) {
+      throw new WorkflowTaskInputError(
+        "jev",
+        `unsupported jev task field '${key}' (a jev task has no prompt, worker options, or finish criteria)`,
+      );
+    }
+  }
+  if (typeof definition.id !== "string" || definition.id.length === 0) {
+    throw new WorkflowTaskInputError("jev", "jev task id must be a non-empty string");
+  }
+  if (
+    definition.timeoutMs !== undefined
+    && (!Number.isFinite(definition.timeoutMs) || definition.timeoutMs <= 0)
+  ) {
+    throw new WorkflowTaskInputError("jev", "jev task timeoutMs must be a positive finite number");
+  }
+  const request = normalizeJevRequest({
+    state: definition.state,
+    questions: definition.questions,
+    ...(definition.model !== undefined ? { model: definition.model } : {}),
+  });
+  return Object.freeze({
+    kind: "jev",
+    id: definition.id,
+    state: request.state,
+    questions: request.questions,
+    ...(request.model !== undefined ? { model: request.model } : {}),
+    ...(definition.timeoutMs !== undefined ? { timeoutMs: definition.timeoutMs } : {}),
+    ...(definition.phase !== undefined ? { phase: definition.phase } : {}),
+    ...(definition.cacheKey !== undefined ? { cacheKey: definition.cacheKey } : {}),
+    output: jevResultSchema(request.questions),
+  }) as JevTask<Id, Q>;
+};
+
 export const resolveWorkflowTaskSessionPersistence = (
-  task: Pick<AnyWorkflowTask, "worker">,
+  task: Pick<AnyWorkflowWorkerTask, "worker">,
   effectiveWorker: string | undefined = task.worker?.worker,
 ): WorkflowSessionPersistence | undefined => {
   if (!workflowWorkerSupportsSessionPersistence(effectiveWorker)) return undefined;
@@ -462,7 +566,7 @@ const hasValidWorkflowTaskSessionPersistence = (value: unknown): boolean => {
     && (sessionPersistence === "persistent" || sessionPersistence === "ephemeral");
 };
 
-export const assertWorkflowTaskSessionPersistence = (task: AnyWorkflowTask): void => {
+export const assertWorkflowTaskSessionPersistence = (task: AnyWorkflowWorkerTask): void => {
   const worker = task.worker as unknown;
   if (hasValidWorkflowTaskSessionPersistence(worker)) return;
   if (
@@ -478,7 +582,7 @@ export const assertWorkflowTaskSessionPersistence = (task: AnyWorkflowTask): voi
   );
 };
 
-export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
+export const isWorkflowWorkerTask = (value: unknown): value is AnyWorkflowWorkerTask =>
   isRecord(value) &&
   value.kind === "workflow-task" &&
   typeof value.id === "string" &&
@@ -486,6 +590,16 @@ export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
   Schema.isSchema(value.output) &&
   (value.cacheKey === undefined || typeof value.cacheKey === "string") &&
   hasValidWorkflowTaskSessionPersistence(value.worker);
+
+export const isJevTask = (value: unknown): value is AnyJevTask =>
+  isRecord(value) &&
+  value.kind === "jev" &&
+  typeof value.id === "string" &&
+  Schema.isSchema(value.output) &&
+  (value.cacheKey === undefined || typeof value.cacheKey === "string");
+
+export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
+  isWorkflowWorkerTask(value) || isJevTask(value);
 
 export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyArray<AnyWorkflowTask>> {
   readonly kind: "workflow";
@@ -555,6 +669,31 @@ export type PhaseCtxTask<
   def: PhaseTaskDefinition<Id, Input, TaskOutput>,
 ) => Effect.Effect<WorkflowTaskOutput<WorkflowTask<Id, TaskOutput>>, WorkflowRuntimeError>;
 
+/**
+ * A `ctx.jev(...)` definition. When the phase binds an input contract, the
+ * Jev state is that contract's decoded value (it must still be a valid System
+ * One entry — schemas describing functions or class instances do not belong
+ * in state and will fail entry validation at run time).
+ */
+export type PhaseJevTaskDefinition<
+  Id extends string,
+  Input extends WorkflowOutputSchema | undefined,
+  Q extends JevQuestions,
+> = Omit<JevTaskDefinition<Id, Q>, "state"> & {
+  readonly state: Input extends WorkflowOutputSchema
+    ? Input["Type"] & JevEntry
+    : JevEntry;
+};
+
+export type PhaseCtxJev<
+  Input extends WorkflowOutputSchema | undefined,
+> = <
+  const Id extends string,
+  const Q extends JevQuestions,
+>(
+  definition: PhaseJevTaskDefinition<Id, Input, Q>,
+) => Effect.Effect<JevResult<Q>, WorkflowRuntimeError>;
+
 export interface PhaseCtx<
   Name extends string,
   Input extends WorkflowOutputSchema | undefined,
@@ -565,6 +704,12 @@ export interface PhaseCtx<
   readonly plugin: string;
   readonly phase: string;
   readonly task: PhaseCtxTask<Input, DefaultOutput>;
+  /**
+   * Run a native Jev decision inside this phase. Unlike `ctx.task`, no prompt
+   * framing, serialized-input block, finish criteria, or phase output schema
+   * is applied — a decision is defined by its state and questions alone.
+   */
+  readonly jev: PhaseCtxJev<Input>;
 }
 
 type AnyPhaseContract = PhaseContract<
@@ -692,12 +837,39 @@ const createPhaseCtx = <
     return runtime.runTask(workflowTask) as Effect.Effect<WorkflowTaskOutput<AnyWorkflowTask>, WorkflowRuntimeError>;
   };
 
+  const jevTask: PhaseCtxJev<Input> = <const Id extends string, const Q extends JevQuestions>(
+    def: PhaseJevTaskDefinition<Id, Input, Q>,
+  ): Effect.Effect<JevResult<Q>, WorkflowRuntimeError> => {
+    const { phase: phaseOverride, state: rawState, ...rest } = def as Omit<typeof def, "state"> & {
+      readonly phase?: string;
+      readonly state: unknown;
+    };
+    let state = rawState;
+    if (contract.input !== undefined) {
+      const decoded = Schema.decodeUnknownResult(contract.input)(rawState);
+      if (Result.isFailure(decoded)) {
+        return Effect.fail(new WorkflowTaskInputError(phaseKey, decoded.failure));
+      }
+      state = decoded.success;
+    }
+    const task = jev({
+      ...rest,
+      state: state as JevEntry,
+      phase: phaseOverride ?? phaseKey,
+    } as JevTaskDefinition<string, JevQuestions>);
+    // Contained assertion: the compile surface (PhaseJevTaskDefinition)
+    // proves Q's shape; the runtime re-validates state/questions in jev() and
+    // the runner decodes the result against the same question-derived codec.
+    return runtime.runTask(task) as unknown as Effect.Effect<JevResult<Q>, WorkflowRuntimeError>;
+  };
+
   return {
     name: contract.name,
     sop: contract.sop,
     plugin: contract.plugin,
     phase: phaseKey,
     task,
+    jev: jevTask,
   };
 };
 
@@ -836,7 +1008,7 @@ export function defineWorkflow<const Name extends string, Result, Err = Workflow
   };
 }
 
-export const decodeTaskOutput = <Task extends AnyWorkflowTask>(
+export const decodeTaskOutput = <Task extends AnyWorkflowTask | AnyJevTask>(
   task: Task,
   value: unknown,
 ): Result.Result<Task["output"]["Type"], Schema.SchemaError> =>

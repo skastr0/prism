@@ -8,6 +8,14 @@ import { stableJsonHash } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { isWorkflowRunOutcomeSuccessful, WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore, workflowRunLiveness, workflowTaskIdentity } from "./workflow-store.js";
+import type { WorkflowWorkerRunTaskSnapshot } from "./workflow-identity.js";
+import type { AnyWorkflowWorkerTask } from "./workflows.js";
+
+/** A run's first persisted worker-task snapshot (these suites never snapshot jev tasks). */
+const firstWorkerSnapshot = (store: WorkflowStore, runId: string): WorkflowWorkerRunTaskSnapshot | undefined => {
+  const snapshot = store.listRunTaskSnapshots(runId)[0];
+  return snapshot?.kind === "workflow-task" ? snapshot : undefined;
+};
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { DEFAULT_WORKFLOW_DECODE_REPAIRS, defineTask, defineWorkflow, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
 
@@ -2264,11 +2272,11 @@ describe("workflow store", () => {
     expect(JSON.stringify(store.listRunTasks(second.runId!))).not.toContain(persistentSessionId);
     expect(JSON.stringify(store.workflowMonitorState(second.runId!))).not.toContain(persistentSessionId);
     expect(JSON.stringify(await store.exportRun(second.runId!))).not.toContain(persistentSessionId);
-    expect(store.listRunTaskSnapshots(first.runId!)[0]?.worker).toEqual({
+    expect(firstWorkerSnapshot(store, first.runId!)?.worker).toEqual({
       worker: "codex-cli",
       sessionPersistence: "persistent",
     });
-    expect(store.listRunTaskSnapshots(second.runId!)[0]?.worker).toEqual({
+    expect(firstWorkerSnapshot(store, second.runId!)?.worker).toEqual({
       worker: "codex-cli",
       sessionPersistence: "ephemeral",
     });
@@ -2326,11 +2334,11 @@ describe("workflow store", () => {
       expect(second.tasks[0]?.cached).toBe(true);
       expect(second.tasks[0]?.metadata?.sessionPersistence).toBe("ephemeral");
       expect(JSON.stringify(second.tasks[0]?.metadata)).not.toContain(sessionId);
-      expect(store.listRunTaskSnapshots(first.runId!)[0]?.worker).toEqual({
+      expect(firstWorkerSnapshot(store, first.runId!)?.worker).toEqual({
         worker,
         sessionPersistence: "persistent",
       });
-      expect(store.listRunTaskSnapshots(second.runId!)[0]?.worker).toEqual({
+      expect(firstWorkerSnapshot(store, second.runId!)?.worker).toEqual({
         worker,
         sessionPersistence: "ephemeral",
       });
@@ -2695,7 +2703,7 @@ describe("workflow store", () => {
     const first = await runWorkflow(workflow, {
       store,
       executeTask: async (task) => {
-        calls.push(task.prompt);
+        calls.push((task as AnyWorkflowWorkerTask).prompt);
         if (task.id === "build") return { summary: "first" };
         return { verdict: "pass" };
       },

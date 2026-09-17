@@ -19,11 +19,27 @@ import {
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
   defineTask,
   defineWorkflow,
+  isWorkflowWorkerTask,
   resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
   type AnyWorkflowTask,
+  type AnyWorkflowWorkerTask,
   type PhaseContract,
 } from "./workflows.js";
+import type { WorkflowTaskExecutionContext, WorkflowTaskExecutor, WorkflowWorkerTaskExecutor } from "./workflow-runner.js";
+
+/** Narrow a task handed to a test executor: these suites only ever run worker tasks. */
+const workerTask = (task: AnyWorkflowTask): AnyWorkflowWorkerTask => {
+  if (!isWorkflowWorkerTask(task)) {
+    throw new Error(`test executor received unexpected task kind '${task.kind}' for task '${task.id}'`);
+  }
+  return task;
+};
+
+/** Adapt a worker-only executor to the full WorkflowTaskExecutor contract. */
+const asWorkflowTaskExecutor = (execute: WorkflowWorkerTaskExecutor): WorkflowTaskExecutor =>
+  async (task: AnyWorkflowTask, context?: WorkflowTaskExecutionContext) =>
+    await execute(workerTask(task), context);
 
 const PatchReport = Schema.Struct({ summary: Schema.String });
 const ReviewReport = Schema.Struct({ verdict: Schema.Literals(["pass", "needs-work"]) });
@@ -286,7 +302,7 @@ console.log(JSON.stringify(result));
 
     const result = await runWorkflow(workflow, {
       executeTask: async (task, context) => {
-        prompts.push(task.prompt);
+        prompts.push(workerTask(task).prompt);
         executorAttempts.push(context?.repair?.attempt);
         repairCriteria.push(context?.repair?.criterion);
         if (prompts.length === 1) {
@@ -473,7 +489,7 @@ console.log(JSON.stringify(result));
 
     const result = await runWorkflow(workflow, {
       executeTask: async (task) => {
-        prompts.push(task.prompt);
+        prompts.push(workerTask(task).prompt);
         if (prompts.length === 1) {
           return { output: parseWorkflowWorkerJsonOutput('{"summary":"bad\\q"}') };
         }
@@ -548,7 +564,7 @@ console.log(JSON.stringify(result));
       });
       const workflow = defineWorkflow({ name: "runner-claude-native-repair", tasks: [task] as const });
       const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
+        executeTask: asWorkflowTaskExecutor(createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root })),
       });
 
       const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; pluginDir?: string; prompt: string });
@@ -621,7 +637,7 @@ console.log(JSON.stringify(result));
       });
       const workflow = defineWorkflow({ name: "runner-codex-ephemeral-repair", tasks: [task] as const });
       const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "codex-cli", cwd: root }),
+        executeTask: asWorkflowTaskExecutor(createWorkflowWorkerExecutor({ worker: "codex-cli", cwd: root })),
       });
 
       const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) =>
@@ -698,7 +714,7 @@ console.log(JSON.stringify(result));
               ...(context.repair.mode === "fresh-executor-invocation"
                 ? { fallbackReason: context.repair.fallbackReason }
                 : {}),
-              prompt: attemptTask.prompt,
+              prompt: workerTask(attemptTask).prompt,
             });
           }
           return {
@@ -766,7 +782,7 @@ console.log(JSON.stringify(result));
       });
       const workflow = defineWorkflow({ name: "runner-antigravity-native-repair", tasks: [task] as const });
       const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "antigravity-cli", cwd: root }),
+        executeTask: asWorkflowTaskExecutor(createWorkflowWorkerExecutor({ worker: "antigravity-cli", cwd: root })),
       });
 
       const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
@@ -847,7 +863,7 @@ console.log(JSON.stringify(result));
       });
       const workflow = defineWorkflow({ name: "runner-claude-missing-session-repair", tasks: [task] as const });
       const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
+        executeTask: asWorkflowTaskExecutor(createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root })),
       });
 
       const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; pluginDir?: string; prompt: string });
@@ -889,7 +905,7 @@ console.log(JSON.stringify(result));
 
     await expect(runWorkflow(workflow, {
       executeTask: async (task) => {
-        calls.push(task.prompt);
+        calls.push(workerTask(task).prompt);
         throw new Error("provider auth missing");
       },
     })).rejects.toThrow("provider auth missing");
@@ -920,7 +936,7 @@ console.log(JSON.stringify(result));
 
     const result = await runWorkflow(workflow, {
       executeTask: async (task) => {
-        prompts.push(task.prompt);
+        prompts.push(workerTask(task).prompt);
         if (task.id === "build") return { summary: "built" };
         return { verdict: "pass" };
       },
@@ -998,7 +1014,8 @@ console.log(JSON.stringify(result));
 
     await runWorkflow(workflow, {
       executeTask: async (task) => {
-        models.push(typeof task.worker?.model === "string" ? task.worker.model : undefined);
+        const model = workerTask(task).worker?.model;
+        models.push(typeof model === "string" ? model : undefined);
         return task.id === "build" ? { summary: "built" } : { verdict: "pass" };
       },
     });
@@ -1033,7 +1050,7 @@ console.log(JSON.stringify(result));
 
     await runWorkflow(workflow, {
       executeTask: async (task) => {
-        workers.push(task.worker?.worker);
+        workers.push(workerTask(task).worker?.worker);
         return task.id === "build" ? { summary: "built" } : { verdict: "pass" };
       },
     });
@@ -1288,7 +1305,7 @@ console.log(JSON.stringify(result));
 
     const result = await runWorkflow(workflow, {
       executeTask: async (task) => {
-        prompts.push(task.prompt);
+        prompts.push(workerTask(task).prompt);
         if (prompts.length === 1) return { wrong: "shape" };
         return { summary: "repaired" };
       },
@@ -1324,7 +1341,7 @@ console.log(JSON.stringify(result));
 
     const result = await runWorkflow(workflow, {
       executeTask: async (task) => {
-        calls.push(task.prompt);
+        calls.push(workerTask(task).prompt);
         return calls.length === 1 ? { summary: "built" } : { summary: "done built" };
       },
     });
@@ -1417,7 +1434,7 @@ console.log(JSON.stringify(result));
 
     const result = await runWorkflow(workflow, {
       executeTask: async (task) => {
-        prompts.push(task.prompt);
+        prompts.push(workerTask(task).prompt);
         return prompts.length === 1 ? { summary: "built" } : { summary: "done built" };
       },
     });
@@ -1924,7 +1941,7 @@ console.log(JSON.stringify(result));
 
     const result = await runWorkflow(workflow, {
       executeTask: async (task) => {
-        prompts.push(task.prompt);
+        prompts.push(workerTask(task).prompt);
         if (prompts.length === 1) {
           return { output: parseWorkflowWorkerJsonOutput('{"summary":"bad\\q"}') };
         }
@@ -1980,7 +1997,7 @@ console.log(JSON.stringify(result));
       });
       const workflow = defineWorkflow({ name: "runner-grok-fresh-repair", tasks: [task] as const });
       const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "grok", cwd: root }),
+        executeTask: asWorkflowTaskExecutor(createWorkflowWorkerExecutor({ worker: "grok", cwd: root })),
       });
 
       const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; prompt: string });

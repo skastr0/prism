@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { buildCompileManifestForTarget, emptyCompileManifest } from "./compile-manifest.js";
-import { phase, type AnyWorkflowTask } from "../workflows.js";
+import { phase, type AnyWorkflowTask, type AnyWorkflowWorkerTask } from "../workflows.js";
 import type { AgentCacheDescriptor } from "./cache.js";
 import type { ComposedAgent } from "./compose.js";
 import { emptyRegistry } from "./registry.js";
@@ -358,8 +358,8 @@ void _name; void _sop; void _plugin; void _criteria; void _escalation; void _inp
           ctx.task({ id: "scope", input: { brief: "typed" }, prompt: "go" })),
       );
       expect(captured[0]?.phase).toBe("beacon:explore");
-      expect(captured[0]?.prompt).toContain("## Phase beacon:explore");
-      expect(captured[0]?.prompt).toContain('"brief": "typed"');
+      expect((captured[0] as AnyWorkflowWorkerTask | undefined)?.prompt).toContain("## Phase beacon:explore");
+      expect((captured[0] as AnyWorkflowWorkerTask | undefined)?.prompt).toContain('"brief": "typed"');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

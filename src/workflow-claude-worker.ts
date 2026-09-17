@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { type AnyWorkflowTask, type WorkflowPermissionMode, type WorkflowSessionPersistence } from "./workflows.js";
+import { type AnyWorkflowWorkerTask, type WorkflowPermissionMode, type WorkflowSessionPersistence } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import {
   summarizeWorkflowWorkerStderrForSession,
@@ -197,7 +197,7 @@ export const buildClaudeArgs = (input: {
 };
 
 export const runClaudeWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: ClaudeWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const sessionPersistence = options.sessionPersistence ?? "persistent";

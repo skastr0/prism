@@ -1,4 +1,4 @@
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type { AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
@@ -165,7 +165,7 @@ const parseOpenCodeJsonStream = (stdout: string): OpenCodeStreamResult => {
 };
 
 export const runOpenCodeWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: OpenCodeWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_OPENCODE_BIN ?? "opencode";
@@ -215,7 +215,7 @@ export const runOpenCodeWorkflowTask = async (
 };
 
 export const runOpenCode2WorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: OpenCode2WorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_OPENCODE2_BIN ?? "opencode2";

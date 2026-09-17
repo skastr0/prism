@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type { AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
@@ -179,7 +179,7 @@ export const parseGrokJsonRunOutput = (stdout: string): GrokJsonRunOutput => {
 };
 
 export const runGrokWorkflowTask = async (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: GrokWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;

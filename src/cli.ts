@@ -2307,6 +2307,38 @@ program
     }
   });
 
+const jevCommand = program
+  .command("jev")
+  .description(
+    "TypeSafe System One (Jev) decisions: ask structured choice/score/noul questions",
+  );
+
+jevCommand
+  .command("ask")
+  .description(
+    "Ask one System One request ({state, questions, model?}); prints the wire result {model, answers, usage} as JSON",
+  )
+  .requiredOption("--input <json-or-@file>", "JSON request object, or @path to a JSON file")
+  .option("--timeout-ms <n>", "Per-HTTP-attempt timeout override", parsePositiveInteger)
+  .action(async (options: { input: string; timeoutMs?: number }) => {
+    try {
+      const { runJevAsk } = await import("./jev-ask.js");
+      const result = await runJevAsk({
+        input: options.input,
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      printCliError(error, "jev ask failed");
+      const { JevAskError } = await import("./jev-ask.js");
+      exitWith(
+        error instanceof JevAskError
+          ? error.exitCode
+          : exitCodeForCliError(error, EXIT_CODES.domainFailure),
+      );
+    }
+  });
+
 const toolsCommand = program
   .command("tools")
   .description(

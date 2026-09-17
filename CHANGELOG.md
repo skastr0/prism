@@ -9,6 +9,54 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## 0.6.0 - 2026-09-17
+
+### Added
+
+- **Jev — TypeSafe System One as a first-class citizen.** Three surfaces, one
+  implementation ([docs](docs/workflows.md#jev-tasks--typesafe-system-one-decisions)):
+  - Native `jev()` workflow task kind (plus `ctx.jev(...)` in SOP phases): one
+    request carries a shared JSON `state` and many `choice` / `score` / `noul`
+    questions and returns one typed answer per question id with confidence and
+    full probability distributions. No worker, prompt, repair, or judge loop;
+    answers decode strictly against a request-correlated contract (excess or
+    missing answer keys and labels fail closed), results cache by endpoint +
+    model + request, concurrency is capped per run (`WORKFLOW_JEV_CONCURRENCY`,
+    default 32), and over-budget requests (>~28k estimated tokens) fail
+    pre-flight with a shard-the-state hint. `JevClient` is an Effect service
+    with live env config (`TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`,
+    `TYPESAFE_MODEL`), explicit-config, and eagerly validated test layers.
+  - `prism jev ask --input '<json>'|@file [--timeout-ms n] [--json-errors]` —
+    the one-shot CLI the compiled plugin tool shells out to. Success is one
+    `{model, answers, usage}` document on stdout; failures are classified
+    (`usage` / `request` / the JevError kinds / `internal`) and with
+    `--json-errors` emit exactly one versioned machine record on stderr.
+  - The `jev` plugin (prism-plugins repo) exposes the same call to agents as
+    the `jev/systemone_ask` tool with a skill teaching the batching doctrine
+    (one request, many questions; shard the state past the budget; pin each
+    question's subject in `instructions`).
+- Example workflow
+  [`examples/prism-harness-qa/workflows/jev-routing.workflow.ts`](examples/prism-harness-qa/workflows/jev-routing.workflow.ts)
+  with rehearsing `--mock-output` answers.
+
+### Changed
+
+- **Effect v4** — Prism migrates to `effect@4.0.0-rc.115` exactly (pinned, not
+  ranged; the version guard enforces the exact version and
+  `check:effect-versions` runs inside `verify`). Context.Service, Result,
+  the v4 Schema surface and AST walkers, and the schema-bridge shipped into
+  generated plugins all read the v4 APIs.
+
+### Fixed
+
+- Jev request validation accepts `null` criterion descriptions (valid
+  undescribed labels) and preserves own `__proto__` question ids/labels as
+  data.
+- Effect Schema decoders strip excess properties by default; every Jev decode
+  boundary (ask envelope, live response, test stub, cached runner result) now
+  fails on them instead, so a misspelled question field can never silently
+  vanish from a request.
+
 ## 0.5.1 - 2026-09-11
 
 ### Added

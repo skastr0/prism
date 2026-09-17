@@ -99,6 +99,10 @@ Refs live at \`~/.prism/state/projects/<key>/generated/\` — run from the repo
 root so the project key matches. If \`prism workflow refs\` is missing/stale,
 refresh the plugin (not required for plugin-free workflows).
 
+## Jev decisions (no worker)
+
+\`jev({ id, state, questions, model?, timeoutMs?, cacheKey? })\` — one TypeSafe System One request answers many typed questions (\`choice\` / \`score\` / \`noul\`) about one shared JSON \`state\`. Use it for classification/routing batches instead of worker fan-out: all items in \`state\`, all questions in \`questions\`, one call. State entries are strings/objects/arrays/null only (serialize numbers). The question id does not bind a question to a state item — pin the subject in \`instructions\`. ~28k estimated-token request budget; over it, shard the state into more jev tasks with the same questions. No prompt, repairs, or judges; failures are typed \`JevError\` kinds. Needs \`TYPESAFE_API_KEY\`. Ad hoc: \`prism jev ask --input '<json>' [--json-errors]\`; agents: the \`jev/systemone_ask\` tool. Full doctrine: docs/workflows.md "Jev tasks".
+
 ## Commands (all plugin-free)
 
 | Command | What it does |

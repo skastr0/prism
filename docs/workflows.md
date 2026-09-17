@@ -13,6 +13,7 @@ For the product tour, start at the [root README](../README.md#workflows-typed-ta
 - [Finish criteria](#finish-criteria)
 - [defineWorkflow](#defineworkflow)
 - [Phases](#phases)
+- [Jev tasks — TypeSafe System One decisions](#jev-tasks--typesafe-system-one-decisions)
 - [Cache and ledger](#cache-and-ledger)
 - [Running and operating](#running-and-operating)
 - [Testing a graph without spending tokens](#testing-a-graph-without-spending-tokens)
@@ -274,6 +275,65 @@ What the phase machinery does:
 - **Tracing** — the whole phase runs inside a span named `workflow.phase.<sop>:<name>` with sop/phase attributes.
 
 `phase(runtime, contract, fn)` is also exported standalone; `wf.phase(contract, fn)` is the bound form.
+
+## Jev tasks — TypeSafe System One decisions
+
+A `jev()` task is a decision, not a worker dispatch: no prompt, no worker, no repair loop. It issues **one** [TypeSafe System One](https://docs.typesafe.ai/concepts/system-one) request — a shared `state` plus many `questions` — and returns one typed answer per question id, with confidence and full probability distributions. The batching doctrine is the point: bundle every item into the state and every question into the same request instead of fanning out per item or per question.
+
+```ts
+import { jev } from "prism";
+
+const triage = jev({
+  id: "triage-tabs",
+  cacheKey: "tab-triage-v1",
+  state: {
+    tabs: [
+      { id: "t1", title: "Effect Schema v4 — README", note: "docs tab, referenced twice today" },
+      { id: "t2", title: "github.com/skastr0/prism/pull/41", note: "open PR awaiting my review" },
+    ],
+  },
+  questions: {
+    // The question id does NOT bind the question to a state item — pin the
+    // subject in instructions (observed: unbound questions return flat
+    // guesses; bound questions answer at confidence 1.0).
+    t1_route: {
+      type: "choice",
+      instructions: "About state item t1 ('Effect Schema v4 — README')",
+      criteria: { keep: "actively needed this week", park: "reference for later", close: null },
+    },
+    t2_route: {
+      type: "choice",
+      instructions: "About state item t2 ('…prism/pull/41')",
+      criteria: { keep: "actively needed this week", park: "reference for later", close: null },
+    },
+    actionable_count: {
+      type: "score",
+      instructions: "Across ALL tabs in state, how many need concrete action this week?",
+      criteria: ["none", "one or two", "three or more"],
+    },
+    any_credential_risk: {
+      type: "noul",
+      instructions: "Is any tab an authenticated console that should not linger open?",
+      criteria: { true: "at least one authenticated console", false: "none" },
+    },
+  },
+});
+```
+
+A complete, rehearsed example (with `--mock-output` answers) ships at
+[`examples/prism-harness-qa/workflows/jev-routing.workflow.ts`](../examples/prism-harness-qa/workflows/jev-routing.workflow.ts).
+
+The contract:
+
+- **State** is JSON composed of strings, objects/arrays, and `null` only; numbers and booleans are rejected at validation (serialize them: `"count": "3"`).
+- **Questions** — `choice` (`criteria`: label → description, `null` allowed), `score` (ordered rubric array, 2+ levels), `noul` (yes/no presence; needs `criteria` `{true?, false?}` or `instructions`). Optional per-question `instructions` and a per-task `model` / `timeoutMs`.
+- **Answers** are keyed by your question ids. `choice` → `{choice, confidence, probabilities}` with probabilities covering exactly your labels; `score` → `{score, confidence, legend, probabilities}` where `score` is an EXPECTED score between 0 and (levels − 1) that may fall between integer levels (threshold `probabilities` for a discrete verdict) and `legend` echoes your criteria verbatim; `noul` → `{noul}` (0–1, read as P(true)).
+- **Budget** — a request targets ~28k estimated tokens (state + questions, ~4 chars/token); over-budget requests fail pre-flight with a "split into chunks" hint. Shard the **state** into sequential jev tasks with the same questions and merge answers — never split one logical question across requests. `WORKFLOW_JEV_CONCURRENCY` (default 32) caps concurrent Jev calls per run.
+- **Caching** — a jev task's identity hash covers the endpoint, model, state, questions, and result-contract version, so cache hits and resume replay are exact; change anything and only that task re-executes.
+- **Failures** — surfaced as typed `JevError` kinds: `configuration` (missing/invalid `TYPESAFE_API_KEY`), `request` (validation or API 400), `rate-limit` and `timeout` (transient, after SDK retries; `rate-limit` carries `retryAfterMs`), `protocol` (the response violated the result contract — extra/missing answer keys or labels fail strict decode, nothing is silently stripped). Jev tasks have no judge criteria and no decode-repair loop: a contract mismatch is terminal for that task.
+- **Phases** — inside `wf.phase`, use `ctx.jev({ id, questions, state, ... })`; the phase's typed `input` decodes the state once before the task is built.
+
+Requires `TYPESAFE_API_KEY` in the environment (`TYPESAFE_BASE_URL` / `TYPESAFE_MODEL` override the endpoint and default model). The same execution path is available ad hoc — `prism jev ask --input '{"state": …, "questions": …}' [--timeout-ms n] [--json-errors]` (structured one-line error records on stderr for programmatic callers) — and to agents via the `jev/systemone_ask` tool in the `jev` plugin; all three share the one implementation.
 
 ## Cache and ledger
 

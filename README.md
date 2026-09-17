@@ -280,6 +280,26 @@ Finish criteria come in two kinds. Deterministic checks are code. **Judge criter
 
 `wf.phase(contract, fn)` scopes tasks under a named phase of a SOP — with a default output schema, inherited finish criteria, and framing (purpose, when, escalation) composed into every prompt. Each phase runs inside its own span: `workflow.phase.<sop>:<name>`.
 
+### Jev tasks: one request, dozens of typed answers
+
+A `jev()` task is a decision, not a worker dispatch: it issues **one** [TypeSafe System One](https://docs.typesafe.ai/concepts/system-one) call — a shared JSON `state` plus many `questions` — and returns one typed answer per question id, with confidence and full probability distributions:
+
+```ts
+const triage = jev({
+  id: "triage-tabs",
+  state: { tabs: openTabs },            // all 150 items, one request
+  questions: {
+    t1_route: { type: "choice", instructions: "About state item t1 (…)",
+                criteria: { keep: "active", park: "reference", close: null } },
+    // … one bound question per tab, plus global ones, all in the same call
+    actionable_count: { type: "score", criteria: ["none", "one or two", "three or more"] },
+    any_credential_risk: { type: "noul", criteria: { true: "an auth'd console is open" } },
+  },
+});
+```
+
+No prompt, no repair loop: answers decode against a request-correlated contract (extra or missing keys fail closed), results cache by endpoint + model + request, and over-budget requests (>~28k estimated tokens) fail pre-flight with a shard-the-state hint. Requires `TYPESAFE_API_KEY`; ad hoc via `prism jev ask`, and to agents through the `jev/systemone_ask` plugin tool — one implementation, three surfaces. The doctrine and every field: [`docs/workflows.md`](docs/workflows.md#jev-tasks--typesafe-system-one-decisions).
+
 ### The ledger
 
 Every run persists to a SQLite store. That buys you operations, not just logs:

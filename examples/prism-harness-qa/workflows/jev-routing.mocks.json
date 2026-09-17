@@ -1,0 +1,56 @@
+{
+  "triage-tabs": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "t1_route": {
+        "type": "choice",
+        "choice": "keep",
+        "confidence": 0.9,
+        "probabilities": { "keep": 0.88, "park": 0.1, "close": 0.02 }
+      },
+      "t2_route": {
+        "type": "choice",
+        "choice": "keep",
+        "confidence": 0.95,
+        "probabilities": { "keep": 0.95, "park": 0.04, "close": 0.01 }
+      },
+      "t3_route": {
+        "type": "choice",
+        "choice": "close",
+        "confidence": 0.85,
+        "probabilities": { "keep": 0.03, "park": 0.12, "close": 0.85 }
+      },
+      "t4_route": {
+        "type": "choice",
+        "choice": "close",
+        "confidence": 0.91,
+        "probabilities": { "keep": 0.02, "park": 0.07, "close": 0.91 }
+      },
+      "t5_route": {
+        "type": "choice",
+        "choice": "park",
+        "confidence": 0.8,
+        "probabilities": { "keep": 0.08, "park": 0.8, "close": 0.12 }
+      },
+      "t6_route": {
+        "type": "choice",
+        "choice": "close",
+        "confidence": 0.74,
+        "probabilities": { "keep": 0.06, "park": 0.2, "close": 0.74 }
+      },
+      "actionable_count": {
+        "type": "score",
+        "score": 1.2,
+        "confidence": 0.7,
+        "legend": {
+          "0": "none need action",
+          "1": "one or two need action",
+          "2": "three or more need action"
+        },
+        "probabilities": { "0": 0.05, "1": 0.7, "2": 0.25 }
+      },
+      "any_credential_risk": { "type": "noul", "noul": 0.92 }
+    },
+    "usage": { "input_tokens": 2104, "output_tokens": 214 }
+  }
+}

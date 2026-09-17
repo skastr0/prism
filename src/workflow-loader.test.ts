@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test as bunTest } from "bun:test";
 import { Database } from "bun:sqlite";
+import { Schema } from "effect";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,7 +8,7 @@ import type { ComposedAgent } from "./compile/compose.js";
 import { planLowering } from "./compile/lowerers/grok.js";
 import type { DesiredFile } from "./sync/desired.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
-import { validateWorkflowFile, WorkflowLoadError, WorkflowValidationError } from "./workflow-loader.js";
+import { loadWorkflowFile, validateWorkflowFile, WorkflowLoadError, WorkflowValidationError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
@@ -3450,5 +3451,79 @@ export default defineWorkflow({
     expect((JSON.parse(failed.stdout) as { run: { status: string }; tasks: unknown[] }).run.status).toBe("failed");
     expect(running.exitCode).toBe(1);
     expect(running.stderr).toContain("timed out waiting for workflow run running-run");
+  });
+
+  test("off-repo workflows load the real vendored DSL: jev() tasks with working codecs", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "jev-smoke.workflow.ts");
+    await writeFile(file, `
+import { Schema } from "effect";
+import { defineWorkflow, jev, choice, score, noul, estimateJevRequestTokens } from "prism";
+
+export default defineWorkflow({
+  name: "jev-smoke",
+  tasks: [
+    jev({
+      id: "route",
+      state: { tabs: ["https://a.dev", "https://b.dev"] },
+      questions: {
+        next: choice({ criteria: { act: "act on it now", wait: "leave it parked" } }),
+        confidence: score({ criteria: ["low", "high"] }),
+        note: noul({ instructions: "one short line" }),
+      },
+    }),
+  ],
+});
+`);
+
+    // No skipTypecheck: the fresh authoring declarations resolve `prism`'s
+    // jev surface (jev/choice/score/noul) with zero type errors.
+    const workflow = await loadWorkflowFile(file);
+
+    expect(workflow.name).toBe("jev-smoke");
+    expect("tasks" in workflow ? workflow.tasks : []).toHaveLength(1);
+    const task = ("tasks" in workflow ? workflow.tasks : [])[0]!;
+    expect(task.kind).toBe("jev");
+    expect(task.id).toBe("route");
+    expect(Object.isFrozen(task)).toBe(true);
+    expect(Object.isFrozen((task as { state: unknown }).state)).toBe(true);
+    expect(Object.keys((task as { questions: object }).questions)).toEqual([
+      "next",
+      "confidence",
+      "note",
+    ]);
+    // The derived codec, built through the shared Effect bridge, decodes the
+    // wire envelope from the binary's in-repo test module.
+    const envelope = {
+      model: "jev-latest",
+      answers: {
+        next: {
+          type: "choice",
+          choice: "act",
+          confidence: 0.9,
+          probabilities: { act: 0.9, wait: 0.1 },
+        },
+        confidence: {
+          type: "score",
+          score: 1,
+          confidence: 0.8,
+          legend: { "0": "low", "1": "high" },
+          probabilities: { "0": 0.2, "1": 0.8 },
+        },
+        note: { type: "noul", noul: 0.4 },
+      },
+      usage: { input_tokens: 10, output_tokens: 5 },
+    };
+    expect(Schema.decodeUnknownSync(task.output)(envelope)).toEqual(envelope);
+    // And a response that disagrees with its own questions fails decode.
+    expect(() =>
+      Schema.decodeUnknownSync(task.output)({
+        ...envelope,
+        answers: {
+          ...envelope.answers,
+          next: { ...envelope.answers.next, choice: "bogus" },
+        },
+      }),
+    ).toThrow();
   });
 });

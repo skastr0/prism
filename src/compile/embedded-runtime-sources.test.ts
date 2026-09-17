@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getAstToJsonSchemaSource } from "./embedded-runtime-sources.js";
+import {
+  getAstToJsonSchemaSource,
+  getWorkflowDslRuntimeSources,
+} from "./embedded-runtime-sources.js";
 
 test("getAstToJsonSchemaSource returns the canonical converter module text", () => {
   const source = getAstToJsonSchemaSource();
@@ -14,4 +17,19 @@ test("getAstToJsonSchemaSource returns the canonical converter module text", () 
   expect(source).toContain("export const astToJsonSchema");
   expect(source).toContain("WorkflowOutputSchemaError");
   expect(source).toContain("MCP_AST_TO_JSON_SCHEMA_OPTIONS");
+});
+
+test("getWorkflowDslRuntimeSources returns the canonical vendored DSL module texts", () => {
+  const sources = getWorkflowDslRuntimeSources();
+
+  expect(Object.keys(sources).sort()).toEqual(["jev.ts", "workflow-errors.ts", "workflows.ts"]);
+  for (const [name, source] of Object.entries(sources)) {
+    expect(source).toBe(readFileSync(join(import.meta.dirname, "..", name), "utf8"));
+  }
+  expect(sources["workflows.ts"]).toContain("export const jev =");
+  expect(sources["workflows.ts"]).toContain("export function defineWorkflow");
+  expect(sources["workflows.ts"]).toContain("export const decodeTaskOutput");
+  expect(sources["jev.ts"]).toContain("export function choice");
+  expect(sources["jev.ts"]).toContain("export const jevResultSchema");
+  expect(sources["workflow-errors.ts"]).toContain("WorkflowTaskInputError");
 });

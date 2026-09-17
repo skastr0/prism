@@ -20,3 +20,29 @@ export const getAstToJsonSchemaSource = (): string => {
   }
   return readFileSync(astToJsonSchemaSourcePath, "utf8");
 };
+
+declare const WORKFLOW_DSL_RUNTIME_SOURCES: string | undefined;
+
+/** The vendored workflow DSL modules, keyed by the file name they are written under. */
+export type WorkflowDslRuntimeSources = Readonly<Record<
+  "jev.ts" | "workflows.ts" | "workflow-errors.ts",
+  string
+>>;
+
+/**
+ * Returns the canonical workflow DSL module sources vendored into the
+ * off-repo `prism` runtime (compile/load.ts). Compiled prism binaries embed
+ * the sources via WORKFLOW_DSL_RUNTIME_SOURCES (see scripts/compile.ts);
+ * dev/test fall back to the repo source tree.
+ */
+export const getWorkflowDslRuntimeSources = (): WorkflowDslRuntimeSources => {
+  if (typeof WORKFLOW_DSL_RUNTIME_SOURCES === "string") {
+    return JSON.parse(WORKFLOW_DSL_RUNTIME_SOURCES) as WorkflowDslRuntimeSources;
+  }
+  const runtimeSourceDir = dirname(fileURLToPath(import.meta.url));
+  return {
+    "jev.ts": readFileSync(join(runtimeSourceDir, "../jev.ts"), "utf8"),
+    "workflows.ts": readFileSync(join(runtimeSourceDir, "../workflows.ts"), "utf8"),
+    "workflow-errors.ts": readFileSync(join(runtimeSourceDir, "../workflow-errors.ts"), "utf8"),
+  };
+};

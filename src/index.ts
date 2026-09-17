@@ -11,6 +11,7 @@
  * These helpers are identity constructors for authoring ergonomics.
  */
 
+export * from "./jev.js";
 export * from "./workflow-errors.js";
 export * from "./workflow-harness-detection.js";
 export * from "./workflows.js";

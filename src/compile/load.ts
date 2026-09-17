@@ -60,6 +60,7 @@ import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { effectBundleImportPath, typescriptBundleImportPath } from "./runtime-deps.js";
 import { AUTHORING_RUNTIME_JS, getAuthoringRuntimePath } from "./authoring-runtime.js";
+import { getWorkflowDslRuntimeSources } from "./embedded-runtime-sources.js";
 import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
 import {
   isPluginTargetId,
@@ -152,47 +153,16 @@ export default effect;
 };
 
 /**
- * The workflow DSL runtime. Off-repo workflow files import { defineTask,
- * defineWorkflow } from "prism"; this module supplies those builders with
- * behavior identical to src/workflows.ts. Schema is read
- * from the binary's embedded Effect (globalThis.__prism_effect) so
- * Schema.isSchema and decodeTaskOutput operate on the binary's Effect instance.
+ * The workflow DSL runtime module. Off-repo workflow files import { defineTask,
+ * defineWorkflow, jev, choice, ... } from "prism"; this generated module re-exports
+ * the canonical vendored DSL sources (src/workflows.ts + src/jev.ts, written as
+ * siblings under ./prism-runtime/) so off-repo authoring behavior is identical to
+ * in-repo behavior by construction. `from "effect"` imports inside the vendored
+ * sources are rewritten to the effect-runtime.mjs bridge so runtime Schema identity
+ * matches globalThis.__prism_effect.
  */
-const WORKFLOW_DSL_RUNTIME_JS = `
-const effect = globalThis.__prism_effect;
-if (!effect) {
-  throw new Error("prism Effect runtime bridge was not initialized");
-}
-const Schema = effect.Schema;
-
-export const defineTask = (definition) => ({
-  kind: "workflow-task",
-  ...definition,
-});
-
-export function defineWorkflow(definition) {
-  // The dynamic branch builds its value explicitly, so every field added to the
-  // definition must be carried here too. \`schedule\` is inert: recording it
-  // registers nothing, and only \`prism workflow schedule install\` activates it.
-  // The host re-validates it on load, so this bundle only has to preserve it.
-  if ("run" in definition) {
-    return {
-      kind: "workflow",
-      name: definition.name,
-      tasks: [],
-      run: definition.run,
-      ...(definition.schedule === undefined ? {} : { schedule: definition.schedule }),
-    };
-  }
-  return {
-    kind: "workflow",
-    ...definition,
-  };
-}
-
-export const decodeTaskOutput = (task, value) =>
-  Schema.decodeUnknownResult(task.output)(value);
-`;
+const makeWorkflowDslRuntimeJs = (): string =>
+  `export * from "./prism-runtime/workflows.ts";\nexport * from "./prism-runtime/jev.ts";\n`;
 
 let importRuntimePaths: Promise<{
   readonly authoring: string;
@@ -211,8 +181,20 @@ export const getImportRuntimePaths = async (): Promise<{
     const dir = await fs.mkdtemp(join(tmpdir(), "prism-authoring-"));
     const effectPath = join(dir, "effect-runtime.mjs");
     const workflowDslPath = join(dir, "workflow-dsl-runtime.mjs");
+    const vendoredDir = join(dir, "prism-runtime");
+    await fs.mkdir(vendoredDir, { recursive: true });
     await fs.writeFile(effectPath, makeEffectRuntimeJs(), "utf8");
-    await fs.writeFile(workflowDslPath, WORKFLOW_DSL_RUNTIME_JS, "utf8");
+    // Rewrite bare `from "effect"` to the bridge so the vendored DSL modules
+    // share the binary's Effect instance (runtime Schema identity).
+    const effectSpecifier = JSON.stringify(toFileSpecifier(effectPath));
+    for (const [name, source] of Object.entries(getWorkflowDslRuntimeSources())) {
+      await fs.writeFile(
+        join(vendoredDir, name),
+        source.replace(/(\bfrom\s*)["']effect["']/g, `$1${effectSpecifier}`),
+        "utf8",
+      );
+    }
+    await fs.writeFile(workflowDslPath, makeWorkflowDslRuntimeJs(), "utf8");
     return { authoring: authoringPath, effect: effectPath, workflowDsl: workflowDslPath };
   })();
 

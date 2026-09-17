@@ -19,6 +19,11 @@ const astToJsonSchemaSource = readFileSync(
   join(repoRoot, "src", "ast-to-json-schema.ts"),
   "utf8",
 );
+const workflowDslRuntimeSources = JSON.stringify({
+  "jev.ts": readFileSync(join(repoRoot, "src", "jev.ts"), "utf8"),
+  "workflows.ts": readFileSync(join(repoRoot, "src", "workflows.ts"), "utf8"),
+  "workflow-errors.ts": readFileSync(join(repoRoot, "src", "workflow-errors.ts"), "utf8"),
+} satisfies Record<string, string>);
 
 export const version = packageJson.version;
 
@@ -36,6 +41,7 @@ export async function compile(target: Target, outfile: string): Promise<void> {
       APP_VERSION: JSON.stringify(version),
       SCHEMA_BRIDGE_SOURCE: JSON.stringify(schemaBridgeSource),
       AST_TO_JSON_SCHEMA_SOURCE: JSON.stringify(astToJsonSchemaSource),
+      WORKFLOW_DSL_RUNTIME_SOURCES: JSON.stringify(workflowDslRuntimeSources),
     },
     minify: true,
   });

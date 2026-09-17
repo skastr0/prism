@@ -101,6 +101,42 @@ export class JevError extends Schema.TaggedError<JevError>()("JevError", {
 /** Internal marker so APIUserAbortError becomes interruption, not failure. */
 class JevSdkAbort extends Schema.TaggedError<JevSdkAbort>()("JevSdkAbort", {}) {}
 
+/** Replacement text for a scrubbed credential. */
+export const JEV_REDACTED_SECRET = "[redacted]";
+
+/**
+ * Redact exact occurrences of each known secret from outward diagnostic text.
+ * SDK error messages carry server-provided text verbatim (`APIError.describe`
+ * copies the response body's error/message/detail), and an upstream
+ * diagnostic can echo the Authorization header back — so every JevError that
+ * leaves the service boundary is scrubbed with the configured credential.
+ * Secrets shorter than 8 characters are skipped: redacting a tiny needle
+ * would mangle prose, and real credentials are never that short.
+ */
+export const redactJevSecrets = (
+  text: string,
+  secrets: ReadonlyArray<string | undefined>,
+): string => {
+  let redacted = text;
+  for (const secret of secrets) {
+    if (secret === undefined || secret.length < 8) continue;
+    redacted = redacted.split(secret).join(JEV_REDACTED_SECRET);
+  }
+  return redacted;
+};
+
+const redactJevError = (
+  error: JevError,
+  secrets: ReadonlyArray<string | undefined>,
+): JevError =>
+  new JevError({
+    kind: error.kind,
+    message: redactJevSecrets(error.message, secrets),
+    ...(error.status !== undefined ? { status: error.status } : {}),
+    ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
+    ...(error.sdkErrorName !== undefined ? { sdkErrorName: error.sdkErrorName } : {}),
+  });
+
 const sdkErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -318,7 +354,7 @@ const makeJevClientShape = (options: {
       });
     });
 
-  const systemOne = Effect.fn("JevClient.systemOne")(function* <const Q extends JevQuestions>(
+  const systemOneImpl = Effect.fn("JevClient.systemOne")(function* <const Q extends JevQuestions>(
     request: JevRequest<Q>,
     callOptions?: JevCallOptions,
   ): Effect.fn.Return<JevResult<Q>, JevError> {
@@ -381,6 +417,17 @@ const makeJevClientShape = (options: {
       ),
     );
   });
+
+  // Every error crossing the service boundary is scrubbed of the configured
+  // credential: SDK error messages can carry server-provided text verbatim,
+  // and an upstream diagnostic can echo the Authorization header back.
+  const systemOne: JevClientShape["systemOne"] = <const Q extends JevQuestions>(
+    request: JevRequest<Q>,
+    callOptions?: JevCallOptions,
+  ): Effect.Effect<JevResult<Q>, JevError> =>
+    systemOneImpl(request, callOptions).pipe(
+      Effect.mapError((error) => redactJevError(error, [options.apiKey])),
+    );
 
   return { config, systemOne };
 };

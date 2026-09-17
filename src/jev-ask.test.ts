@@ -133,6 +133,33 @@ describe("runJevAsk", () => {
     expect((error as JevAskError).failure.kind).toBe("request");
   });
 
+  test("error output never contains the TYPESAFE_API_KEY value", async () => {
+    // The decode failure message quotes the offending payload value; when
+    // that value IS the configured credential (operator pasted it into the
+    // payload), stderr must carry [redacted], not the key.
+    const sentinel = "ts-ask-secret-3c4d5e6f7a";
+    const previous = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = sentinel;
+    try {
+      const input = JSON.stringify({ state: {}, questions: sentinel });
+      const error = await runJevAsk({ input }).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(JevAskError);
+      const asError = error as JevAskError;
+      expect(JSON.stringify(asError)).not.toContain(sentinel);
+      expect(JSON.stringify(asError.failure)).not.toContain(sentinel);
+      expect(JSON.stringify(jevAskErrorRecord(asError))).not.toContain(sentinel);
+      expect(JSON.stringify(jevAskErrorRecord(new Error(`boom: ${sentinel}`)))).not.toContain(
+        sentinel,
+      );
+      expect(JSON.stringify(jevAskUsageRecord(new Error(`argv had ${sentinel}`)))).not.toContain(
+        sentinel,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previous;
+    }
+  });
+
   test("rejects misspelled question fields instead of silently stripping them", () => {
     // `instruction` (singular) is not a schema field: strict decode must fail
     // rather than drop the author's instructions from the request.

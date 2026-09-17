@@ -31,6 +31,7 @@ import {
   JevClient,
   JevClientLive,
   JevError,
+  redactJevSecrets,
   type JevClientService,
 } from "./services/jev.js";
 
@@ -61,12 +62,26 @@ export interface JevAskFailure {
   readonly cause?: unknown;
 }
 
+/**
+ * Secrets never allowed into this CLI's output. Service-layer errors are
+ * already scrubbed by JevClient; this covers the pre-service paths whose
+ * messages quote the operator's own payload (JSON parse snippets, file
+ * diagnostics).
+ */
+const jevAskSecrets = (): ReadonlyArray<string | undefined> => [process.env.TYPESAFE_API_KEY];
+
 export class JevAskError extends Error {
   readonly kind = "jev-ask-error" as const;
+  readonly failure: JevAskFailure;
 
-  constructor(readonly failure: JevAskFailure) {
-    super(`[jev:${failure.kind}] ${failure.message}`);
+  constructor(failure: JevAskFailure) {
+    const sanitized: JevAskFailure = {
+      ...failure,
+      message: redactJevSecrets(failure.message, jevAskSecrets()),
+    };
+    super(`[jev:${sanitized.kind}] ${sanitized.message}`);
     this.name = "JevAskError";
+    this.failure = sanitized;
   }
 
   /** CLI exit-code contract (src/exit.ts): malformed --input is usage (2); everything else is a domain failure (1). */
@@ -97,7 +112,10 @@ export const jevAskErrorRecord = (error: unknown): JevAskErrorRecord => {
       ? error.failure
       : {
           kind: "internal",
-          message: error instanceof Error ? error.message : String(error),
+          message: redactJevSecrets(
+            error instanceof Error ? error.message : String(error),
+            jevAskSecrets(),
+          ),
           cause: error,
         };
   return {
@@ -116,7 +134,10 @@ export const jevAskUsageRecord = (error: unknown): JevAskErrorRecord => ({
   version: 1,
   error: {
     kind: "usage",
-    message: error instanceof Error ? error.message : String(error),
+    message: redactJevSecrets(
+      error instanceof Error ? error.message : String(error),
+      jevAskSecrets(),
+    ),
   },
 });
 

@@ -242,6 +242,66 @@ describe("JevClientWith", () => {
     }
   });
 
+  test("server error text echoing the API key is scrubbed (http kind)", async () => {
+    const sentinel = "ts-live-secret-9f8e7d6c5b";
+    const { calls, fetch } = capturingFetch(() =>
+      jsonResponse(500, { detail: `upstream rejected bearer ${sentinel} twice: ${sentinel}` }),
+    );
+    const exit = await Effect.runPromiseExit(
+      askOnce.pipe(
+        Effect.provide(JevClientWith({ apiKey: sentinel, fetch, retry: { maxRetries: 0 } })),
+      ),
+    );
+    expect(calls).toHaveLength(1);
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause) as JevError;
+      expect(error.kind).toBe("http");
+      expect(error.status).toBe(500);
+      expect(JSON.stringify(error)).not.toContain(sentinel);
+      expect(error.message).toContain("[redacted]");
+    }
+  });
+
+  test("connection error text echoing the API key is scrubbed (connection kind)", async () => {
+    const sentinel = "ts-live-secret-1a2b3c4d5e";
+    const failing: typeof globalThis.fetch = (() =>
+      Promise.reject(
+        new Error(`dial failed for Bearer ${sentinel}`),
+      )) as unknown as typeof globalThis.fetch;
+    const exit = await Effect.runPromiseExit(
+      askOnce.pipe(
+        Effect.provide(JevClientWith({ apiKey: sentinel, fetch: failing, retry: { maxRetries: 0 } })),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause) as JevError;
+      expect(error.kind).toBe("connection");
+      expect(JSON.stringify(error)).not.toContain(sentinel);
+      expect(error.message).toContain("[redacted]");
+    }
+  });
+
+  test("protocol failures scrub a key embedded in the malformed response", async () => {
+    const sentinel = "ts-live-secret-6f7g8h9i0j";
+    const { fetch } = capturingFetch(() =>
+      jsonResponse(200, {
+        model: "jev-2026-08",
+        answers: { route: { type: "choice", choice: sentinel } },
+      }),
+    );
+    const exit = await Effect.runPromiseExit(
+      askOnce.pipe(Effect.provide(JevClientWith({ apiKey: sentinel, fetch }))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause) as JevError;
+      expect(error.kind).toBe("protocol");
+      expect(JSON.stringify(error)).not.toContain(sentinel);
+    }
+  });
+
   test("oversized requests fail pre-flight with a chunking hint and zero HTTP calls", async () => {
     const { calls, fetch } = capturingFetch(() => jsonResponse(200, okBody));
     const bigState = "x".repeat(200_000);

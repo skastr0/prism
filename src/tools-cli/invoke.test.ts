@@ -53,12 +53,20 @@ export default {
 
 export default {
   name: "hang",
-  description: "Never resolves; rejects the moment the runtime aborts it.",
+  description: "Never resolves; on abort it runs async cleanup, then rejects.",
   input: Schema.Struct({}),
   output: Schema.Struct({ ok: Schema.Boolean }),
   async handle(_input, context) {
     return await new Promise((_resolve, reject) => {
-      context.signal?.addEventListener("abort", () => reject(new Error("hang aborted by signal")), { once: true });
+      context.signal?.addEventListener("abort", () => {
+        // Reject only after async cleanup settles, like a tool whose finally
+        // removes a temp payload file: the invoke timeout grace period is
+        // what lets this complete before the caller sees the error.
+        setTimeout(() => {
+          globalThis.__jevInvokeHangCleanup = true;
+          reject(new Error("hang aborted by signal"));
+        }, 25);
+      }, { once: true });
     });
   },
 };
@@ -141,6 +149,7 @@ export default {
   expect((timedOut as ToolsCliInvokeError).message).toContain("timed out after 50ms");
   expect((timedOut as ToolsCliInvokeError).message).not.toContain("hang aborted");
   expect((timedOut as ToolsCliInvokeError).exitCode).toBe(2);
+  expect((globalThis as Record<string, unknown>).__jevInvokeHangCleanup).toBe(true);
 
   for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
     const invalid = await invokeToolViaCli({

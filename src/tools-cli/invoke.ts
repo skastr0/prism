@@ -118,11 +118,14 @@ const withTimeout = async <A>(
 ): Promise<A> => {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  // start() runs first: if it throws synchronously no timer was ever armed,
+  // so there is nothing to leak.
+  const operation = start(controller.signal);
   try {
-    // Arm the timer before starting so a synchronously-throwing start() still
-    // leaves no timer behind (cleared in finally).
     const timeout = new Promise<A>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         // Settle the timeout error BEFORE aborting: abort listeners run
         // synchronously and can reject the operation first, which must not
         // mask the timeout (the caller wants the timeout message + exit 2).
@@ -131,7 +134,18 @@ const withTimeout = async <A>(
         controller.abort(error);
       }, timeoutMs);
     });
-    return await Promise.race([start(controller.signal), timeout]);
+    return await Promise.race([operation, timeout]);
+  } catch (error) {
+    if (timedOut) {
+      // The operation was just aborted; give its cleanup (temp payload files,
+      // child processes) a bounded grace period to settle before the CLI's
+      // force-exit can strand it. Never masks or replaces the timeout error.
+      await Promise.race([
+        operation.catch(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+      ]);
+    }
+    throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

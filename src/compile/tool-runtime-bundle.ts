@@ -550,7 +550,12 @@ const objectZodFromEffectSchema = (
   return astToZodSchema(ast);
 };
 
-const decodeWithSchema = <A>(schema: Schema.Codec<A, unknown, never, never>, raw: unknown): A =>
+// Tool input is LLM/harness-controlled: excess fields are typos, not noise.
+// Strict decode fails loudly instead of silently stripping a misspelled
+// field (e.g. a question's instruction) before the handler ever sees it.
+const decodeInputWithSchema = <A>(schema: Schema.Codec<A, unknown, never, never>, raw: unknown): A =>
+  Schema.decodeUnknownSync(schema)(raw, { onExcessProperty: "error" });
+const decodeOutputWithSchema = <A>(schema: Schema.Codec<A, unknown, never, never>, raw: unknown): A =>
   Schema.decodeUnknownSync(schema)(raw);`;
 
 const AMP_TOOL_FACTORY_RUNTIME = `const runtimeContext = (): ToolRuntimeContext => ({
@@ -579,9 +584,9 @@ const createToolDefinition = (name: string, surface: ToolSurface) => {
     inputSchema: inputJsonSchema,
     async execute(rawArgs: Record<string, unknown>, ctx: { logger?: { log: (...args: unknown[]) => void } }) {
       try {
-        const input = decodeWithSchema(inputSchema as Schema.Codec<unknown, unknown, never, never>, rawArgs ?? {});
+        const input = decodeInputWithSchema(inputSchema as Schema.Codec<unknown, unknown, never, never>, rawArgs ?? {});
         const output = await surface.handle(input, runtimeContext());
-        const validatedOutput = decodeWithSchema(outputSchema as Schema.Codec<unknown, unknown, never, never>, output);
+        const validatedOutput = decodeOutputWithSchema(outputSchema as Schema.Codec<unknown, unknown, never, never>, output);
         return JSON.stringify(validatedOutput, null, 2);
       } catch (error) {
         ctx.logger?.log("prism Amp tool failed", name, errorMessage(error));
@@ -654,9 +659,9 @@ const createToolDefinition = (name: string, surface: ToolSurface) => {
       _onUpdate?: unknown,
       ctx?: unknown,
     ) {
-      const input = decodeWithSchema(inputSchema as Schema.Codec<unknown, unknown, never, never>, rawArgs ?? {});
+      const input = decodeInputWithSchema(inputSchema as Schema.Codec<unknown, unknown, never, never>, rawArgs ?? {});
       const output = await surface.handle(input, runtimeContext(ctx, signal));
-      const validatedOutput = decodeWithSchema(outputSchema as Schema.Codec<unknown, unknown, never, never>, output);
+      const validatedOutput = decodeOutputWithSchema(outputSchema as Schema.Codec<unknown, unknown, never, never>, output);
       return {
         content: [{ type: "text", text: JSON.stringify(validatedOutput, null, 2) }],
         details: { structuredContent: validatedOutput },
@@ -872,7 +877,11 @@ export interface ToolCliRuntimeBundle {
   readonly toolNames: ReadonlyArray<string>;
 }
 
-const CLI_TOOL_RUNTIME = `const decodeWithSchema = (schema, raw) => Schema.decodeUnknownSync(schema)(raw);
+const CLI_TOOL_RUNTIME = `// Tool input is operator/LLM-controlled: excess fields are typos, not noise.
+// Strict decode fails loudly instead of silently stripping a misspelled
+// field before the handler (and before the jev CLI) ever sees it.
+const decodeInputWithSchema = (schema, raw) => Schema.decodeUnknownSync(schema)(raw, { onExcessProperty: "error" });
+const decodeOutputWithSchema = (schema, raw) => Schema.decodeUnknownSync(schema)(raw);
 
 const runtimeContext = (callContext = {}) => ({
   sessionID: callContext.sessionID ?? "prism-tools-cli",
@@ -891,9 +900,9 @@ const createCliTool = (name, surface) => {
   return {
     description: surface.description ?? "",
     async run(rawArgs, callContext) {
-      const input = decodeWithSchema(inputSchema, rawArgs ?? {});
+      const input = decodeInputWithSchema(inputSchema, rawArgs ?? {});
       const output = await surface.handle(input, runtimeContext(callContext));
-      return decodeWithSchema(outputSchema, output);
+      return decodeOutputWithSchema(outputSchema, output);
     },
   };
 };

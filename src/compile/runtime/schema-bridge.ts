@@ -170,7 +170,10 @@ const typeLiteralAstToObjectSchema = (
     type CatchallObject = ZodNode & { catchall(value: ZodNode): ZodNode };
     return (objectNode as CatchallObject).catchall(astToToolSchema(index.type));
   }
-  return objectNode;
+  // Pure struct: reject unknown keys so a misspelled field surfaces as a
+  // validation error instead of being silently stripped before decodeInput.
+  type StrictObject = ZodNode & { strict(): ZodNode };
+  return (objectNode as StrictObject).strict();
 };
 
 const propertySignatureToToolSchema = (
@@ -218,9 +221,10 @@ export const toolArgsFromSchema = (
 /**
  * Decode raw tool-call args against the contract's Input schema. Throws a
  * clear error if decoding fails; the error propagates back to the LLM as the
- * tool call's failure message.
+ * tool call's failure message. Strict on excess properties: a misspelled
+ * field is a typo to surface, not noise to strip.
  */
 export const decodeInput = <S extends Schema.Codec<unknown, unknown, never, never>>(
   schema: S,
   raw: unknown,
-): S["Type"] => Schema.decodeUnknownSync(schema)(raw);
+): S["Type"] => Schema.decodeUnknownSync(schema)(raw, { onExcessProperty: "error" });

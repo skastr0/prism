@@ -114,9 +114,22 @@ export default {
     }),
   ).rejects.toBeInstanceOf(ToolsCliInvokeError);
 
-  // Timeout settles its own error BEFORE aborting: the hang tool rejects
-  // synchronously on abort, yet the caller consistently sees the timeout
-  // message and exit code 2 — not the tool's abort message.
+  // Strict input decode: a misspelled field is rejected at the tool boundary
+  // instead of being silently stripped before the handler runs.
+  const typo = await invokeToolViaCli({
+    prismHome,
+    pluginName,
+    toolName: "echo",
+    input: { message: "x", mesage: "typo" },
+  }).catch((error: unknown) => error);
+  expect(typo).toBeInstanceOf(ToolsCliInvokeError);
+  expect((typo as ToolsCliInvokeError).message).toMatch(/mesage|excess|unexpected/i);
+
+  // Timeout settles its own error BEFORE aborting: the hang tool rejects on
+  // abort, yet the caller consistently sees the timeout message and exit
+  // code 2 — not the tool's abort message. The aborted tool's cleanup gets a
+  // bounded grace period before the error propagates.
+  (globalThis as Record<string, unknown>).__jevInvokeHangCleanup = false;
   const timedOut = await invokeToolViaCli({
     prismHome,
     pluginName,

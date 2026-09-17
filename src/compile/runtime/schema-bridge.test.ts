@@ -115,3 +115,30 @@ test("decodeInput decodes with the contract schema", () => {
   expect(decodeInput(inputSchema, { count: 2 })).toEqual({ count: 2 });
   expect(() => decodeInput(inputSchema, { count: "2" })).toThrow();
 });
+
+test("decodeInput rejects excess properties instead of stripping them", () => {
+  const inputSchema = Schema.Struct({
+    count: Schema.Number,
+    nested: Schema.Struct({ label: Schema.String }),
+  });
+
+  expect(() => decodeInput(inputSchema, { count: 2, nested: { label: "x" }, cuont: 3 })).toThrow();
+  expect(() =>
+    decodeInput(inputSchema, { count: 2, nested: { label: "x", lable: "typo" } }),
+  ).toThrow();
+});
+
+test("toolArgsFromSchema renders structs strict and records open", () => {
+  const args = toolArgsFromSchema(
+    Schema.Struct({
+      nested: Schema.Struct({ label: Schema.String }),
+      payloads: Schema.Record(Schema.String, Schema.Unknown),
+    }),
+  );
+
+  const nested = schemaNode(args, "nested");
+  expect(nested.safeParse({ label: "x" }).success).toBe(true);
+  expect(nested.safeParse({ label: "x", lable: "typo" }).success).toBe(false);
+  const payloads = schemaNode(args, "payloads");
+  expect(payloads.safeParse({ any: "key" }).success).toBe(true);
+});

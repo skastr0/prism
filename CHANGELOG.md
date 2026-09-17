@@ -25,7 +25,7 @@ line. `0.4.0` was committed but never tagged or published.
     default 32), and over-budget requests (>~28k estimated tokens) fail
     pre-flight with a shard-the-state hint. `JevClient` is an Effect service
     with live env config (`TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`,
-    `TYPESAFE_MODEL`), explicit-config, and eagerly validated test layers.
+    `TYPESAFE_DEFAULT_MODEL`), explicit-config, and eagerly validated test layers.
   - `prism jev ask --input '<json>'|@file [--timeout-ms n] [--json-errors]` —
     the one-shot CLI the compiled plugin tool shells out to. Success is one
     `{model, answers, usage}` document on stdout; failures are classified

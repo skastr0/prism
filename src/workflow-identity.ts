@@ -137,7 +137,10 @@ export const workflowTaskIdentity = (
       // primary key for every task kind.
       promptHash: stableJsonHash({
         kind: "jev",
-        jevIdentityVersion: 1,
+        // 2: stable-json now preserves own "__proto__" keys as data (they
+        // previously collapsed into a prototype assignment, so hashes for
+        // such payloads were computed over the wrong object).
+        jevIdentityVersion: 2,
         api: "systemone",
         baseURL: jev.baseURL,
         model: task.model ?? jev.defaultModel,

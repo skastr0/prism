@@ -24,12 +24,15 @@ export const stableJsonValue = (value: StableJsonValue): StableJsonValue => {
   }
   if (value && typeof value === "object") {
     const record = value as { readonly [key: string]: StableJsonValue | undefined };
-    const sorted: Record<string, StableJsonValue> = {};
+    // Object.fromEntries defines own data properties: a "__proto__" key
+    // (as produced by JSON.parse) must stay serialized data, not become a
+    // prototype assignment that vanishes from JSON.stringify.
+    const entries: Array<readonly [string, StableJsonValue]> = [];
     for (const key of sortStableStrings(Object.keys(record))) {
       const entry = record[key];
-      if (entry !== undefined) sorted[key] = stableJsonValue(entry);
+      if (entry !== undefined) entries.push([key, stableJsonValue(entry)]);
     }
-    return sorted;
+    return Object.fromEntries(entries) as StableJsonValue;
   }
   return value;
 };

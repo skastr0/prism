@@ -210,29 +210,32 @@ const walkWorkflowData = (
     return { value, findings };
   }
 
-  const value: Record<string, unknown> = {};
+  // Accumulate into a Map and build with Object.fromEntries: assigning a
+  // "__proto__" key into {} is a prototype mutation that silently drops the
+  // entry from the persisted payload (and later fails strict replay decode).
+  const entries = new Map<string, unknown>();
   for (const [key, child] of Object.entries(input)) {
     const redactedKey = redactText(key);
     let persistedKey = redactedKey.value;
-    if (Object.prototype.hasOwnProperty.call(value, persistedKey)) {
+    if (entries.has(persistedKey)) {
       let collision = 2;
-      while (Object.prototype.hasOwnProperty.call(value, `${persistedKey}#${collision}`)) collision += 1;
+      while (entries.has(`${persistedKey}#${collision}`)) collision += 1;
       persistedKey = `${persistedKey}#${collision}`;
     }
     const childPath = pathForKey(path, persistedKey);
     findings.push(...redactedKey.reasons.map((reason) => ({ path: childPath, reason })));
     if (isSensitiveKey(key)) {
-      value[persistedKey] = WORKFLOW_REDACTION_MARKER;
+      entries.set(persistedKey, WORKFLOW_REDACTION_MARKER);
       findings.push({ path: childPath, reason: "sensitive-key" });
       continue;
     }
     const preserve = PRESERVED_CONTINUATION_KEYS.has(normalizedKey(key));
     const nested = walkWorkflowData(child, childPath, ancestors, preserve);
-    value[persistedKey] = nested.value;
+    entries.set(persistedKey, nested.value);
     findings.push(...nested.findings);
   }
   ancestors.delete(input);
-  return { value, findings };
+  return { value: Object.fromEntries(entries), findings };
 };
 
 export const applyWorkflowDataPolicy = <Value>(input: Value): WorkflowDataPolicyResult<Value> => {

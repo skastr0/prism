@@ -205,6 +205,28 @@ describe("workflowTaskIdentity for jev tasks", () => {
   test("identity requires the public jev config for jev tasks", () => {
     expect(() => workflowTaskIdentity("wf", routeTask(), {})).toThrow(/jev/);
   });
+
+  test("an own __proto__ key in state changes the request hash", () => {
+    // JSON.parse creates "__proto__" as an own data property; a hash that
+    // loses it would silently reuse an unrelated cached answer.
+    const empty = workflowTaskIdentity(
+      "wf",
+      jev({ id: "route", state: {}, questions }),
+      {},
+      jevConfig,
+    );
+    const withProto = workflowTaskIdentity(
+      "wf",
+      jev({
+        id: "route",
+        state: JSON.parse('{"__proto__":{"risk":"high"}}'),
+        questions,
+      }),
+      {},
+      jevConfig,
+    );
+    expect(withProto.promptHash).not.toBe(empty.promptHash);
+  });
 });
 
 describe("workflow runner jev tasks", () => {
@@ -315,6 +337,59 @@ describe("workflow runner jev tasks", () => {
     expect(jevCalls).toBe(1);
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output).toEqual(first.tasks[0]?.output);
+    store.close();
+  });
+
+  test("a __proto__ question id and choice label survive run, cache write, and cache replay", async () => {
+    await cleanupStores();
+    const store = await openStore();
+    // JSON.parse: "__proto__" lands as an own data property (an object
+    // literal would silently set the prototype instead).
+    const protoQuestions = JSON.parse(
+      '{"__proto__":{"type":"noul","instructions":"Is proto mentioned?"},' +
+        '"pick":{"type":"choice","instructions":"Pick one.",' +
+        '"criteria":{"__proto__":"the proto label","other":"the other label"}}}',
+    );
+    const protoAnswers = JSON.parse(
+      '{"__proto__":{"type":"noul","noul":0.87},' +
+        '"pick":{"type":"choice","choice":"__proto__","confidence":0.8,' +
+        '"probabilities":{"__proto__":0.8,"other":0.2}}}',
+    );
+    const task = jev({ id: "proto", state: { ticket: "odd key" }, questions: protoQuestions });
+    const workflow = defineWorkflow({ name: "jev-proto-cache", tasks: [task] as const });
+    let jevCalls = 0;
+    const counting = Layer.sync(JevClient, () => ({
+      config: jevConfig,
+      systemOne: () => {
+        jevCalls += 1;
+        return Effect.succeed({
+          model: "jev-test",
+          answers: protoAnswers,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }) as unknown as Effect.Effect<never, JevError>;
+      },
+    }));
+    const executor = createWorkflowTaskExecutor({
+      executeWorkflowTask: () => Promise.resolve({}),
+      jev: counting,
+    });
+
+    const first = await runWorkflow(workflow, { store, executeTask: executor, jev: jevConfig });
+    expect(jevCalls).toBe(1);
+    expect(first.tasks[0]?.status).toBe("completed");
+
+    // Second run replays the persisted payload through the strict result
+    // codec: if persistence dropped the own "__proto__" answer, this decode
+    // would fail instead of serving the cache hit.
+    const second = await runWorkflow(workflow, { store, executeTask: executor, jev: jevConfig });
+    expect(jevCalls).toBe(1);
+    expect(second.tasks[0]?.cached).toBe(true);
+    const replayed = second.tasks[0]?.output as {
+      answers: Record<string, unknown> & { pick: { choice: string } };
+    };
+    expect(Object.prototype.hasOwnProperty.call(replayed.answers, "__proto__")).toBe(true);
+    expect(replayed.answers.pick.choice).toBe("__proto__");
+    expect(JSON.parse(JSON.stringify(replayed.answers))).toEqual(protoAnswers);
     store.close();
   });
 

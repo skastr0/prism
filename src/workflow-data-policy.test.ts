@@ -32,6 +32,19 @@ describe("workflow data policy", () => {
     ]);
   });
 
+  test("an own __proto__ key survives sanitization and JSON round-trip as data", () => {
+    // JSON.parse creates "__proto__" as an own enumerable data property.
+    // Accumulating into `{}` with assignment would mutate the prototype and
+    // silently drop the entry — the persisted payload must keep it, or the
+    // strict result replay decode fails on the missing key.
+    const input = JSON.parse(
+      '{"__proto__":{"type":"noul","noul":0.9},"safe":{"type":"noul","noul":0.1}}',
+    ) as Record<string, unknown>;
+    const result = redactWorkflowData(input);
+    expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(true);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(JSON.parse(JSON.stringify(input)));
+  });
+
   test("redacts credentials embedded in text", () => {
     const text = [
       "Authorization: Bearer abcdefghijklmnop",

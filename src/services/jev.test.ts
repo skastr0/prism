@@ -299,4 +299,24 @@ describe("JevClientTest", () => {
       } as any),
     ).toThrow();
   });
+
+  test("rejects answers with excess properties (extra ids, extra probability labels)", () => {
+    // Strict decode: a response carrying fields the request never asked for
+    // is not an answer to that request — it must fail, not strip.
+    expect(() =>
+      JevClientTest(questions, {
+        ...okBody.answers,
+        unasked: { type: "noul" },
+      } as any),
+    ).toThrow();
+    expect(() =>
+      JevClientTest(questions, {
+        ...okBody.answers,
+        route: {
+          ...okBody.answers.route,
+          probabilities: { act: 0.5, wait: 0.4, invented: 0.1 },
+        },
+      } as any),
+    ).toThrow();
+  });
 });

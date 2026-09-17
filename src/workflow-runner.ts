@@ -32,6 +32,7 @@ import {
   type WorkflowJudgeIdentity,
   type WorkflowTaskIdentity,
 } from "./workflow-identity.js";
+import { JEV_STRICT_PARSE_OPTIONS } from "./jev.js";
 import type { JevPublicConfig } from "./services/jev.js";
 import type {
   WorkflowRunTerminalCause,
@@ -1224,7 +1225,9 @@ const executeWorkflowTask = async (input: {
     }
 
     recordEvent(store, runId, jevTask.id, "task.decode.started", { attempt: 0 });
-    const decoded = decodeTaskOutput(jevTask, rawOutput);
+    // Strict decode: a jev result with extra IDs or probability labels is not
+    // a response to the request that was sent (JEV_STRICT_PARSE_OPTIONS).
+    const decoded = decodeTaskOutput(jevTask, rawOutput, JEV_STRICT_PARSE_OPTIONS);
     if (Result.isFailure(decoded)) {
       // Schema/protocol mismatch on a jev result is terminal: re-asking the
       // model is the JevClient retry layer's job, and it has already run.

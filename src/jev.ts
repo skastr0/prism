@@ -253,15 +253,14 @@ const normalizeQuestion = (question: unknown, path: string): JevQuestion => {
     }
     const labels = Object.keys(criteria);
     if (labels.length === 0) fail("choice criteria must define at least one label", `${path}.criteria`);
-    const normalizedCriteria: Record<string, JevEntry> = {};
-    for (const label of labels) {
-      if (!(label in normalizedCriteria)) {
-        if (!isEntryValue(criteria[label])) {
-          fail("choice criterion descriptions must be strings, JSON objects/arrays, or null", `${path}.criteria.${label}`);
-        }
-      }
-      normalizedCriteria[label] = normalizeJevEntry(criteria[label], `${path}.criteria.${label}`);
-    }
+    // No precheck: normalizeJevEntry is the sole entry validator, and an own
+    // "__proto__" label must land as data, not as a [[Prototype]] write.
+    const normalizedCriteria: Record<string, JevEntry> = Object.fromEntries(
+      labels.map((label) => [
+        label,
+        normalizeJevEntry(criteria[label], `${path}.criteria.${label}`),
+      ]),
+    );
     return Object.freeze({
       type: "choice",
       ...(instructions !== undefined ? { instructions } : {}),
@@ -277,12 +276,11 @@ const normalizeQuestion = (question: unknown, path: string): JevQuestion => {
     if (criteria.length < 2) {
       fail("score criteria must describe at least two levels", `${path}.criteria`);
     }
-    const rubric = criteria.map((entry: unknown, index: number) => {
-      if (!isEntryValue(entry) ) {
-        fail("score rubric levels must be strings, JSON objects/arrays, or null", `${path}.criteria[${index}]`);
-      }
-      return normalizeJevEntry(entry, `${path}.criteria[${index}]`);
-    });
+    // No precheck: normalizeJevEntry is the sole entry validator (it accepts
+    // null, so undescribed rubric levels are valid).
+    const rubric = criteria.map((entry: unknown, index: number) =>
+      normalizeJevEntry(entry, `${path}.criteria[${index}]`),
+    );
     return Object.freeze({
       type: "score",
       ...(instructions !== undefined ? { instructions } : {}),
@@ -332,10 +330,9 @@ export const normalizeJevQuestions = <const Q extends JevQuestions>(questions: Q
   if (!isPlainObject(questions)) fail("questions must be an object keyed by question id", "questions");
   const ids = Object.keys(questions);
   if (ids.length === 0) fail("at least one question is required", "questions");
-  const normalized: Record<string, JevQuestion> = {};
-  for (const id of ids) {
-    normalized[id] = normalizeQuestion(questions[id], `questions.${id}`);
-  }
+  const normalized: Record<string, JevQuestion> = Object.fromEntries(
+    ids.map((id) => [id, normalizeQuestion(questions[id], `questions.${id}`)]),
+  );
   // Localized assertion: `normalized` preserves every id and per-id question
   // shape of Q by construction; only the runtime values changed (frozen copies).
   return Object.freeze(normalized) as Q;
@@ -643,6 +640,19 @@ export const JevSystemOneInputSchema = Schema.Struct({
   questions: Schema.Record(Schema.String, JevQuestionPresentation),
   model: Schema.optionalKey(Schema.String),
 });
+
+/**
+ * Jev decode boundaries fail on excess properties rather than stripping
+ * them: a misspelled question field (`instruction` vs `instructions`) must
+ * not silently vanish from the request, and an answer with extra IDs or
+ * probability labels is not a response to the request that was sent. The
+ * presentation/result schemas below describe Records partly (probability
+ * maps are `Record(String, Number)`), so only struct-level strictness takes
+ * effect — the request-correlated literal keys do the rest.
+ */
+export const JEV_STRICT_PARSE_OPTIONS = {
+  onExcessProperty: "error" as const,
+};
 
 const ChoiceAnswerPresentation = Schema.Struct({
   type: Schema.Literal("choice"),

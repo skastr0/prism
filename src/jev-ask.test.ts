@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { EXIT_CODES } from "./exit.js";
-import { JevAskError, parseJevAskInputText, runJevAsk } from "./jev-ask.js";
+import {
+  isJevAskJsonErrorsArgv,
+  JevAskError,
+  jevAskErrorRecord,
+  jevAskUsageRecord,
+  parseJevAskInputText,
+  runJevAsk,
+} from "./jev-ask.js";
 import {
   JevClient,
   JevClientTest,
@@ -123,6 +130,28 @@ describe("runJevAsk", () => {
     const error = await runJevAsk({ input }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(JevAskError);
     expect((error as JevAskError).message).toContain("failed validation");
+    expect((error as JevAskError).failure.kind).toBe("request");
+  });
+
+  test("rejects misspelled question fields instead of silently stripping them", () => {
+    // `instruction` (singular) is not a schema field: strict decode must fail
+    // rather than drop the author's instructions from the request.
+    const input = JSON.stringify({
+      state: {},
+      questions: {
+        watch: { type: "noul", criteria: { true: "watched" }, instruction: "typo" },
+      },
+    });
+    return runJevAsk({ input }).then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (error: unknown) => {
+        expect(error).toBeInstanceOf(JevAskError);
+        expect((error as JevAskError).failure.kind).toBe("request");
+        expect((error as JevAskError).message).toContain("failed validation");
+      },
+    );
   });
 
   test("rejects requests failing semantic validation before any client call", async () => {
@@ -154,5 +183,48 @@ describe("runJevAsk", () => {
     expect(error).toBeInstanceOf(JevAskError);
     expect((error as JevAskError).message).toContain("[jev:configuration]");
     expect((error as JevAskError).exitCode).toBe(EXIT_CODES.domainFailure);
+  });
+});
+
+describe("machine error records", () => {
+  test("jevAskErrorRecord projects the structured failure, keeping httpStatus/retryAfterMs", () => {
+    const error = new JevAskError({
+      kind: "rate-limit",
+      message: "jev rate limit exceeded after SDK retries",
+      httpStatus: 429,
+      retryAfterMs: 1500,
+    });
+    expect(jevAskErrorRecord(error)).toEqual({
+      version: 1,
+      error: {
+        kind: "rate-limit",
+        message: "jev rate limit exceeded after SDK retries",
+        httpStatus: 429,
+        retryAfterMs: 1500,
+      },
+    });
+  });
+
+  test("jevAskErrorRecord never fabricates an API classification for unexpected errors", () => {
+    expect(jevAskErrorRecord(new Error("boom")).error.kind).toBe("internal");
+    expect(jevAskErrorRecord("boom").error.kind).toBe("internal");
+  });
+
+  test("jevAskUsageRecord classifies pre-action commander failures as usage", () => {
+    const record = jevAskUsageRecord(new Error("option '--input <json>' argument missing"));
+    expect(record).toEqual({
+      version: 1,
+      error: { kind: "usage", message: "option '--input <json>' argument missing" },
+    });
+  });
+
+  test("isJevAskJsonErrorsArgv only matches a jev ask invocation carrying the flag", () => {
+    expect(isJevAskJsonErrorsArgv(["bun", "cli.ts", "jev", "ask", "--json-errors"])).toBe(true);
+    expect(
+      isJevAskJsonErrorsArgv(["bun", "cli.ts", "jev", "ask", "--input", "{}", "--json-errors"]),
+    ).toBe(true);
+    expect(isJevAskJsonErrorsArgv(["bun", "cli.ts", "jev", "ask"])).toBe(false);
+    expect(isJevAskJsonErrorsArgv(["bun", "cli.ts", "doctor", "--json-errors"])).toBe(false);
+    expect(isJevAskJsonErrorsArgv(["bun", "cli.ts"])).toBe(false);
   });
 });

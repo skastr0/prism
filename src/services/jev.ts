@@ -47,6 +47,7 @@ import {
 } from "@typesafe-ai/sdk";
 import {
   estimateJevRequestTokens,
+  JEV_STRICT_PARSE_OPTIONS,
   JEV_TOKEN_REQUEST_TARGET,
   jevResultSchema,
   JevRequestValidationError,
@@ -363,10 +364,13 @@ const makeJevClientShape = (options: {
       catch: toJevError,
     }).pipe(Effect.catchTag("JevSdkAbort", () => Effect.interrupt));
 
-    // Treat the SDK's cast-typed success as untrusted: validate against the
-    // request-correlated contract before any caller sees it.
+    // Treat the SDK's cast-typed success as untrusted: validate strictly
+    // against the request-correlated contract before any caller sees it.
+    // Extra answer IDs or probability labels are excess properties, not
+    // noise to strip — the response must answer the request that was sent.
     return yield* Effect.fromResult(Schema.decodeUnknownResult(jevResultSchema(normalized.questions))(
       raw,
+      JEV_STRICT_PARSE_OPTIONS,
     )).pipe(
       Effect.mapError(
         (failure) =>
@@ -442,11 +446,14 @@ export const JevClientTest = <const Q extends JevQuestions>(
   // Eager validation: a malformed stub must fail the test that wrote it, at
   // construction — not later, decoupled, when some run builds the layer.
   const registeredQuestions = normalizeJevQuestions(questions);
-  const validatedAnswers = Schema.decodeUnknownSync(jevResultSchema(registeredQuestions))({
-    model: options?.model ?? TEST_JEV_MODEL,
-    answers,
-    usage: options?.usage ?? { input_tokens: 0, output_tokens: 0 },
-  });
+  const validatedAnswers = Schema.decodeUnknownSync(jevResultSchema(registeredQuestions))(
+    {
+      model: options?.model ?? TEST_JEV_MODEL,
+      answers,
+      usage: options?.usage ?? { input_tokens: 0, output_tokens: 0 },
+    },
+    JEV_STRICT_PARSE_OPTIONS,
+  );
   const registeredFingerprint = JSON.stringify(registeredQuestions);
   return Layer.sync(JevClient, () => {
 

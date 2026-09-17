@@ -338,6 +338,13 @@ const writeStdout = (text: string): Promise<void> =>
     process.stdout.write(text, (error) => (error ? reject(error) : resolve()));
   });
 
+// Same drain guarantee for structured error records: a forced exit is not a
+// stream-drain guarantee, so `jev ask --json-errors` awaits stderr delivery.
+const writeStderr = (text: string): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    process.stderr.write(text, (error) => (error ? reject(error) : resolve()));
+  });
+
 const defaultWorkflowStorePathForCwd = (): string =>
   defaultWorkflowStorePath(resolvePrismHome(), process.cwd());
 
@@ -2320,17 +2327,25 @@ jevCommand
   )
   .requiredOption("--input <json-or-@file>", "JSON request object, or @path to a JSON file")
   .option("--timeout-ms <n>", "Per-HTTP-attempt timeout override", parsePositiveInteger)
-  .action(async (options: { input: string; timeoutMs?: number }) => {
+  .option(
+    "--json-errors",
+    "On failure, print one machine-readable error record ({version:1, error:{kind, message, httpStatus?, retryAfterMs?}}) to stderr",
+  )
+  .action(async (options: { input: string; timeoutMs?: number; jsonErrors?: boolean }) => {
     try {
       const { runJevAsk } = await import("./jev-ask.js");
       const result = await runJevAsk({
         input: options.input,
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       });
-      console.log(JSON.stringify(result, null, 2));
+      await writeStdout(`${JSON.stringify(result, null, 2)}\n`);
     } catch (error) {
-      printCliError(error, "jev ask failed");
-      const { JevAskError } = await import("./jev-ask.js");
+      const { JevAskError, jevAskErrorRecord } = await import("./jev-ask.js");
+      if (options.jsonErrors) {
+        await writeStderr(`${JSON.stringify(jevAskErrorRecord(error))}\n`);
+      } else {
+        printCliError(error, "jev ask failed");
+      }
       exitWith(
         error instanceof JevAskError
           ? error.exitCode
@@ -2338,6 +2353,17 @@ jevCommand
       );
     }
   });
+
+const jevAskCommandRef = jevCommand.commands.find((command) => command.name() === "ask");
+// With --json-errors, commander's own pre-action error line must not pollute
+// stderr: the contract is exactly one machine record on the stream. Help
+// output (writeOut) stays intact.
+if (jevAskCommandRef !== undefined) {
+  const { isJevAskJsonErrorsArgv } = await import("./jev-ask.js");
+  if (isJevAskJsonErrorsArgv(process.argv)) {
+    jevAskCommandRef.configureOutput({ writeErr: () => {} });
+  }
+}
 
 const toolsCommand = program
   .command("tools")
@@ -3974,6 +4000,17 @@ installExitOverride(program);
 try {
   await program.parseAsync();
 } catch (error) {
+  // `jev ask --json-errors` pre-action failures (missing --input, invalid
+  // --timeout-ms) are usage errors and must still emit the machine record.
+  const { isJevAskJsonErrorsArgv, jevAskUsageRecord } = await import("./jev-ask.js");
+  if (isJevAskJsonErrorsArgv(process.argv)) {
+    if (error instanceof CommanderError && error.exitCode === 0) {
+      // --help / --version: not an error, and no record on the stream.
+      exitWith(EXIT_CODES.success);
+    }
+    await writeStderr(`${JSON.stringify(jevAskUsageRecord(error))}\n`);
+    exitWith(EXIT_CODES.usage);
+  }
   if (error instanceof CommanderError) {
     exitWith(error.exitCode === 0 ? EXIT_CODES.success : EXIT_CODES.usage);
   }

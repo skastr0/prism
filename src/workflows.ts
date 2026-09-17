@@ -1,4 +1,4 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Result, Schema, type SchemaAST } from "effect";
 import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
 import { isWorkflowSchedule, parseWorkflowSchedule, type WorkflowSchedule } from "./workflow-scheduler/schedule.js";
 import {
@@ -1011,5 +1011,6 @@ export function defineWorkflow<const Name extends string, Result, Err = Workflow
 export const decodeTaskOutput = <Task extends AnyWorkflowTask | AnyJevTask>(
   task: Task,
   value: unknown,
+  options?: SchemaAST.ParseOptions,
 ): Result.Result<Task["output"]["Type"], Schema.SchemaError> =>
-  Schema.decodeUnknownResult(task.output)(value);
+  Schema.decodeUnknownResult(task.output)(value, options);

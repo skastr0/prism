@@ -135,6 +135,38 @@ describe("normalizeJevQuestions", () => {
     );
   });
 
+  test("accepts null criterion descriptions as undescribed labels", () => {
+    // JevEntry includes null; an undescribed criterion is a valid authored
+    // request (oracle review: the old entry precheck rejected it).
+    const choice = normalizeJevQuestions({
+      q: { type: "choice", criteria: { act: null, wait: "leave it" } },
+    });
+    expect(choice.q.criteria).toEqual({ act: null, wait: "leave it" });
+    const score = normalizeJevQuestions({
+      q: { type: "score", criteria: [null, "ready"] as [null, string] },
+    });
+    expect(score.q.criteria).toEqual([null, "ready"]);
+  });
+
+  test("keeps an own '__proto__' question id and choice label as data", () => {
+    // Built via JSON.parse/computed keys: an object literal's `__proto__:`
+    // entry sets the prototype instead of creating a data property.
+    const protoId = "__proto__";
+    const criteria = JSON.parse('{"__proto__": null, "ok": "fine"}') as Record<string, unknown>;
+    expect(Object.keys(criteria)).toEqual(["__proto__", "ok"]);
+    const normalized = normalizeJevQuestions({
+      [protoId]: { type: "choice", criteria } as never,
+    });
+    expect(Object.prototype.hasOwnProperty.call(normalized, protoId)).toBe(true);
+    expect(Object.getPrototypeOf(normalized)).toBe(Object.prototype);
+    const question = normalized[protoId] as { criteria: Record<string, unknown> };
+    expect(Object.prototype.hasOwnProperty.call(question.criteria, "__proto__")).toBe(true);
+    expect(question.criteria.__proto__).toBe(null);
+    expect(Object.getPrototypeOf(question.criteria)).toBe(Object.prototype);
+    // And it serializes as the caller authored it (identity hashing, wire).
+    expect(JSON.stringify(normalized[protoId])).toContain('"__proto__"');
+  });
+
   test("accepts noul criteria as omitted, null, one-sided, or two-sided", () => {
     expect(normalizeJevQuestions({ q: { type: "noul" } }).q).toEqual({ type: "noul" });
     expect(normalizeJevQuestions({ q: { type: "noul", criteria: null } }).q).toMatchObject({

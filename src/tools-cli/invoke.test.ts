@@ -46,7 +46,29 @@ export default {
 `,
   );
 
-  const bindings = [bindingFromToolSource(pluginName, toolPath)];
+  const hangToolPath = join(pluginRoot, "tools", "hang.tool.ts");
+  await writeText(
+    hangToolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "hang",
+  description: "Never resolves; rejects the moment the runtime aborts it.",
+  input: Schema.Struct({}),
+  output: Schema.Struct({ ok: Schema.Boolean }),
+  async handle(_input, context) {
+    return await new Promise((_resolve, reject) => {
+      context.signal?.addEventListener("abort", () => reject(new Error("hang aborted by signal")), { once: true });
+    });
+  },
+};
+`,
+  );
+
+  const bindings = [
+    bindingFromToolSource(pluginName, toolPath),
+    bindingFromToolSource(pluginName, hangToolPath),
+  ];
   const bundle = await generateToolCliRuntimeBundle({
     sourcePluginName: pluginName,
     sourcePluginRoot: pluginRoot,
@@ -91,4 +113,34 @@ export default {
       input: {},
     }),
   ).rejects.toBeInstanceOf(ToolsCliInvokeError);
+
+  // Timeout settles its own error BEFORE aborting: the hang tool rejects
+  // synchronously on abort, yet the caller consistently sees the timeout
+  // message and exit code 2 — not the tool's abort message.
+  const timedOut = await invokeToolViaCli({
+    prismHome,
+    pluginName,
+    toolName: "hang",
+    input: {},
+    timeoutMs: 50,
+  }).catch((error: unknown) => error);
+  expect(timedOut).toBeInstanceOf(ToolsCliInvokeError);
+  expect((timedOut as ToolsCliInvokeError).message).toContain("timed out after 50ms");
+  expect((timedOut as ToolsCliInvokeError).message).not.toContain("hang aborted");
+  expect((timedOut as ToolsCliInvokeError).exitCode).toBe(2);
+
+  for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const invalid = await invokeToolViaCli({
+      prismHome,
+      pluginName,
+      toolName: "echo",
+      input: { message: "x" },
+      timeoutMs: bad,
+    }).catch((error: unknown) => error);
+    expect(invalid).toBeInstanceOf(ToolsCliInvokeError);
+    expect((invalid as ToolsCliInvokeError).message).toContain(
+      "--timeout-ms must be a positive finite number",
+    );
+    expect((invalid as ToolsCliInvokeError).exitCode).toBe(1);
+  }
 });

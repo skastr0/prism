@@ -60,16 +60,51 @@ test("toolArgsFromSchema maps supported Effect schema shapes", () => {
   expect(schemaNode(nestedShape!, "optionalScore").parse(undefined)).toBeUndefined();
 });
 
-test("toolArgsFromSchema preserves unsupported union diagnostics", () => {
-  expect(() =>
-    toolArgsFromSchema(
-      Schema.Struct({
-        value: Schema.Union([Schema.String, Schema.Number]),
-      }),
-    ),
-  ).toThrow(
-    "schema-bridge: only unions of literals or optional-wrapped types are supported, got String | Number",
+test("toolArgsFromSchema renders general unions as z.union", () => {
+  const args = toolArgsFromSchema(
+    Schema.Struct({
+      value: Schema.Union([Schema.String, Schema.Number]),
+      variant: Schema.Union([
+        Schema.Struct({ type: Schema.Literal("a"), label: Schema.String }),
+        Schema.Struct({ type: Schema.Literal("b"), count: Schema.Number }),
+      ]),
+      maybe: Schema.NullOr(Schema.String),
+    }),
   );
+
+  const value = schemaNode(args, "value");
+  expect(value.safeParse("x").success).toBe(true);
+  expect(value.safeParse(3).success).toBe(true);
+  const variant = schemaNode(args, "variant");
+  expect(variant.safeParse({ type: "a", label: "x" }).success).toBe(true);
+  expect(variant.safeParse({ type: "b", count: 1 }).success).toBe(true);
+  expect(variant.safeParse({ type: "c" }).success).toBe(false);
+  const maybe = schemaNode(args, "maybe");
+  expect(maybe.safeParse(null).success).toBe(true);
+  expect(maybe.safeParse("x").success).toBe(true);
+});
+
+test("toolArgsFromSchema renders records and honest unknown/null", () => {
+  const args = toolArgsFromSchema(
+    Schema.Struct({
+      payloads: Schema.Record(Schema.String, Schema.Unknown),
+      stringMap: Schema.Record(Schema.String, Schema.String),
+      unknown: Schema.Unknown,
+      nothing: Schema.Null,
+    }),
+  );
+
+  const payloads = schemaNode(args, "payloads");
+  expect(payloads.safeParse({ a: "scalar", b: [1], c: null }).success).toBe(true);
+  const stringMap = schemaNode(args, "stringMap");
+  expect(stringMap.safeParse({ a: "x" }).success).toBe(true);
+  expect(stringMap.safeParse({ a: 2 }).success).toBe(false);
+  // Unknown is any JSON value, not only objects (the decoder stays authority).
+  const unknown = schemaNode(args, "unknown");
+  expect(unknown.safeParse("scalar").success).toBe(true);
+  expect(unknown.safeParse([1, 2]).success).toBe(true);
+  expect(unknown.safeParse(null).success).toBe(true);
+  expect(schemaNode(args, "nothing").safeParse(null).success).toBe(true);
 });
 
 test("decodeInput decodes with the contract schema", () => {

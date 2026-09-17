@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { Schema } from "effect";
 import {
+  jsonSchemaFromEffectSchema,
+  MCP_AST_TO_JSON_SCHEMA_OPTIONS,
+} from "./ast-to-json-schema.js";
+import {
   choice,
   estimateJevRequestTokens,
+  JEV_PROBE_MODEL,
+  jevProbeResult,
   JEV_TOKEN_BUDGET,
   JEV_TOKEN_REQUEST_TARGET,
   jevResultSchema,
   JevRequestValidationError,
+  JevSystemOneInputSchema,
+  JevSystemOneResultSchema,
   normalizeJevEntry,
   normalizeJevQuestions,
   normalizeJevRequest,
@@ -266,5 +274,85 @@ describe("jevResultSchema", () => {
   test("noul answers carry no confidence field in their type", () => {
     const result = decode(validResponse);
     expect("confidence" in result.answers.destructive).toBe(false);
+  });
+});
+
+describe("jevProbeResult", () => {
+  test("produces a deterministic witness that decodes against the request codec", () => {
+    const probe = jevProbeResult(questions);
+    // Deterministic: same questions, same bytes.
+    expect(jevProbeResult(questions)).toEqual(probe);
+
+    expect(probe.model).toBe(JEV_PROBE_MODEL);
+    expect(probe.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
+    expect(probe.answers.route).toEqual({
+      type: "choice",
+      choice: "act",
+      confidence: 1,
+      probabilities: { act: 1, clarify: 0 },
+    });
+    expect(probe.answers.readiness).toEqual({
+      type: "score",
+      score: 0,
+      confidence: 1,
+      legend: { "0": "Not ready", "1": "Partially ready", "2": "Ready to execute" },
+      probabilities: { "0": 1, "1": 0, "2": 0 },
+    });
+    expect(probe.answers.destructive).toEqual({ type: "noul", noul: 0 });
+
+    // The witness passes the request-correlated decoder for these exact questions.
+    expect(Schema.decodeUnknownSync(jevResultSchema(questions))(probe)).toEqual(probe);
+  });
+
+  test("selects the first enumerated choice label, including integer-like keys", () => {
+    const numeric = jevProbeResult({
+      pick: choice({ criteria: { "10": "ten desc", "2": "two desc" } }),
+    } as const);
+    // JS property enumeration puts integer-like keys first in numeric order,
+    // so "2" wins over "10" despite textual insertion order.
+    expect((numeric.answers.pick as { choice: string }).choice).toBe("2");
+  });
+
+  test("score witnesses carry a probability key for every rubric level", () => {
+    const probe = jevProbeResult({
+      level: score({ criteria: ["a", "b", "c", "d"] as const }),
+    } as const);
+    const answer = probe.answers.level as { probabilities: Record<string, number> };
+    expect(Object.keys(answer.probabilities)).toEqual(["0", "1", "2", "3"]);
+    expect(Object.values(answer.probabilities).reduce((sum, value) => sum + value, 0)).toBe(1);
+    expect(Schema.decodeUnknownSync(jevResultSchema({
+      level: score({ criteria: ["a", "b", "c", "d"] as const }),
+    } as const))(probe)).toEqual(probe);
+  });
+});
+
+describe("tool presentation schemas render through the MCP JSON-schema bridge", () => {
+  test("JevSystemOneInputSchema publishes a questions record of anyOf question variants", () => {
+    const rendered = jsonSchemaFromEffectSchema(JevSystemOneInputSchema, MCP_AST_TO_JSON_SCHEMA_OPTIONS) as {
+      properties: {
+        state: Record<string, unknown>;
+        model: Record<string, unknown>;
+        questions: { additionalProperties: { anyOf: ReadonlyArray<{ properties?: { type?: { enum?: string[] } } }> } };
+      };
+    };
+
+    // Unknown entry slots are published unconstrained: strings, arrays, nulls
+    // are all honest wire shapes (parseJevRequest validates semantics).
+    expect(rendered.properties.state).toEqual({});
+    expect(rendered.properties.model).toEqual({ type: "string" });
+    const variants = rendered.properties.questions.additionalProperties.anyOf;
+    expect(variants).toHaveLength(3);
+    const discriminators = variants
+      .map((variant) => variant.properties?.type?.enum?.[0])
+      .sort();
+    expect(discriminators).toEqual(["choice", "noul", "score"]);
+  });
+
+  test("JevSystemOneResultSchema renders honestly for the tool output surface", () => {
+    // Any-shape answers/usage envelopes must not fail closed; the semantic
+    // authority stays the request-correlated decoder.
+    expect(() =>
+      jsonSchemaFromEffectSchema(JevSystemOneResultSchema, MCP_AST_TO_JSON_SCHEMA_OPTIONS),
+    ).not.toThrow();
   });
 });

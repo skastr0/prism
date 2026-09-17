@@ -2390,7 +2390,7 @@ toolsCommand
   .command("invoke <plugin> <tool>")
   .description("Invoke a compiled tool in-process (JSON in/out; no daemon)")
   .option("--input <json-or-@file>", "JSON object args, or @path to a JSON file", "{}")
-  .option("--timeout-ms <n>", "Tool call timeout", (v) => Number(v), 60_000)
+  .option("--timeout-ms <n>", "Tool call timeout", parsePositiveInteger, 60_000)
   .option("--json", "Always print JSON (default)", true)
   .action(async (plugin: string, tool: string, options: { input?: string; timeoutMs?: number }) => {
     try {

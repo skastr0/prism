@@ -5,6 +5,7 @@ import { resolvePrismHome } from "./prism-home.js";
 import { loadGeneratedSurface, type GeneratedSurface } from "./workflow-catalog.js";
 import {
   collectDynamicPhaseFindings,
+  DYNAMIC_WORKFLOW_PROBE_DISPATCH_LIMIT,
   phaseStampedBindingsFromTasks,
   probeDynamicWorkflowTasks,
   validatePhaseBindings,
@@ -261,18 +262,16 @@ export const validateWorkflowFile = async (
 
   if (summary.dynamic) {
     const source = await readFile(resolved, "utf8");
-    const findings = await collectDynamicPhaseFindings(
-      workflow as DynamicWorkflowDefinition<string>,
-      source,
-      surface,
-    );
+    // Probe once: the phase graph check and model-resolution report describe
+    // the same execution (and the author's `run` program effects run once).
+    const probed = await probeDynamicWorkflowTasks(workflow as DynamicWorkflowDefinition<string>);
+    const findings = collectDynamicPhaseFindings(probed, source, surface);
     if (findings.length > 0) {
       const detail = findings.map((finding) => `  - ${finding.message}`).join("\n");
       throw new WorkflowValidationError(
         `workflow '${summary.name}' failed SOP phase graph validation for ${findings.length} task binding(s):\n${detail}`,
       );
     }
-    const probed = await probeDynamicWorkflowTasks(workflow as DynamicWorkflowDefinition<string>);
     const modelResolution = probed.tasks.map((task) => resolveTaskModelRow(task, snapshot));
     const unresolved = modelResolution.filter((row) => row.error !== undefined);
     if (unresolved.length > 0) {
@@ -288,9 +287,11 @@ export const validateWorkflowFile = async (
       ...summary,
       modelResolution,
       staticWorkers: staticallyReferencedWorkers(source),
-      note: probed.failed
-        ? `${DYNAMIC_WORKFLOW_NOTE} Probe exited early; listed pins are tasks dispatched before the failure.`
-        : DYNAMIC_WORKFLOW_NOTE,
+      note: probed.exhausted
+        ? `${DYNAMIC_WORKFLOW_NOTE} Probe hit the dispatch limit of ${DYNAMIC_WORKFLOW_PROBE_DISPATCH_LIMIT} tasks (possible unbounded decision loop); listed pins are an incomplete prefix.`
+        : probed.failed
+          ? `${DYNAMIC_WORKFLOW_NOTE} Probe exited early; listed pins are tasks dispatched before the failure.`
+          : DYNAMIC_WORKFLOW_NOTE,
     };
   }
 

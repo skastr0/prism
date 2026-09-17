@@ -21,6 +21,13 @@ export type AstToJsonSchemaOptions = {
    * output schemas keep the default (reject).
    */
   readonly allowIndexSignatures?: boolean;
+  /**
+   * When true, render general (non-literal) unions as `anyOf` member schemas —
+   * `oneOf` when the union AST declares that mode — instead of failing closed.
+   * Tool/MCP input surfaces enable this; workflow output schemas keep the
+   * default (reject) so worker output contracts stay strict.
+   */
+  readonly allowGeneralUnions?: boolean;
 };
 
 export class WorkflowOutputSchemaError extends Error {
@@ -196,6 +203,24 @@ const unionAstToJsonSchema = (
     const item = astToJsonSchemaInner(nonNull[0]!, options, fieldPath, visiting);
     return { anyOf: [item, { type: "null" }] };
   }
+  if (options.allowGeneralUnions === true) {
+    if (nonUndefined.length === 0) {
+      return unsupportedConstruct(
+        "Union",
+        fieldPath,
+        options,
+        "union has no JSON-representable members",
+      );
+    }
+    // A declared `mode: "oneOf"` is honored, not silently widened to anyOf.
+    const mode = (ast as SchemaAST.Union & { readonly options?: { readonly mode?: unknown } })
+      .options?.mode;
+    const keyword = mode === "oneOf" ? "oneOf" : "anyOf";
+    return {
+      [keyword]: nonUndefined.map((type) =>
+        astToJsonSchemaInner(type, options, fieldPath, visiting)),
+    };
+  }
   return unsupportedConstruct(
     "Union",
     fieldPath,
@@ -217,6 +242,8 @@ const structuralAstToJsonSchema = (
   if (SchemaAST.isObjects(ast)) return objectsAstToJsonSchema(ast, options, fieldPath, visiting);
   if (SchemaAST.isArrays(ast)) return arraysAstToJsonSchema(ast, options, fieldPath, visiting);
   if (SchemaAST.isUnion(ast)) return unionAstToJsonSchema(ast, options, fieldPath, visiting);
+  // Schema.Null (tag "Null") and Schema.Literal(null) both mean the null value.
+  if (isNullAst(ast)) return { type: "null" };
   if (SchemaAST.isLiteral(ast)) return literalJsonSchema(ast.literal, fieldPath, options);
   if (SchemaAST.isString(ast)) return { type: "string" };
   if (SchemaAST.isNumber(ast)) return { type: "number" };
@@ -299,9 +326,16 @@ export const WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS = {
 export const MCP_AST_TO_JSON_SCHEMA_OPTIONS = {
   errorPrefix: "mcp-schema-bridge",
   literalRepresentation: "enum",
-  unknownKeywordSchema: { type: "object", additionalProperties: true },
+  // Unknown renders as an unconstrained schema: any JSON value is described
+  // honestly. The runtime decoder stays the authority on what is semantically
+  // valid; the published contract must not under-document the wire shape
+  // (an object-only mapping would wrongly reject scalars and arrays).
+  unknownKeywordSchema: {},
   // Match Zod / schema-bridge: refinements are runtime-only; JSON Schema sees the base type.
   allowChecksAndEncodings: true,
   // Schema.Record (payload maps, free-form objects) is common on tool inputs.
   allowIndexSignatures: true,
+  // Tool input surfaces routinely use discriminated unions (e.g. question
+  // variants); render them instead of failing closed.
+  allowGeneralUnions: true,
 } as const satisfies AstToJsonSchemaOptions;

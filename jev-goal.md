@@ -53,6 +53,6 @@ Jev decisions as first-class citizens in Prism, one implementation behind two su
 - [x] GLYPH-JEV-04: task union, phase `ctx.jev`, identity, store v7 (7207d64)
 - [x] GLYPH-JEV-05: runner execution (`workflow-jev.ts`, dispatch, limiters, mocks) (7207d64)
 - [x] GLYPH-JEV-06: authoring/bundle runtime (load bridge, facade, embedded sources) — dts emit (dist/dts-tmp incl. jev.d.ts) required by loader CLI suites
-- [ ] GLYPH-JEV-07: loader/validate/catalog/TUI consumers, schema bridges, CLI timeout
+- [x] GLYPH-JEV-07: loader/validate/catalog/TUI consumers, schema bridges, CLI timeout — oracle-reviewed: dispatch-bounded probe, tool-policy unions, settle-before-abort
 - [ ] GLYPH-JEV-08: `~/prism-plugins/jev` tool plugin + skill + tests
 - [ ] GLYPH-JEV-09: examples, docs, changelog, full gates, delete this file

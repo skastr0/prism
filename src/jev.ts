@@ -542,6 +542,65 @@ export const jevResultSchema = <const Q extends JevQuestions>(questions: Q): Jev
 };
 
 // ---------------------------------------------------------------------------
+// Probe results (workflow validation, never a live call)
+// ---------------------------------------------------------------------------
+
+export const JEV_PROBE_MODEL = "jev-probe";
+
+const probeAnswerFor = (question: JevQuestion): unknown => {
+  switch (question.type) {
+    case "choice": {
+      // `Object.keys` enumeration order is the stable "first": integer-like
+      // labels enumerate numerically, the rest in insertion order.
+      const labels = Object.keys(question.criteria);
+      const selected = labels[0]!;
+      return {
+        type: "choice",
+        choice: selected,
+        confidence: 1,
+        probabilities: Object.fromEntries(
+          labels.map((label) => [label, label === selected ? 1 : 0]),
+        ),
+      };
+    }
+    case "score":
+      return {
+        type: "score",
+        score: 0,
+        confidence: 1,
+        legend: Object.fromEntries(
+          question.criteria.map((entry, index) => [String(index), entry]),
+        ),
+        probabilities: Object.fromEntries(
+          question.criteria.map((_entry, index) => [String(index), index === 0 ? 1 : 0]),
+        ),
+      };
+    case "noul":
+      return { type: "noul", noul: 0 };
+  }
+};
+
+/**
+ * A deterministic, schema-valid System One result used by workflow validation
+ * probes, where no live API call is made: every answer selects the first
+ * declared criterion (score index 0, noul 0) with a concentrated probability
+ * distribution, so branch-sensitive `run:` graphs walk the same stable path on
+ * every probe. Always decodes against `jevResultSchema(questions)`. This is a
+ * witness, not a simulation of what System One would answer.
+ */
+export const jevProbeResult = <const Q extends JevQuestions>(questions: Q): JevResult<Q> => {
+  const normalized = normalizeJevQuestions(questions);
+  const answers = Object.fromEntries(
+    Object.entries(normalized).map(([id, question]) => [id, probeAnswerFor(question)]),
+  );
+  return {
+    model: JEV_PROBE_MODEL,
+    answers: answers as JevResult<Q>["answers"],
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Tool presentation schemas (nonrecursive; the decoder above stays authority)
 //
 // These exist for the compiled tool surface (JSON-schema bridges cannot render

@@ -5,10 +5,12 @@
  *
  * Supports the bounded schema feature set used in contracts:
  *
- *   - String, Number, Boolean, Unknown, Any
- *   - Literal (single) and Union of Literals (enum)
+ *   - String, Number, Boolean, Null
+ *   - Unknown, Any (rendered honestly as z.unknown(): any JSON value)
+ *   - Literal (single), Union of Literals (enum), and general unions (z.union)
  *   - Arrays with a single rest element (arrays)
  *   - Objects (nested structs), including optional fields
+ *   - Records (`Schema.Record`) including mixed struct+index objects (catchall)
  *   - checks (refinements) and encodings (transformations) are rendered as
  *     their wire shape
  *   - nominal brands add no runtime validation and are not emitted
@@ -106,10 +108,12 @@ const primitiveAstToToolSchema = (ast: SchemaAST.AST): ZodNode | undefined => {
   if (SchemaAST.isString(ast)) return tool.schema.string();
   if (SchemaAST.isNumber(ast)) return tool.schema.number();
   if (SchemaAST.isBoolean(ast)) return tool.schema.boolean();
-  if (SchemaAST.isUnknown(ast) || SchemaAST.isAny(ast)) {
-    return tool.schema.object({}).catchall(tool.schema.unknown());
-  }
+  // Unknown/Any on the wire means any JSON value; an object-only mapping would
+  // wrongly reject scalars and arrays. decodeInput stays the semantic authority.
+  if (SchemaAST.isUnknown(ast) || SchemaAST.isAny(ast)) return tool.schema.unknown();
+  if (SchemaAST.isNull(ast)) return tool.schema.null();
   if (SchemaAST.isLiteral(ast)) {
+    if (ast.literal === null) return tool.schema.null();
     return tool.schema.literal(ast.literal as string | number | boolean);
   }
   return undefined;
@@ -118,27 +122,24 @@ const primitiveAstToToolSchema = (ast: SchemaAST.AST): ZodNode | undefined => {
 const unionAstToToolSchema = (ast: SchemaAST.Union): ZodNode => {
   if (isLiteralUnion(ast)) return literalUnionAstToEnumSchema(ast);
 
-  const optionalInner = optionalUnionInnerType(ast);
-  if (optionalInner) return astToToolSchema(optionalInner);
-
-  throw unsupportedUnionError(ast);
+  const nonUndefined = ast.types.filter((type) => !SchemaAST.isUndefined(type));
+  if (nonUndefined.length === 1) return astToToolSchema(nonUndefined[0]!);
+  if (nonUndefined.length === 0) throw unsupportedUnionError(ast);
+  // General unions (e.g. discriminated question variants): z.union validates in
+  // member order, matching Effect's Union semantics.
+  return tool.schema.union(
+    nonUndefined.map((type) => astToToolSchema(type)) as [ZodNode, ZodNode, ...ZodNode[]],
+  );
 };
 
 const isLiteralUnion = (ast: SchemaAST.Union): boolean =>
-  ast.types.every((type) => SchemaAST.isLiteral(type));
+  ast.types.every((type) => SchemaAST.isLiteral(type) && type.literal !== null);
 
 const literalUnionAstToEnumSchema = (ast: SchemaAST.Union): ZodNode => {
   const values = ast.types.map((type) => (type as SchemaAST.Literal).literal) as ReadonlyArray<
     string
   >;
   return tool.schema.enum(values as [string, ...string[]]);
-};
-
-const optionalUnionInnerType = (
-  ast: SchemaAST.Union,
-): SchemaAST.AST | undefined => {
-  const nonUndefined = ast.types.filter((type) => !SchemaAST.isUndefined(type));
-  return nonUndefined.length === 1 ? nonUndefined[0] : undefined;
 };
 
 const tupleAstToArraySchema = (ast: SchemaAST.Arrays): ZodNode => {
@@ -154,11 +155,22 @@ const typeLiteralAstToObjectSchema = (
   ast: SchemaAST.Objects,
   annotationKinds: readonly AnnotationKind[],
 ): ZodNode => {
+  const index = ast.indexSignatures[0];
+  // Pure record (Schema.Record): an open string-keyed value map.
+  if (index !== undefined && ast.propertySignatures.length === 0) {
+    return tool.schema.record(tool.schema.string(), astToToolSchema(index.type));
+  }
   const shape: Record<string, ZodNode> = {};
   for (const prop of ast.propertySignatures) {
     shape[String(prop.name)] = propertySignatureToToolSchema(prop, annotationKinds);
   }
-  return tool.schema.object(shape);
+  const objectNode = tool.schema.object(shape);
+  // Mixed struct + index: fixed properties plus a catchall for extra keys.
+  if (index !== undefined) {
+    type CatchallObject = ZodNode & { catchall(value: ZodNode): ZodNode };
+    return (objectNode as CatchallObject).catchall(astToToolSchema(index.type));
+  }
+  return objectNode;
 };
 
 const propertySignatureToToolSchema = (

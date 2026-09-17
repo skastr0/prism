@@ -111,17 +111,27 @@ const loadToolCliRuntime = async (
   }
 };
 
-const withTimeout = async <A>(operation: Promise<A>, timeoutMs: number, label: string): Promise<A> => {
+const withTimeout = async <A>(
+  start: (signal: AbortSignal) => Promise<A>,
+  timeoutMs: number,
+  label: string,
+): Promise<A> => {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([
-      operation,
-      new Promise<A>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new ToolsCliInvokeError(`${label} timed out after ${timeoutMs}ms`, 2));
-        }, timeoutMs);
-      }),
-    ]);
+    // Arm the timer before starting so a synchronously-throwing start() still
+    // leaves no timer behind (cleared in finally).
+    const timeout = new Promise<A>((_, reject) => {
+      timer = setTimeout(() => {
+        // Settle the timeout error BEFORE aborting: abort listeners run
+        // synchronously and can reject the operation first, which must not
+        // mask the timeout (the caller wants the timeout message + exit 2).
+        const error = new ToolsCliInvokeError(`${label} timed out after ${timeoutMs}ms`, 2);
+        reject(error);
+        controller.abort(error);
+      }, timeoutMs);
+    });
+    return await Promise.race([start(controller.signal), timeout]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -135,16 +145,28 @@ export const invokeToolViaCli = async (options: ToolsCliInvokeOptions): Promise<
 
   const runtime = await loadToolCliRuntime(options.prismHome, options.pluginName);
   const timeoutMs = options.timeoutMs ?? 60_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new ToolsCliInvokeError(
+      `--timeout-ms must be a positive finite number (got ${options.timeoutMs})`,
+      1,
+    );
+  }
   const cwd = options.workingDirectory ?? process.cwd();
 
   try {
+    // Cooperative cancellation: the signal reaches the tool handler through the
+    // generated runtime's callContext; handlers must forward it to their HTTP
+    // calls (it cannot stop a handler that ignores it, after timeout the
+    // abandoned promise is simply never awaited).
     return await withTimeout(
-      runtime.invokeTool(toolName, options.input, {
-        workingDirectory: cwd,
-        repoRoot: options.repoRoot ?? cwd,
-        agent: "prism-tools-cli",
-        sessionID: "prism-tools-cli",
-      }),
+      (signal) =>
+        runtime.invokeTool(toolName, options.input, {
+          workingDirectory: cwd,
+          repoRoot: options.repoRoot ?? cwd,
+          agent: "prism-tools-cli",
+          sessionID: "prism-tools-cli",
+          signal,
+        }),
       timeoutMs,
       `tool '${options.pluginName}/${toolName}'`,
     );

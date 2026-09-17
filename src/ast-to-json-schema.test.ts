@@ -191,4 +191,110 @@ describe("astToJsonSchema", () => {
     });
     expect(schema).toEqual({ type: "string", const: "fixed" });
   });
+
+  test("MCP policy renders discriminated unions as anyOf of member schemas", () => {
+    const questionPresentation = Schema.Union([
+      Schema.Struct({
+        type: Schema.Literal("choice"),
+        criteria: Schema.Record(Schema.String, Schema.Unknown),
+      }),
+      Schema.Struct({
+        type: Schema.Literal("noul"),
+        criteria: Schema.optionalKey(Schema.Unknown),
+      }),
+    ]);
+    const schema = jsonSchemaFromEffectSchema(
+      Schema.Struct({ question: questionPresentation }),
+      MCP_AST_TO_JSON_SCHEMA_OPTIONS,
+    );
+
+    expect(schema).toEqual({
+      type: "object",
+      properties: {
+        question: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["choice"] },
+                criteria: { type: "object", additionalProperties: true },
+              },
+              required: ["type", "criteria"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["noul"] },
+                criteria: {},
+              },
+              required: ["type"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ["question"],
+      additionalProperties: false,
+    });
+  });
+
+  test("MCP policy honors a declared oneOf union mode", () => {
+    const schema = astToJsonSchema(
+      Schema.Union([Schema.String, Schema.Number], { mode: "oneOf" }).ast,
+      MCP_AST_TO_JSON_SCHEMA_OPTIONS,
+    );
+    expect(schema).toEqual({ oneOf: [{ type: "string" }, { type: "number" }] });
+  });
+
+  test("MCP policy renders multi-member unions containing null with a null member schema", () => {
+    const schema = astToJsonSchema(
+      Schema.Union([Schema.String, Schema.Number, Schema.Null]).ast,
+      MCP_AST_TO_JSON_SCHEMA_OPTIONS,
+    );
+    expect(schema).toEqual({
+      anyOf: [{ type: "string" }, { type: "number" }, { type: "null" }],
+    });
+  });
+
+  test("MCP policy renders Unknown as an unconstrained schema and Null as null", () => {
+    const schema = jsonSchemaFromEffectSchema(
+      Schema.Struct({
+        state: Schema.Unknown,
+        nothing: Schema.Null,
+      }),
+      MCP_AST_TO_JSON_SCHEMA_OPTIONS,
+    );
+    expect(schema).toEqual({
+      type: "object",
+      properties: {
+        state: {},
+        nothing: { type: "null" },
+      },
+      required: ["state", "nothing"],
+      additionalProperties: false,
+    });
+  });
+
+  test("workflow policy still rejects general unions and Schema.Null stays renderable", () => {
+    expectWorkflowError(
+      () => jsonSchemaFromEffectSchema(
+        Schema.Struct({ value: Schema.Union([Schema.String, Schema.Number]) }),
+        WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
+      ),
+      "Union",
+      "value",
+    );
+    expect(
+      jsonSchemaFromEffectSchema(
+        Schema.Struct({ nothing: Schema.Null }),
+        WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
+      ),
+    ).toEqual({
+      type: "object",
+      properties: { nothing: { type: "null" } },
+      required: ["nothing"],
+      additionalProperties: false,
+    });
+  });
 });

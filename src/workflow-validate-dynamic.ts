@@ -1,7 +1,9 @@
 import { Effect } from "effect";
+import { jevProbeResult } from "./jev.js";
 import type { WorkflowRuntimeError } from "./workflow-errors.js";
 import type { GeneratedSurface } from "./workflow-catalog.js";
 import {
+  isJevTask,
   phase,
   type AnyWorkflowTask,
   type DynamicWorkflowDefinition,
@@ -73,7 +75,21 @@ export interface DynamicWorkflowProbeResult {
   readonly tasks: ReadonlyArray<AnyWorkflowTask>;
   readonly phaseBindings: ReadonlyArray<PhaseStampedTaskBinding>;
   readonly failed: boolean;
+  /**
+   * True when the probe stopped at the dispatch limit: the `run:` program kept
+   * dispatching (a decision-gated retry loop, for example), so the recorded
+   * task list is a prefix of an unbounded graph.
+   */
+  readonly exhausted: boolean;
 }
+
+/**
+ * Bound on dynamic-probe dispatches. A probe executes the author's `run`
+ * program; deterministic probe results (jevProbeResult always selects the
+ * first criterion) can make a decision-gated loop take the same branch
+ * forever, so dispatching stops here and the probe reports `exhausted`.
+ */
+export const DYNAMIC_WORKFLOW_PROBE_DISPATCH_LIMIT = 512;
 
 /** Probe a dynamic `run:` graph: record every dispatched task without launching workers. */
 export const probeDynamicWorkflowTasks = async (
@@ -81,21 +97,32 @@ export const probeDynamicWorkflowTasks = async (
 ): Promise<DynamicWorkflowProbeResult> => {
   const tasks: AnyWorkflowTask[] = [];
   const phaseBindings: PhaseStampedTaskBinding[] = [];
+  let exhausted = false;
   const runtime: WorkflowRuntime = {
     runTask: <Task extends AnyWorkflowTask>(
       task: Task,
     ): Effect.Effect<WorkflowTaskOutput<Task>, WorkflowRuntimeError> =>
       Effect.sync(() => {
+        if (tasks.length >= DYNAMIC_WORKFLOW_PROBE_DISPATCH_LIMIT) {
+          exhausted = true;
+          throw new Error(
+            `dynamic workflow probe exceeded the dispatch limit of ${DYNAMIC_WORKFLOW_PROBE_DISPATCH_LIMIT} tasks`,
+          );
+        }
         tasks.push(task);
         if (task.phase !== undefined) {
           phaseBindings.push({ taskId: task.id, phase: task.phase });
         }
-        return {} as WorkflowTaskOutput<Task>;
+        // Jev decisions get a schema-valid deterministic witness so downstream
+        // branch reads (e.g. `answers.next.choice`) do not crash the probe.
+        return (
+          isJevTask(task) ? jevProbeResult(task.questions) : {}
+        ) as WorkflowTaskOutput<Task>;
       }),
     phase: (contract, fn) => phase(runtime, contract, fn),
   };
   const exit = await Effect.runPromiseExit(workflow.run(runtime));
-  return { tasks, phaseBindings, failed: exit._tag === "Failure" };
+  return { tasks, phaseBindings, failed: exit._tag === "Failure", exhausted };
 };
 
 export const probeDynamicWorkflowPhaseTasks = async (
@@ -203,7 +230,9 @@ const extractBalancedBlock = (source: string, openBraceIndex: number): string | 
  */
 const scanExplicitPhaseTasks = (source: string): ReadonlyArray<PhaseStampedTaskBinding> => {
   const bindings: PhaseStampedTaskBinding[] = [];
-  const taskHeadPattern = /(?:defineTask|\.task)\(\s*\{/gu;
+  // Worker tasks (defineTask / phase ctx.task) and jev decisions (jev / ctx.jev)
+  // both carry an optional literal `phase:` the stale-binding check must see.
+  const taskHeadPattern = /(?:defineTask|\.task|jev|\.jev)\(\s*\{/gu;
   for (const head of source.matchAll(taskHeadPattern)) {
     const blockStart = head.index;
     if (blockStart === undefined) continue;
@@ -265,15 +294,16 @@ export const scanDynamicPhaseTaskBindings = (
 };
 
 /**
- * Collect phase findings for a dynamic workflow: probe the loaded graph first,
- * then union regex-discovered bindings the probe may have missed.
+ * Collect phase findings for a dynamic workflow from an already-run probe,
+ * then union regex-discovered bindings the probe may have missed. Callers probe
+ * once (probeDynamicWorkflowTasks) and share the result with model-resolution
+ * reporting, so both describe the same execution.
  */
-export const collectDynamicPhaseFindings = async (
-  workflow: DynamicWorkflowDefinition<string>,
+export const collectDynamicPhaseFindings = (
+  probed: DynamicWorkflowProbeResult,
   source: string,
   surface: GeneratedSurface | null,
-): Promise<ReadonlyArray<WorkflowPhaseFinding>> => {
-  const probed = await probeDynamicWorkflowPhaseTasks(workflow);
+): ReadonlyArray<WorkflowPhaseFinding> => {
   const scanned = scanDynamicPhaseTaskBindings(source, surface);
-  return validatePhaseBindings([...probed, ...scanned], surface);
+  return validatePhaseBindings([...probed.phaseBindings, ...scanned], surface);
 };

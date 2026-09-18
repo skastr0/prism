@@ -4,7 +4,8 @@
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import type { EmbeddedSkill, EmbeddedSkillFile } from "./skill-files.js";
 import { prismWorkflowModelsSkillPath } from "./paths.js";
 
 export const WORKFLOW_MODELS_SKILL_NAME = "prism-workflow-models";
@@ -56,12 +57,29 @@ Preferences live at \`~/.prism/state/workflow-model-preferences.json\`. Print th
 Scaffold and type generation use stated preferences when present and otherwise omit the model field.
 `;
 
+/** Every file of the model-quiz skill, relative to its own directory. */
+export const workflowModelsSkillFiles = (): readonly EmbeddedSkillFile[] => [
+  { relativePath: "SKILL.md", markdown: renderWorkflowModelsSkillMarkdown() },
+];
+
+export const workflowModelsSkill = (): EmbeddedSkill => ({
+  name: WORKFLOW_MODELS_SKILL_NAME,
+  files: workflowModelsSkillFiles(),
+});
+
 export const writeWorkflowModelsSkill = async (
   prismHome: string,
-): Promise<{ readonly path: string; readonly bytes: number }> => {
-  const path = prismWorkflowModelsSkillPath(prismHome);
-  const markdown = renderWorkflowModelsSkillMarkdown();
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, markdown, "utf8");
-  return { path, bytes: markdown.length };
+): Promise<{ readonly path: string; readonly bytes: number; readonly files: readonly string[] }> => {
+  const skillPath = prismWorkflowModelsSkillPath(prismHome);
+  const skillDir = dirname(skillPath);
+  const files: string[] = [];
+  let bytes = 0;
+  for (const file of workflowModelsSkillFiles()) {
+    const target = join(skillDir, file.relativePath);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.markdown, "utf8");
+    files.push(target);
+    bytes += file.markdown.length;
+  }
+  return { path: skillPath, bytes, files };
 };

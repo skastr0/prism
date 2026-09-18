@@ -9,6 +9,42 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## Unreleased
+
+### Added
+
+- **`prism workflow skill --install`** — the plugin-free delivery path. A skill
+  is markdown in a folder, so this writes the embedded workflow skills into each
+  detected harness's skill directory (`<globalConfigPath>/<skillsDir>/<skill>/`)
+  — no plugin, no harness config edit, no registration. Writes both
+  `prism-workflow` and `prism-workflow-models`; `--harness <ids>` / `--all`
+  select targets, `--dry-run` previews, `--json` emits the plan. Harnesses that
+  share a config root (OpenCode 1.x and 2) collapse to one write. `--harness`,
+  `--all`, and `--dry-run` are rejected without `--install`.
+- **Workflow skill reference chapters** — the embedded authoring skill is now a
+  short `SKILL.md` that routes to five reference files
+  (`references/{scheduling,jev,observability,cache-and-finish,topology}.md`),
+  all generated from the binary. The body drops from 500+ lines of depth to a
+  routing document under the harness's recommended body length, and `--write`
+  materializes every chapter next to `SKILL.md` under PRISM_HOME.
+
+### Fixed
+
+- The embedded workflow skill no longer silently omits shipped surfaces.
+  Scheduling (0.7.0) had no agent-facing documentation anywhere; Jev was a
+  paragraph; finish criteria, cache/`promptHash` discipline, run observability,
+  stop/resume, and topology patterns lived only in a hand-maintained copy in the
+  `prism` plugin, which had drifted two minor versions behind the CLI.
+- README claimed eleven workers; there are twelve (`opencode2` was missing).
+
+### Removed
+
+- `prism-plugins` no longer carries a hand-maintained `workflow-authoring.md`
+  (860 lines, last touched 2026-09-11). It duplicated the CLI's skill and had
+  drifted: it documented no model quiz, no Jev, and no scheduling. The `prism`
+  plugin skill now points at `prism workflow skill` / `--install`, so the CLI is
+  the single source of truth for the workflow surface.
+
 ## 0.7.0 - 2026-09-18
 
 ### Added

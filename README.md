@@ -333,21 +333,22 @@ shows what is happening while it happens.
 
 Transient worker failures retry with bounded attempts and backoff; config errors and cancellations never do. Each task pins one of seven permission modes, from `sandbox-read-only` to `full-access` — enforced per worker.
 
-### Eleven workers
+### Twelve workers
 
-`amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `cursor` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `omp`
+`amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `cursor` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `opencode2` · `omp`
 
-### Start in four moves
+### Start in five moves
 
 ```bash
 prism workflow refresh-harness-types  # global typed slugs from installed harnesses (no plugin)
 prism workflow models --offer         # quiz: workers, samples, stated prefs
-prism workflow skill                  # embedded authoring guide
-prism workflow skill --models         # model-preference quiz skill
+prism workflow skill --install        # install both embedded skills into detected harnesses
 prism workflow scaffold my-first      # validating starter in ~/.prism/workflows
 prism workflow validate ~/.prism/workflows/my-first.workflow.ts   # resolved (worker, model) per task
 prism workflow run ~/.prism/workflows/my-first.workflow.ts
 ```
+
+`prism workflow skill --install` is the step that makes the CLI self-sufficient: it writes the authoring guide (plus its reference chapters) and the model-preference quiz skill into each detected harness's skill directory, so an agent discovers the workflow surface the same way it discovers any other skill — with no plugin and no user prompt. `prism workflow skill` still prints the guide; `--write` materializes it under `PRISM_HOME` instead.
 
 A plugin is optional. Workflows are the flagship: `catalog`, `models`, `scaffold`, `typecheck`, `validate`, and `run` work with no compiled plugin. `refresh-harness-types` writes machine-wide model unions so `worker.model` typechecks without `prism/refs` or modelspaces. Plugin refs (`sops.*` / modelspaces) are an add-on. A live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
 

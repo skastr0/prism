@@ -161,6 +161,10 @@ prism workflow models --offer
 # Embedded workflow authoring skill
 prism workflow skill
 prism workflow skill --models
+
+# Install both embedded skills into detected harness skill dirs (plugin-free)
+prism workflow skill --install
+prism workflow skill --install --dry-run
 ```
 
 ### Prism home and managed state

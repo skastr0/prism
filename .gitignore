@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.bun/
 packages/npm/*/LICENSE
 packages/npm/prism-*/bin/
 packages/npm/prism-*/types/

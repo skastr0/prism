@@ -50,6 +50,7 @@ prism workflow models --offer          # workers, samples, stated prefs — quiz
 # Save only the user's answer: prism workflow models prefer <worker> --model <slug>
 prism workflow skill                   # embedded authoring guide (also written on scaffold)
 prism workflow skill --models          # quiz skill for model preferences
+prism workflow skill --install         # write both into detected harness skill dirs (no plugin)
 prism workflow catalog                 # workers + live slug counts; plugin refs if compiled
 prism workflow catalog --query opus    # searches harness models when no plugin
 prism workflow refs                    # optional plugin refs location + freshness

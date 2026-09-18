@@ -304,6 +304,44 @@ export const workflow = defineWorkflow({
   expect(bad.stderr + bad.stdout).toContain("not-a-mode");
 }, 30_000);
 
+test("workflow skill --install writes both embedded skills into detected harness skill dirs", async () => {
+  const root = await createTempRoot();
+  const fakeHome = join(root, "home");
+  const prismHome = join(root, "prism-home");
+  await mkdir(join(fakeHome, ".claude"), { recursive: true });
+  const env = { PRISM_HOME: prismHome, HOME: fakeHome };
+
+  const dry = await runCli(["workflow", "skill", "--install", "--dry-run", "--json"], env, { cwd: root });
+  expect(dry.exitCode).toBe(0);
+  const dryJson = JSON.parse(dry.stdout) as {
+    dryRun: boolean;
+    targets: ReadonlyArray<{ harness: string; skill: string; files: string[] }>;
+  };
+  expect(dryJson.dryRun).toBe(true);
+  expect(dryJson.targets.map((target) => target.skill)).toEqual([
+    "prism-workflow",
+    "prism-workflow-models",
+  ]);
+  for (const file of dryJson.targets.flatMap((target) => target.files)) {
+    expect(await pathExists(file)).toBe(false);
+  }
+
+  const install = await runCli(["workflow", "skill", "--install"], env, { cwd: root });
+  expect(install.exitCode).toBe(0);
+  const skillDir = join(fakeHome, ".claude", "skills", "prism-workflow");
+  expect(await pathExists(join(skillDir, "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(skillDir, "references", "scheduling.md"))).toBe(true);
+  expect(await pathExists(join(skillDir, "references", "topology.md"))).toBe(true);
+  expect(await pathExists(join(fakeHome, ".claude", "skills", "prism-workflow-models", "SKILL.md"))).toBe(true);
+}, 30_000);
+
+test("workflow skill rejects --harness/--all/--dry-run without --install", async () => {
+  const root = await createTempRoot();
+  const result = await runCli(["workflow", "skill", "--dry-run"], { PRISM_HOME: join(root, "ph") }, { cwd: root });
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr + result.stdout).toContain("require --install");
+});
+
 test("workflow models prefer amp catalog pins survive scaffold --print", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");

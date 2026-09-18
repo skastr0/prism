@@ -106,6 +106,7 @@ import {
 } from "./workflow-models.js";
 import { renderWorkflowAuthoringSkillMarkdown, writeWorkflowAuthoringSkill } from "./workflow-cli/skill.js";
 import { renderWorkflowModelsSkillMarkdown, writeWorkflowModelsSkill } from "./workflow-cli/models-skill.js";
+import { installWorkflowSkills, renderWorkflowSkillInstallHuman } from "./workflow-cli/skill-install.js";
 import {
   clearWorkflowModelPreference,
   loadWorkflowModelPreferences,
@@ -513,15 +514,41 @@ workflow
 workflow
   .command("skill")
   .description("Print the embedded workflow-authoring skill (plugin-free)")
-  .option("--write", "Write SKILL.md under PRISM_HOME/runtime/workflow-authoring/")
+  .option("--write", "Write the skill (SKILL.md + references) under PRISM_HOME/runtime/workflow-authoring/")
+  .option("--install", "Install the embedded workflow skills into detected harness skill directories")
   .option("--models", "Print the model-preference quiz skill")
-  .action(async (options: { readonly write?: boolean; readonly models?: boolean }) => {
+  .option("--harness <ids>", "Comma-separated harness ids for --install")
+  .option("--all", "Install into every supported harness (with --install)")
+  .option("--dry-run", "Preview --install without writing")
+  .option("--json", "Emit machine-readable JSON")
+  .action(async (options: {
+    readonly write?: boolean;
+    readonly install?: boolean;
+    readonly models?: boolean;
+    readonly harness?: string;
+    readonly all?: boolean;
+    readonly dryRun?: boolean;
+    readonly json?: boolean;
+  }) => {
     try {
+      if (options.install === true) {
+        const harnesses = resolveRequestedHarnesses(options, { allowInstalledDefault: true });
+        const result = await installWorkflowSkills({ harnesses, dryRun: options.dryRun === true });
+        if (options.json === true) {
+          await writeStdout(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        await writeStdout(`${renderWorkflowSkillInstallHuman(result)}\n`);
+        return;
+      }
+      if (options.harness !== undefined || options.all === true || options.dryRun === true) {
+        throw new CliUsageError("--harness, --all, and --dry-run require --install");
+      }
       const prismHome = resolvePrismHome();
       if (options.write === true) {
         const authoring = await writeWorkflowAuthoringSkill(prismHome);
         const models = await writeWorkflowModelsSkill(prismHome);
-        await writeStdout(`Wrote ${authoring.path}\nWrote ${models.path}\n`);
+        await writeStdout(`Wrote ${authoring.path} (${authoring.files.length} files)\nWrote ${models.path}\n`);
         return;
       }
       if (options.models === true) {

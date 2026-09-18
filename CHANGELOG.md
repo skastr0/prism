@@ -9,7 +9,7 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
-## 0.6.0 - 2026-09-17
+## 0.7.0 - 2026-09-18
 
 ### Added
 

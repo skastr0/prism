@@ -67,6 +67,18 @@ const rewindToVersion6 = (path: string): void => {
   }
 };
 
+/** Turn a v8 store back into a v7 store: remove Jev snapshot columns only. */
+const rewindToVersion7 = (path: string): void => {
+  const db = new Database(path);
+  try {
+    db.exec("alter table workflow_run_task_snapshots drop column request_json;");
+    db.exec("alter table workflow_run_task_snapshots drop column task_kind;");
+    db.exec("pragma user_version = 7;");
+  } finally {
+    db.close();
+  }
+};
+
 const provenance = (runId: string) => ({
   executionId: `exec-${runId}`,
   scheduleId: "sched-1",
@@ -136,6 +148,40 @@ describe("workflow store v7 migration", () => {
     } finally {
       store.close();
     }
+  });
+});
+
+describe("workflow store v8 migration", () => {
+  test("adds native-task snapshot columns to a scheduler-v7 store", async () => {
+    const root = await createTempRoot();
+    const path = join(root, "workflows.sqlite");
+
+    const store = await WorkflowStore.open(path);
+    const runId = store.createRun("legacy-v7");
+    store.close();
+
+    rewindToVersion7(path);
+    expect(userVersion(path)).toBe(7);
+    expect(columns(path, "workflow_runs")).toEqual(
+      expect.arrayContaining([...V7_RUN_COLUMNS]),
+    );
+    expect(columns(path, "workflow_run_task_snapshots")).not.toContain("task_kind");
+    expect(columns(path, "workflow_run_task_snapshots")).not.toContain("request_json");
+
+    const migrated = await WorkflowStore.open(path);
+    expect(migrated.schemaNotice).toEqual({
+      severity: "info",
+      openedVersion: 7,
+      currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+      message: `Workflow store at ${path} was schema version 7; migrated to ${WORKFLOW_STORE_SCHEMA_VERSION} on open.`,
+    });
+    expect(migrated.getRun(runId)).toMatchObject({ workflow: "legacy-v7", status: "running" });
+    migrated.close();
+
+    expect(userVersion(path)).toBe(WORKFLOW_STORE_SCHEMA_VERSION);
+    expect(columns(path, "workflow_run_task_snapshots")).toEqual(
+      expect.arrayContaining(["task_kind", "request_json"]),
+    );
   });
 });
 

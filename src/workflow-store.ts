@@ -2815,7 +2815,7 @@ export class WorkflowStore {
         ...(row.output_schema_json !== null ? { outputSchema: JSON.parse(row.output_schema_json) as unknown } : {}),
         createdAt: row.created_at,
       };
-      // Rows predating v7 read as null task_kind; they are worker snapshots by
+      // Rows predating v8 read as null task_kind; they are worker snapshots by
       // construction (the union did not exist before this schema version).
       if (row.task_kind === "jev" && row.request_json !== null) {
         return {

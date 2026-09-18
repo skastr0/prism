@@ -22,7 +22,14 @@ test("getAstToJsonSchemaSource returns the canonical converter module text", () 
 test("getWorkflowDslRuntimeSources returns the canonical vendored DSL module texts", () => {
   const sources = getWorkflowDslRuntimeSources();
 
-  expect(Object.keys(sources).sort()).toEqual(["jev.ts", "workflow-errors.ts", "workflows.ts"]);
+  expect(Object.keys(sources).sort()).toEqual([
+    "jev.ts",
+    "workflow-errors.ts",
+    "workflow-scheduler/cron.ts",
+    "workflow-scheduler/errors.ts",
+    "workflow-scheduler/schedule.ts",
+    "workflows.ts",
+  ]);
   for (const [name, source] of Object.entries(sources)) {
     expect(source).toBe(readFileSync(join(import.meta.dirname, "..", name), "utf8"));
   }
@@ -32,4 +39,5 @@ test("getWorkflowDslRuntimeSources returns the canonical vendored DSL module tex
   expect(sources["jev.ts"]).toContain("export function choice");
   expect(sources["jev.ts"]).toContain("export const jevResultSchema");
   expect(sources["workflow-errors.ts"]).toContain("WorkflowTaskInputError");
+  expect(sources["workflow-scheduler/schedule.ts"]).toContain("parseWorkflowSchedule");
 });

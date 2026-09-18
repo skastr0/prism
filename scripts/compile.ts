@@ -23,6 +23,18 @@ const workflowDslRuntimeSources = JSON.stringify({
   "jev.ts": readFileSync(join(repoRoot, "src", "jev.ts"), "utf8"),
   "workflows.ts": readFileSync(join(repoRoot, "src", "workflows.ts"), "utf8"),
   "workflow-errors.ts": readFileSync(join(repoRoot, "src", "workflow-errors.ts"), "utf8"),
+  "workflow-scheduler/cron.ts": readFileSync(
+    join(repoRoot, "src", "workflow-scheduler", "cron.ts"),
+    "utf8",
+  ),
+  "workflow-scheduler/errors.ts": readFileSync(
+    join(repoRoot, "src", "workflow-scheduler", "errors.ts"),
+    "utf8",
+  ),
+  "workflow-scheduler/schedule.ts": readFileSync(
+    join(repoRoot, "src", "workflow-scheduler", "schedule.ts"),
+    "utf8",
+  ),
 } satisfies Record<string, string>);
 
 export const version = packageJson.version;

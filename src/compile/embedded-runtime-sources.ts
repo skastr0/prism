@@ -23,9 +23,14 @@ export const getAstToJsonSchemaSource = (): string => {
 
 declare const WORKFLOW_DSL_RUNTIME_SOURCES: string | undefined;
 
-/** The vendored workflow DSL modules, keyed by the file name they are written under. */
+/** The vendored workflow DSL modules, keyed by their path under `prism-runtime/`. */
 export type WorkflowDslRuntimeSources = Readonly<Record<
-  "jev.ts" | "workflows.ts" | "workflow-errors.ts",
+  | "jev.ts"
+  | "workflows.ts"
+  | "workflow-errors.ts"
+  | "workflow-scheduler/cron.ts"
+  | "workflow-scheduler/errors.ts"
+  | "workflow-scheduler/schedule.ts",
   string
 >>;
 
@@ -44,5 +49,17 @@ export const getWorkflowDslRuntimeSources = (): WorkflowDslRuntimeSources => {
     "jev.ts": readFileSync(join(runtimeSourceDir, "../jev.ts"), "utf8"),
     "workflows.ts": readFileSync(join(runtimeSourceDir, "../workflows.ts"), "utf8"),
     "workflow-errors.ts": readFileSync(join(runtimeSourceDir, "../workflow-errors.ts"), "utf8"),
+    "workflow-scheduler/cron.ts": readFileSync(
+      join(runtimeSourceDir, "../workflow-scheduler/cron.ts"),
+      "utf8",
+    ),
+    "workflow-scheduler/errors.ts": readFileSync(
+      join(runtimeSourceDir, "../workflow-scheduler/errors.ts"),
+      "utf8",
+    ),
+    "workflow-scheduler/schedule.ts": readFileSync(
+      join(runtimeSourceDir, "../workflow-scheduler/schedule.ts"),
+      "utf8",
+    ),
   };
 };

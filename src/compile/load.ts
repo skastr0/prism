@@ -9,7 +9,7 @@ import * as EffectModule from "effect";
 import { Effect, Schema } from "effect";
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, relative, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type * as TypeScript from "typescript";
@@ -188,8 +188,10 @@ export const getImportRuntimePaths = async (): Promise<{
     // share the binary's Effect instance (runtime Schema identity).
     const effectSpecifier = JSON.stringify(toFileSpecifier(effectPath));
     for (const [name, source] of Object.entries(getWorkflowDslRuntimeSources())) {
+      const vendoredPath = join(vendoredDir, name);
+      await fs.mkdir(dirname(vendoredPath), { recursive: true });
       await fs.writeFile(
-        join(vendoredDir, name),
+        vendoredPath,
         source.replace(/(\bfrom\s*)["']effect["']/g, `$1${effectSpecifier}`),
         "utf8",
       );

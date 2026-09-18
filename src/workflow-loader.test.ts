@@ -3462,6 +3462,12 @@ import { defineWorkflow, jev, choice, score, noul, estimateJevRequestTokens } fr
 
 export default defineWorkflow({
   name: "jev-smoke",
+  schedule: {
+    cron: "*/10 * * * *",
+    timezone: "UTC",
+    overlap: "skip",
+    missedRuns: "skip",
+  },
   tasks: [
     jev({
       id: "route",
@@ -3481,6 +3487,12 @@ export default defineWorkflow({
     const workflow = await loadWorkflowFile(file);
 
     expect(workflow.name).toBe("jev-smoke");
+    expect(workflow.schedule).toEqual({
+      cron: "*/10 * * * *",
+      timezone: "UTC",
+      overlap: "skip",
+      missedRuns: "skip",
+    });
     expect("tasks" in workflow ? workflow.tasks : []).toHaveLength(1);
     const task = ("tasks" in workflow ? workflow.tasks : [])[0]!;
     expect(task.kind).toBe("jev");

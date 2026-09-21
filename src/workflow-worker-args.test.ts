@@ -89,6 +89,31 @@ describe("workflow worker argument builders", () => {
     );
   });
 
+  test("amp executes locally with identical argv inside and outside an orb", () => {
+    const previousOrb = process.env.AMP_ORB;
+    const previousExecutor = process.env.AMP_EXECUTOR;
+    try {
+      for (const inOrb of [false, true]) {
+        if (inOrb) {
+          process.env.AMP_ORB = "1";
+          process.env.AMP_EXECUTOR = "sandbox";
+        } else {
+          delete process.env.AMP_ORB;
+          delete process.env.AMP_EXECUTOR;
+        }
+        expect(buildAmpArgs({ prompt: "return json", permission: "legacy" })).toEqual([
+          "--no-ide", "--no-notifications", "--no-color", "--no-archive-after-execute",
+          "--execute", "return json", "--stream-json",
+        ]);
+      }
+    } finally {
+      if (previousOrb === undefined) delete process.env.AMP_ORB;
+      else process.env.AMP_ORB = previousOrb;
+      if (previousExecutor === undefined) delete process.env.AMP_EXECUTOR;
+      else process.env.AMP_EXECUTOR = previousExecutor;
+    }
+  });
+
   test("antigravity-cli is a supported workflow worker", () => {
     expect(supportedWorkflowWorkers()).toContain("antigravity-cli");
     expect(getWorkflowWorkerAdapter("antigravity-cli").id).toBe("antigravity-cli");

@@ -53,12 +53,13 @@ and durable ledger assertions rather than merely checking exit zero.
 | Repair | Decode and finish budgets stay separate; Jev protocol errors never enter an agent repair loop | `src/workflow-runner.test.ts`, `src/workflow-jev.test.ts` |
 | Model selection | Unpinned means harness default; explicit pins and Amp catalog pins retain harness-specific shapes | `src/workflow-models.test.ts`, `src/workflow-worker-args.test.ts` |
 | Permissions | Unsupported modes fail before spawn; supported modes produce exact native flags | `src/workflow-worker-args.test.ts` |
-| Scheduling gates | Declaring installs nothing; installing does not execute `run`; serving launches only due work | `src/workflow-scheduler` |
+| Local Amp execution | Exact argv uses local `--execute`, never nested-orb flags, with and without orb environment markers | `src/workflow-worker-args.test.ts` |
+| Scheduling gates | Declaring installs nothing; installing imports the module but does not execute `run`; serving launches only due work | `src/workflow-scheduler/install.test.ts`, `serve.test.ts` |
 | Reinstall | Unchanged policy is a no-op; changed policy updates revision and cursor atomically | `src/workflow-scheduler/store.test.ts` |
 | Overlap | Running/reserved/uncertain executions occupy the schedule; due overlap is skipped, never duplicated | `src/workflow-scheduler/store.test.ts`, `serve.test.ts` |
 | Missed runs | Overdue occurrences coalesce into one opportunity, not a burst | `src/workflow-scheduler/serve.test.ts` |
 | Recovery | Alive processes are adopted; proven death without result is interrupted; uncertainty never expires by timer | `src/workflow-scheduler/reconcile.test.ts`, `process-identity.test.ts` |
-| Foreground serving | `--once` awaits completion and exits unsuccessfully when its executions fail | `src/workflow-scheduler/serve.test.ts` |
+| Foreground serving | `--once` awaits completion; real runner children with mocked pure-Jev/mixed task outputs persist success/failure before it returns | `src/workflow-scheduler/serve.test.ts`, `serve-runner.test.ts` |
 | Cancellation | Stop drains the runner/worker tree; interrupted work is not marked completed | `src/workflow-controls.test.ts`, `workflow-worker-process.test.ts` |
 | Time | Five-field cron, named timezones, and both DST boundaries follow the documented policy | `src/workflow-scheduler/cron.test.ts` |
 | Secrets | Error output, stored rows, and exports apply redaction; unsafe cache writes are not persisted | `src/workflow-data-policy.test.ts`, `workflow-data-governance.test.ts`, `workflow-store-governance.test.ts` |

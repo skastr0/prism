@@ -45,7 +45,7 @@ and durable ledger assertions rather than merely checking exit zero.
 | Mixed routing | Agent output becomes Jev state; the decision selects exactly one downstream branch | `src/workflow-jev.test.ts` |
 | Dependency failure | Failed extraction or Jev evaluation prevents downstream agent calls | `src/workflow-jev.test.ts` |
 | Replay | Identical graph/input produces a new run with identical cached outputs and zero model calls | `src/workflow-jev.test.ts`, orb smoke below |
-| Invalidation | Changed upstream content invalidates dependent decisions; unchanged unrelated tasks stay cached | `src/workflow-jev.test.ts` |
+| Invalidation | Changed upstream content invalidates dependent decisions; original-input cache identities remain reusable | `src/workflow-jev.test.ts` |
 | Jev identity | Endpoint, model, state, questions, and result-contract version affect identity; timeout does not | `src/workflow-jev.test.ts` |
 | Jev codecs | Missing/excess answer keys, wrong labels, malformed probabilities, and mismatched score legends fail closed | `src/jev.test.ts`, `src/services/jev.test.ts` |
 | Jev failures | Configuration, authentication, rate limit, timeout, transport, and protocol failures remain distinguishable | `src/services/jev.test.ts`, `src/jev-ask.test.ts` |
@@ -94,7 +94,8 @@ the specified sample, not reliability across every model or every future CLI rel
 | Amp → Jev → Amp | Same assertions through the actual Amp CLI | Passed in the repeatable smoke |
 | Credential-free replay | New run ID, all tasks cached, identical outputs, no usable worker binary/Jev key | Passed for all three shapes |
 | Scheduled pure Jev | Real due boundary; `--once` awaits one uncached live result; no occupant afterwards | Passed once in an isolated store |
-| Scheduled agent-only and mixed | Real due boundary, correct task outputs, provenance, completion and no leftover runner | Still required |
+| Scheduled Claude → Jev → Claude | Real due boundary, correct task outputs, provenance, completion and no leftover runner | Passed once in an isolated store |
+| Scheduled agent-only and Amp mixed | Same scheduling assertions through the remaining worker shapes | Still required |
 | Model pins | Chosen native model/mode and Amp catalog/effort reach the worker; temporary pins are cleaned up | Still required; no preferences chosen |
 | Live repair | A real schema/finish failure repairs within its budget and records the correct continuation | Still required |
 | Live cancellation | Stop an active harness/API request and verify terminal ledger plus process absence | Still required |
@@ -108,11 +109,18 @@ bun scripts/acceptance/workflow-orb-smoke.ts --live --worker claude-code
 bun scripts/acceptance/workflow-orb-smoke.ts --live --worker amp-code
 ```
 
-The one scheduled smoke used `* * * * *` in `America/Sao_Paulo`, installed into temporary stores,
+The pure-Jev scheduled smoke used `* * * * *` in `America/Sao_Paulo`, installed into temporary stores,
 and waited until the real next due time. `scheduler serve --once --json` reported `launched: 1`,
 `failed: 0`, and `leftRunningOnShutdown: 0`. The scheduler execution was completed with no occupant;
 the workflow ledger contained exactly one completed run and the expected uncached Jev answer.
-This did **not** test sleeping or waking an orb.
+
+A second isolated schedule crossed the real `2026-09-21T09:29:00Z` due boundary in UTC. Claude
+computed `17 + 26 = 43`, Jev classified that upstream result as `odd`, and Claude produced
+`{sum: 43, parity: "odd"}`. The ledger recorded exactly `sum`, `classify`, and `report-odd`, all
+completed and uncached; scheduling provenance matched the due time. `serve --once` reported one
+launch, zero failures, and zero runners left on shutdown, with no occupying execution. Both fixtures
+and their temporary schedules were removed. These were one-off live checks, not part of the
+repeatable smoke script, and neither tested sleeping or waking an orb.
 
 ## Layer C: actual orb lifecycle matrix — not yet run
 

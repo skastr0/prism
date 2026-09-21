@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,9 +20,11 @@ import {
   defineTask,
   defineWorkflow,
   isJevTask,
+  isWorkflowWorkerTask,
   jev,
   phase,
   type AnyWorkflowTask,
+  type AnyWorkflowWorkerTask,
   type JevTask,
   type PhaseContract,
   type WorkflowRuntime,
@@ -541,5 +543,368 @@ describe("phase ctx.jev", () => {
     if (Exit.isFailure(exit)) {
       expect(String(Cause.squash(exit.cause))).toMatch(/task input failed schema decode/);
     }
+  });
+});
+
+const InspectReport = Schema.Struct({
+  ticket: Schema.String,
+  risk: Schema.String,
+  files: Schema.Array(Schema.String),
+});
+const ActReport = Schema.Struct({
+  action: Schema.Literals(["renamed"]),
+  ticket: Schema.String,
+});
+const ClarifyReport = Schema.Struct({
+  action: Schema.Literals(["asked"]),
+  missing: Schema.String,
+});
+
+const workerTask = (task: AnyWorkflowTask): AnyWorkflowWorkerTask => {
+  if (!isWorkflowWorkerTask(task)) {
+    throw new Error(`test executor received unexpected task kind '${task.kind}' for task '${task.id}'`);
+  }
+  return task;
+};
+
+type MixedCall =
+  | { readonly kind: "worker"; readonly id: string; readonly prompt: string }
+  | { readonly kind: "jev"; readonly id: string; readonly state: unknown; readonly questions: unknown };
+
+/**
+ * Instrument a mixed executor so worker prompts and Jev `systemOne` requests
+ * can be asserted independently. Asymmetric synthetic values (west/east,
+ * alpha/omega, inspect vs act vs clarify) make any cross-arm contamination
+ * fail the test instead of cancelling out.
+ */
+const instrumentMixedPipeline = (input: {
+  readonly inspect: { readonly ticket: string; readonly risk: string; readonly files: ReadonlyArray<string> };
+  readonly route?: JevAnswers<typeof questions>;
+  readonly act?: { readonly action: "renamed"; readonly ticket: string };
+  readonly clarify?: { readonly action: "asked"; readonly missing: string };
+  readonly failInspect?: boolean;
+  readonly failJev?: JevError;
+}) => {
+  const calls: MixedCall[] = [];
+  const chosenAnswers = input.route ?? answers;
+  const jevLayer = Layer.effect(
+    JevClient,
+    Effect.gen(function* () {
+      const inner = yield* JevClient;
+      return {
+        config: inner.config,
+        systemOne: (request, options) => {
+          calls.push({
+            kind: "jev",
+            id: "route",
+            state: request.state,
+            questions: request.questions,
+          });
+          if (input.failJev !== undefined) return Effect.fail(input.failJev);
+          return inner.systemOne(request, options);
+        },
+      };
+    }),
+  ).pipe(Layer.provide(JevClientTest(questions, chosenAnswers, { config: jevConfig })));
+  const executor = createWorkflowTaskExecutor({
+    executeWorkflowTask: (task) => {
+      const worker = workerTask(task);
+      calls.push({ kind: "worker", id: worker.id, prompt: worker.prompt });
+      if (input.failInspect === true && worker.id === "inspect") {
+        return Promise.reject(new Error("inspect worker unavailable"));
+      }
+      if (worker.id === "inspect") return Promise.resolve(input.inspect);
+      if (worker.id === "act") {
+        return Promise.resolve(input.act ?? { action: "renamed" as const, ticket: "unused-act" });
+      }
+      if (worker.id === "clarify") {
+        return Promise.resolve(input.clarify ?? { action: "asked" as const, missing: "unused-clarify" });
+      }
+      throw new Error(`unexpected worker task '${worker.id}'`);
+    },
+    jev: jevLayer,
+  });
+  return { calls, executor };
+};
+
+const mixedPipelineWorkflow = (inspectPrompt: string, inspectCacheKey?: string) =>
+  defineWorkflow({
+    name: "mixed-agent-jev-pipeline",
+    run: (wf) => Effect.gen(function* () {
+      const inspect = yield* wf.runTask(defineTask({
+        id: "inspect",
+        prompt: inspectPrompt,
+        output: InspectReport,
+        worker: { worker: "amp-code", model: "medium" },
+        ...(inspectCacheKey !== undefined ? { cacheKey: inspectCacheKey } : {}),
+      }));
+      const decision = yield* wf.runTask(jev({
+        id: "route",
+        state: {
+          ticket: inspect.ticket,
+          risk: inspect.risk,
+          files: inspect.files,
+        },
+        questions,
+      }));
+      if (decision.answers.route.choice === "act") {
+        const acted = yield* wf.runTask(defineTask({
+          id: "act",
+          prompt: `Rename flag for ${inspect.ticket} on ${inspect.files.join(",")}`,
+          output: ActReport,
+          worker: { worker: "amp-code", model: "low" },
+        }));
+        return { branch: "act" as const, ticket: acted.ticket, action: acted.action };
+      }
+      const clarified = yield* wf.runTask(defineTask({
+        id: "clarify",
+        prompt: `Ask for missing context on ${inspect.ticket} at risk ${inspect.risk}`,
+        output: ClarifyReport,
+        worker: { worker: "amp-code", model: "high" },
+      }));
+      return { branch: "clarify" as const, missing: clarified.missing, action: clarified.action };
+    }),
+  });
+
+describe("dynamic agent -> jev -> conditional agent pipeline", () => {
+  afterAll(cleanupStores);
+
+  test("upstream inspect output is the Jev state, and only the selected act branch runs", async () => {
+    await cleanupStores();
+    const store = await openStore();
+    const inspect = {
+      ticket: "west-ticket-α",
+      risk: "asymmetric-low",
+      files: ["src/west.ts", "docs/omega.md"],
+    };
+    const { calls, executor } = instrumentMixedPipeline({
+      inspect,
+      route: answers,
+      act: { action: "renamed", ticket: "west-ticket-α" },
+      clarify: { action: "asked", missing: "must-not-run" },
+    });
+
+    const result = await runWorkflow(
+      mixedPipelineWorkflow("Inspect west-ticket-α at asymmetric-low."),
+      { store, executeTask: executor, jev: jevConfig },
+    );
+
+    expect(result.output).toEqual({
+      branch: "act",
+      ticket: "west-ticket-α",
+      action: "renamed",
+    });
+    expect(calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "worker:inspect",
+      "jev:route",
+      "worker:act",
+    ]);
+    const jevCall = calls.find((call) => call.kind === "jev");
+    expect(jevCall).toEqual({
+      kind: "jev",
+      id: "route",
+      state: inspect,
+      questions,
+    });
+    expect(result.tasks.map((task) => task.id)).toEqual(["inspect", "route", "act"]);
+    expect(result.tasks.every((task) => task.status === "completed" && task.cached === false)).toBe(true);
+    store.close();
+  });
+
+  test("the clarify branch runs when Jev selects it, and act never executes", async () => {
+    await cleanupStores();
+    const store = await openStore();
+    const inspect = {
+      ticket: "east-ticket-ω",
+      risk: "asymmetric-high",
+      files: ["src/east.ts"],
+    };
+    const clarifyAnswers: JevAnswers<typeof questions> = {
+      route: {
+        type: "choice",
+        choice: "clarify",
+        confidence: 0.81,
+        probabilities: { act: 0.19, clarify: 0.81 },
+      },
+      destructive: { type: "noul", noul: 0.44 },
+    };
+    const { calls, executor } = instrumentMixedPipeline({
+      inspect,
+      route: clarifyAnswers,
+      act: { action: "renamed", ticket: "must-not-run" },
+      clarify: { action: "asked", missing: "owner-signoff-east" },
+    });
+
+    const result = await runWorkflow(
+      mixedPipelineWorkflow("Inspect east-ticket-ω at asymmetric-high."),
+      { store, executeTask: executor, jev: jevConfig },
+    );
+
+    expect(result.output).toEqual({
+      branch: "clarify",
+      missing: "owner-signoff-east",
+      action: "asked",
+    });
+    expect(calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "worker:inspect",
+      "jev:route",
+      "worker:clarify",
+    ]);
+    const jevCall = calls.find((call) => call.kind === "jev");
+    expect(jevCall).toMatchObject({ kind: "jev", state: inspect });
+    expect(result.tasks.map((task) => task.id)).toEqual(["inspect", "route", "clarify"]);
+    store.close();
+  });
+
+  test("an inspect failure never calls Jev or a downstream agent", async () => {
+    await cleanupStores();
+    const store = await openStore();
+    const { calls, executor } = instrumentMixedPipeline({
+      inspect: { ticket: "dead", risk: "x", files: ["nope.ts"] },
+      failInspect: true,
+    });
+
+    await expect(runWorkflow(
+      mixedPipelineWorkflow("Inspect a ticket that the worker cannot see."),
+      { store, executeTask: executor, jev: jevConfig },
+    )).rejects.toThrow(/inspect worker unavailable/);
+
+    expect(calls).toEqual([{
+      kind: "worker",
+      id: "inspect",
+      prompt: "Inspect a ticket that the worker cannot see.",
+    }]);
+    store.close();
+  });
+
+  test("a Jev failure never calls the selected downstream agent", async () => {
+    await cleanupStores();
+    const store = await openStore();
+    const inspect = {
+      ticket: "north-ticket",
+      risk: "blocked",
+      files: ["src/north.ts"],
+    };
+    const { calls, executor } = instrumentMixedPipeline({
+      inspect,
+      failJev: new JevError({ kind: "timeout", message: "systemone deadline" }),
+    });
+
+    const error = await runWorkflow(
+      mixedPipelineWorkflow("Inspect north-ticket."),
+      { store, executeTask: executor, jev: jevConfig },
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WorkflowJevExecutionError);
+    expect((error as WorkflowJevExecutionError).jevError.kind).toBe("timeout");
+    expect(calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "worker:inspect",
+      "jev:route",
+    ]);
+    store.close();
+  });
+
+  test("exact cached replay of the mixed pipeline makes zero worker and zero Jev calls", async () => {
+    await cleanupStores();
+    const store = await openStore();
+    const inspect = {
+      ticket: "west-ticket-α",
+      risk: "asymmetric-low",
+      files: ["src/west.ts", "docs/omega.md"],
+    };
+    const { calls, executor } = instrumentMixedPipeline({
+      inspect,
+      route: answers,
+      act: { action: "renamed", ticket: "west-ticket-α" },
+    });
+    const workflow = mixedPipelineWorkflow("Inspect west-ticket-α at asymmetric-low.");
+
+    const first = await runWorkflow(workflow, { store, executeTask: executor, jev: jevConfig });
+    expect(calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "worker:inspect",
+      "jev:route",
+      "worker:act",
+    ]);
+    expect(first.tasks.every((task) => task.cached === false)).toBe(true);
+
+    calls.length = 0;
+    const second = await runWorkflow(workflow, { store, executeTask: executor, jev: jevConfig });
+    expect(calls).toEqual([]);
+    expect(second.tasks.map((task) => ({ id: task.id, cached: task.cached }))).toEqual([
+      { id: "inspect", cached: true },
+      { id: "route", cached: true },
+      { id: "act", cached: true },
+    ]);
+    expect(second.output).toEqual(first.output);
+    store.close();
+  });
+
+  test("changed upstream inspect output invalidates Jev and the selected downstream cache only", async () => {
+    await cleanupStores();
+    const store = await openStore();
+    // Two inspect prompts share one author cacheKey so the inspect *slot* can
+    // miss independently of Jev/act. After the first run, a second inspect
+    // prompt under the same cacheKey writes a new inspect payload; Jev state
+    // and the act prompt (which embeds `files`) must miss, while a later
+    // replay of the original prompt still hits the original inspect/Jev/act
+    // identities — proving the mutated run did not clobber them.
+    const firstInspect = {
+      ticket: "west-ticket-α",
+      risk: "asymmetric-low",
+      files: ["src/west.ts"],
+    };
+    const mutatedInspect = {
+      ticket: "west-ticket-α",
+      risk: "asymmetric-low",
+      files: ["src/west.ts", "src/mutated-omega.ts"],
+    };
+    let inspectOutput = firstInspect;
+    const { calls, executor } = instrumentMixedPipeline({
+      get inspect() {
+        return inspectOutput;
+      },
+      route: answers,
+      act: { action: "renamed", ticket: "west-ticket-α" },
+    });
+    const original = mixedPipelineWorkflow(
+      "Inspect west-ticket-α at asymmetric-low.",
+      "inspect-west-v1",
+    );
+
+    const first = await runWorkflow(original, { store, executeTask: executor, jev: jevConfig });
+    expect(first.tasks.map((task) => task.id)).toEqual(["inspect", "route", "act"]);
+    expect(first.tasks.every((task) => task.cached === false)).toBe(true);
+
+    calls.length = 0;
+    inspectOutput = mutatedInspect;
+    const mutated = mixedPipelineWorkflow(
+      "Inspect west-ticket-α including mutated-omega.",
+      "inspect-west-v1",
+    );
+    const second = await runWorkflow(mutated, { store, executeTask: executor, jev: jevConfig });
+
+    expect(calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "worker:inspect",
+      "jev:route",
+      "worker:act",
+    ]);
+    const jevCall = calls.find((call) => call.kind === "jev");
+    expect(jevCall).toMatchObject({ kind: "jev", state: mutatedInspect });
+    expect(second.tasks.map((task) => ({ id: task.id, cached: task.cached }))).toEqual([
+      { id: "inspect", cached: false },
+      { id: "route", cached: false },
+      { id: "act", cached: false },
+    ]);
+
+    calls.length = 0;
+    const replayOriginal = await runWorkflow(original, { store, executeTask: executor, jev: jevConfig });
+    expect(calls).toEqual([]);
+    expect(replayOriginal.tasks.map((task) => ({ id: task.id, cached: task.cached }))).toEqual([
+      { id: "inspect", cached: true },
+      { id: "route", cached: true },
+      { id: "act", cached: true },
+    ]);
+    expect(replayOriginal.output).toEqual(first.output);
+    store.close();
   });
 });

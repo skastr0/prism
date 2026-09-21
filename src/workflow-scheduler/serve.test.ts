@@ -415,6 +415,45 @@ describe("scheduler loop: one tick", () => {
     }
   });
 
+  test("an uncertain occupying execution still consumes a due occurrence as a skip", async () => {
+    const root = await createTempRoot();
+    const store = await SchedulerStore.open(join(root, "scheduler.sqlite"));
+    const fake = createFakeHost();
+    try {
+      const schedule = installSchedule(store);
+      const previous = store.reserveExecution({
+        scheduleId: schedule.scheduleId,
+        scheduleRevision: schedule.revision,
+        scheduledFor: "2026-09-16T12:00:00.000Z",
+        schedulerInstanceId: "instance-0",
+      });
+      if (previous.kind !== "reserved") throw new Error("expected a reservation");
+      store.updateExecution({
+        executionId: previous.execution.executionId,
+        expectStatus: "reserved",
+        status: "running",
+        runId: "run-uncertain",
+      });
+      // Authorization was consumed, but the runner identity cannot be observed.
+      // Recovery must stay uncertain rather than guess, and the slot stays held.
+      fake.seedRun("run-uncertain", previous.execution.executionId, true);
+      fake.setObservation(null);
+
+      const report = await runOnce(store, fake);
+      expect(report.launched).toBe(0);
+      expect(report.skippedOverlap).toBe(1);
+      expect(report.failed).toBe(0);
+      expect(store.getExecution(previous.execution.executionId)?.status).toBe("uncertain");
+      expect(store.occupyingExecution(schedule.scheduleId)?.executionId).toBe(previous.execution.executionId);
+      expect(store.getSchedule(schedule.scheduleId)?.nextDueAt).toBe("2026-09-16T12:20:00.000Z");
+      expect(executionStatuses(store)).toContain("skipped-overlap");
+      expect(fake.started).toHaveLength(0);
+      expect(store.listEvents().some((event) => event.type === "execution.uncertain")).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
   test("records launch-failed without occupying the schedule when the spawn dies", async () => {
     const root = await createTempRoot();
     const store = await SchedulerStore.open(join(root, "scheduler.sqlite"));

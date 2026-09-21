@@ -137,6 +137,8 @@ describe("runWorkflowStoreSchemaVersionGuard (git integration)", () => {
     await git(root, ["init", "-q", "-b", "main"]);
     await git(root, ["config", "user.email", "guard-test@example.com"]);
     await git(root, ["config", "user.name", "Guard Test"]);
+    // Fixture commits must not depend on the user's signing key or signing helper.
+    await git(root, ["config", "commit.gpgsign", "false"]);
     await mkdir(dirname(join(root, SCHEMA_FILE_REL)), { recursive: true });
     await writeFile(join(root, SCHEMA_FILE_REL), schemaFileContents(1));
     await writeFile(join(root, PACKAGE_JSON_REL), packageJsonContents("0.1.0"));

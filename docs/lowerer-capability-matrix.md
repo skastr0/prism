@@ -8,7 +8,7 @@ Prism keeps two related contracts separate:
 - `src/lowerer-capabilities.ts` describes what kind of harness surface Prism uses.
 
 This matters because "plugin" means different things per product. A generated Claude,
-Grok, Factory, or Antigravity plugin bundle is not the same thing as an Amp or
+Grok, or Antigravity plugin bundle is not the same thing as an Amp or
 OpenCode TypeScript plugin API, and neither is the same thing as the CLI tool
 runtime under `PRISM_HOME/runtime/tools/`.
 
@@ -17,7 +17,7 @@ runtime under `PRISM_HOME/runtime/tools/`.
 | Kind | Meaning |
 | --- | --- |
 | `native-plugin-api` | Prism emits code for a harness runtime plugin API, such as OpenCode, Amp, or OMP TypeScript plugins. |
-| `native-plugin-bundle` | Prism emits the product's plugin package layout, such as Claude Code, Antigravity, Grok, or Factory plugin bundles. |
+| `native-plugin-bundle` | Prism emits the product's plugin package layout, such as Claude Code, Antigravity, or Grok plugin bundles. |
 | `markdown-file` | Prism emits generated markdown files consumed directly by the harness. |
 | `direct-file` | Prism copies or appends install-phase files directly into harness roots (also used for the shared CLI tool runtime under `PRISM_HOME`). |
 | `config-patch` | Prism patches a harness config file and owns only the generated block/table/section. |

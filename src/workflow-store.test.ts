@@ -3316,6 +3316,36 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("curated Amp configurations cache independently and exact configuration replay still hits", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let calls = 0;
+    const configs = [
+      { worker: "amp-code", catalogModel: "provider/model-a", effort: "low" },
+      { worker: "amp-code", catalogModel: "provider/model-a", effort: "high" },
+      { worker: "amp-code", catalogModel: "provider/model-b", effort: "low" },
+    ] as const;
+    try {
+      for (const [index, config] of configs.entries()) {
+        const result = await runWorkflow(defineWorkflow({
+          name: "curated-pins",
+          tasks: [defineTask({ id: "review", prompt: "Review the same input.", output: Schema.Struct({ summary: Schema.String }), worker: config })],
+        }), { store, executeTask: async () => ({ summary: `execution-${++calls}` }) });
+        expect(result.tasks[0]?.cached).toBe(false);
+        expect(result.tasks[0]?.output).toEqual({ summary: `execution-${index + 1}` });
+      }
+      const replay = await runWorkflow(defineWorkflow({
+        name: "curated-pins",
+        tasks: [defineTask({ id: "review", prompt: "Review the same input.", output: Schema.Struct({ summary: Schema.String }), worker: { ...configs[0] } })],
+      }), { store, executeTask: async () => { throw new Error("exact replay must not dispatch"); } });
+      expect(calls).toBe(3);
+      expect(replay.tasks[0]?.cached).toBe(true);
+      expect(replay.tasks[0]?.output).toEqual({ summary: "execution-1" });
+    } finally {
+      store.close();
+    }
+  });
+
   test("volatile continuation metadata does not participate in task cache identity", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

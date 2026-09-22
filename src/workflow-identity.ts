@@ -4,6 +4,7 @@ import {
   isJevTask,
   resolveWorkflowTaskSessionPersistence,
   resolveWorkflowTaskModel,
+  resolveWorkflowTaskModelResolution,
   type AnyJevTask,
   type AnyWorkflowTask,
   type AnyWorkflowWorkerTask,
@@ -151,10 +152,19 @@ export const workflowTaskIdentity = (
     };
   }
   const worker = task.worker?.worker ?? runtimeOptions.fallbackWorker ?? null;
-  const model = resolveWorkflowTaskModel(task, {
+  const resolution = resolveWorkflowTaskModelResolution(task, {
     worker: worker ?? undefined,
     fallbackModel: runtimeOptions.fallbackModel,
   });
+  const permission = task.worker?.permission ?? runtimeOptions.fallbackPermission ?? "permissive";
+  const configuration = {
+    ...(task.worker?.worker === "amp-code" && task.worker.catalogModel !== undefined ? { catalogModel: task.worker.catalogModel } : {}),
+    ...(task.worker?.worker === "amp-code" && task.worker.effort !== undefined ? { effort: task.worker.effort } : {}),
+    ...((worker === "codex-cli" || worker === "omp") && resolution?.variant !== undefined ? { variant: resolution.variant } : {}),
+    ...((worker === "hermes" || worker === "omp") && resolution?.provider !== undefined ? { provider: resolution.provider } : {}),
+    ...(permission !== "permissive" ? { permission } : {}),
+    ...(permission === "restricted" && task.worker?.restrictedTools !== undefined ? { restrictedTools: task.worker.restrictedTools } : {}),
+  };
   return {
     workflow,
     taskId: task.id,
@@ -166,8 +176,11 @@ export const workflowTaskIdentity = (
       prompt: task.prompt,
       worker,
       workerSemantics: workflowWorkerSemanticsVersion(worker),
-      model: model ?? null,
+      model: resolution?.model ?? null,
       profile: task.worker?.profile ?? null,
+      // Curated names compile to raw options. Hash the effective settings, not
+      // a name/description; preserve existing addresses for unconfigured tasks.
+      ...(Object.keys(configuration).length > 0 ? { configuration } : {}),
       // Harness session retention changes persistence, not task output semantics.
       // Keep it out of the content address so persistent and ephemeral executions share
       // Prism's completed-result cache.

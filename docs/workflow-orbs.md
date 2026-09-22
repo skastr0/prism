@@ -76,7 +76,7 @@ bun scripts/build-dts.ts
 bun scripts/acceptance/workflow-orb-smoke.ts
 bun test scripts/acceptance/workflow-orb-smoke.test.ts
 
-# Full deterministic suite, including build prerequisites.
+# Full deterministic suite; the bun test preload rebuilds stale prerequisites.
 bun run test:ci
 ```
 

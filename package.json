@@ -38,7 +38,7 @@
     "check:workflow-store-schema-version": "bun scripts/workflow-store-schema-version-guard.ts",
     "check:refresh-idempotency": "bun scripts/check-refresh-idempotency.ts",
     "test": "bun test",
-    "test:ci": "bun run build:core && bun scripts/build-dts.ts && bun test --timeout 30000",
+    "test:ci": "bun test --timeout 30000",
     "acceptance:idempotency-git": "bun scripts/acceptance/idempotency-git.ts",
     "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",
     "acceptance:workflow-e2e": "bun scripts/acceptance/workflow-e2e-matrix.ts",

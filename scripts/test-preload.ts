@@ -1,6 +1,10 @@
 /**
  * Global bun test preload (wired via bunfig.toml [test].preload).
  *
+ * Makes plain `bun test` self-sufficient on a clean checkout: rebuilds the
+ * untracked build outputs the suite imports when their inputs changed (see
+ * scripts/test-build-artifacts.ts).
+ *
  * Guarantees test isolation from the real `~/.prism`:
  *  1. Creates a fresh mkdtemp PRISM_HOME for the whole test process and sets
  *     the env var before any test module is imported. `resolvePrismHome()`
@@ -23,7 +27,12 @@ import { afterEach } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { resolvePrismHome } from "../src/prism-home.js";
+import { ensureTestBuildArtifacts } from "./test-build-artifacts.js";
+
+await ensureTestBuildArtifacts();
+
+// Imported after the build: src modules resolve @skastr0/prism-sdk from dist.
+const { resolvePrismHome } = await import("../src/prism-home.js");
 
 const realPrismHome = resolve(join(homedir(), ".prism"));
 

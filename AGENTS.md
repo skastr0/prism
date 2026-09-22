@@ -89,6 +89,8 @@ bun run build
 bun run install:dev
 ```
 
+Plain `bun test` is self-sufficient on a clean checkout. The preload (`scripts/test-preload.ts`) rebuilds the untracked outputs the suite imports — `packages/prism-sdk/dist` (`build:core`) and `dist/dts-tmp` (`scripts/build-dts.ts`) — whenever their inputs' content hash changes (`scripts/test-build-artifacts.ts`), under a cross-process lock; the warm path is a hash check. `bun run test:ci` adds CI's 30s timeout.
+
 ## Running
 
 ```bash

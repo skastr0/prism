@@ -10,8 +10,8 @@
  *   user's repository;
  * - plugin-free use (no generated sops.ts) still typechecks.
  *
- * Type-level tests require the emitted prism declarations (dist/dts-tmp, built
- * by `bun run test:ci`) and are skipped when that artifact is absent.
+ * Type-level tests use the emitted prism declarations (dist/dts-tmp), which the
+ * bun test preload keeps built.
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -30,14 +30,13 @@ import {
   workflowWorkersModulePath,
 } from "./workflow-named-workers.js";
 import { loadWorkflowFile } from "./workflow-loader.js";
-import { resolveWorkflowTypeDirs, buildWorkflowPaths, workflowTsconfigPath } from "./workflow-tsconfig.js";
+import { buildWorkflowPaths, workflowTsconfigPath } from "./workflow-tsconfig.js";
 import {
   runWorkflowTypecheck,
   typecheckWorkflowFile,
   WorkflowTypecheckError,
 } from "./workflow-typecheck.js";
 
-const typeSurfaceAvailable = resolveWorkflowTypeDirs().prismTypesDir !== undefined;
 
 const tempRoots: string[] = [];
 const createTempRoot = (explicit?: string): string => {
@@ -250,7 +249,7 @@ describe("named worker refs", () => {
   }, 30_000);
 });
 
-describe.skipIf(!typeSurfaceAvailable)("generated named-worker type checking", () => {
+describe("generated named-worker type checking", () => {
   let home = "";
   let dir = "";
   let sourceDir = "";

@@ -16,9 +16,15 @@ import { join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dir, "..");
 
-/** Emits declaration files into dist/dts-tmp and returns the root index path. */
-export const buildDts = async (): Promise<string> => {
-  const tmpOut = join(repoRoot, "dist", "dts-tmp");
+/** Output directory of the emitted authoring declarations. */
+export const dtsOutDir = join(repoRoot, "dist", "dts-tmp");
+
+/**
+ * Clean dist/dts-tmp and write the focused declaration tsconfig. Returns the
+ * tsconfig path; callers run `tsc --project <path>` against it.
+ */
+export const prepareDtsEmit = async (): Promise<string> => {
+  const tmpOut = dtsOutDir;
 
   // Clean any prior run.
   await rm(tmpOut, { recursive: true, force: true });
@@ -53,6 +59,13 @@ export const buildDts = async (): Promise<string> => {
 
   const tsconfigPath = join(repoRoot, "dist", "dts-tsconfig.json");
   await Bun.write(tsconfigPath, JSON.stringify(focusedTsconfig, null, 2));
+  return tsconfigPath;
+};
+
+/** Emits declaration files into dist/dts-tmp and returns the root index path. */
+export const buildDts = async (): Promise<string> => {
+  const tmpOut = dtsOutDir;
+  const tsconfigPath = await prepareDtsEmit();
 
   console.log("Emitting prism declarations (authoring surface)...");
 

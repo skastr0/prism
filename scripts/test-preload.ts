@@ -10,8 +10,8 @@
  * of the process, and each in-process `Bun.build` re-reads the ancestors of its
  * entry. With test fixtures under a shared $TMPDIR holding ~100k entries (other
  * projects' leftovers), each build leaked ~40MB and the suite segfaulted around
- * its 70th build. A fresh, small parent keeps that cost proportional to this
- * run's own temp dirs. Bun 1.4.2 no longer leaks.
+ * its 70th build. Bun 1.4.2 (the pinned version) no longer leaks; the private
+ * parent stays because it keeps fixture directories out of shared temp space.
  *
  * Guarantees test isolation from the real `~/.prism`:
  *  1. Creates a fresh mkdtemp PRISM_HOME for the whole test process and sets
@@ -36,6 +36,16 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ensureTestBuildArtifacts } from "./test-build-artifacts.js";
+import packageJson from "../package.json" with { type: "json" };
+
+const pinnedBun = packageJson.packageManager.replace(/^bun@/, "");
+if (Bun.version !== pinnedBun) {
+  throw new Error(
+    `bun test is running on Bun ${Bun.version}, but package.json pins bun@${pinnedBun}.\n` +
+      `Fix: run \`mise install\` in the repo root, then re-run from a fresh shell ` +
+      `(or \`mise exec -- bun test ...\`).`,
+  );
+}
 
 await ensureTestBuildArtifacts();
 

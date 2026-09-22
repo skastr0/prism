@@ -13,7 +13,7 @@
       "path": "<HARNESS_ROOT>/agents/security-reviewer.md"
     },
     {
-      "content": "<BUNDLE_HASH:69e096b5db25403ae42c1975494648477e1b5569398a220b8b484a0bf30db8a3>",
+      "content": "<BUNDLE_HASH:6809d1d84c1e31e20d52522d79f2cbcd8ddaa6548a905931cf2a746a7a1ea1ba>",
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/dist/server.mjs"
     }
   ],

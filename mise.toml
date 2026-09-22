@@ -1,0 +1,4 @@
+# Project-local toolchain. Keep bun in lockstep with package.json "packageManager";
+# scripts/test-preload.ts fails the test run when they drift.
+[tools]
+bun = "1.4.2"

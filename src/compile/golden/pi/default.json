@@ -1,11 +1,11 @@
 {
   "files": [
     {
-      "content": "<BUNDLE_HASH:dd90e5b1a79845b3091d800a18f978a07c94d2375c753b45fe78b6b4205bfbdf>",
+      "content": "<BUNDLE_HASH:62e3280dc765a9341af2b0a4ad477c599555fe8049103f13212d883d1308caf4>",
       "path": "<HARNESS_ROOT>/packages/prism-generated-canonical-compile-fixture/extensions/prism-extension.js"
     },
     {
-      "content": "<BUNDLE_HASH:6d16003a7198c5e91afd94ed1c7e5b039d9a6c41625fcdb29f8f932cf8b17e0b>",
+      "content": "<BUNDLE_HASH:ed095cf490ece0f976804bec16129479254560be7b5cc2fc6d01f9657a93d25e>",
       "mode": 493,
       "path": "<HARNESS_ROOT>/packages/prism-generated-canonical-compile-fixture/hooks/session-start.mjs"
     },

@@ -69,6 +69,7 @@ const fixedEffortWorkerTypes = [
   defineTask({ id: "agy-effort-type", prompt: "p", output: PatchReport, worker: { worker: "antigravity-cli", effort: "high" } }),
   defineTask({ id: "hermes-effort-type", prompt: "p", output: PatchReport, worker: { worker: "hermes", effort: "ultra" } }),
   defineTask({ id: "omp-effort-type", prompt: "p", output: PatchReport, worker: { worker: "omp", effort: "auto" } }),
+  defineTask({ id: "kimi-effort-type", prompt: "p", output: PatchReport, worker: { worker: "kimi-code", effort: "xhigh" } }),
 ];
 void fixedEffortWorkerTypes;
 
@@ -78,6 +79,8 @@ defineTask({ id: "invalid-claude-effort", prompt: "p", output: PatchReport, work
 defineTask({ id: "unsupported-devin-effort", prompt: "p", output: PatchReport, worker: { worker: "devin", effort: "high" } });
 // @ts-expect-error OpenCode has model variants, not a per-task effort control.
 defineTask({ id: "unsupported-opencode-effort", prompt: "p", output: PatchReport, worker: { worker: "opencode", effort: "high" } });
+// @ts-expect-error Kimi Code's fixed effort values come from the capability registry.
+defineTask({ id: "invalid-kimi-effort", prompt: "p", output: PatchReport, worker: { worker: "kimi-code", effort: "ultra" } });
 
 const Exploration = Schema.Struct({
   assumption: Schema.String,

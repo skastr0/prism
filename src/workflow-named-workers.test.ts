@@ -165,6 +165,37 @@ describe("named workflow worker catalogs", () => {
     })).toThrow(/Supported: low, medium, high, xhigh, max/);
   });
 
+  test("Kimi named workers accept fixed effort values and narrow them from config", async () => {
+    const home = await tempRoot();
+    await writeFile(join(home, "config.toml"), `
+[models."kimi-code/kimi-for-coding"]
+support_efforts = ["low", "high", "max"]
+`);
+    const valid = decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("reviewer", {
+        worker: "kimi-code",
+        model: "kimi-code/kimi-for-coding",
+        effort: "high",
+      })],
+    }, { kimiCodeHome: home });
+    expect(valid.workers[0]?.config).toEqual({
+      worker: "kimi-code",
+      model: "kimi-code/kimi-for-coding",
+      effort: "high",
+    });
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("reviewer", {
+        worker: "kimi-code",
+        model: "kimi-code/kimi-for-coding",
+        effort: "medium",
+      })],
+    }, { kimiCodeHome: home })).toThrow(
+      'Kimi Code model "kimi-code/kimi-for-coding" does not list effort "medium". Supported for this model: low, high, max. Fix: set worker.effort to "low".',
+    );
+  });
+
   test("rejects invalid permission, session persistence, blank name, and missing worker", () => {
     const cases: Array<readonly [string, unknown]> = [
       ["amp restricted", worker("reviewer", { worker: "amp-code", permission: "restricted" })],

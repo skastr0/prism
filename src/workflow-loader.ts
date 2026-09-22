@@ -37,6 +37,7 @@ import {
   type WorkflowValidationSummary,
 } from "./workflows.js";
 import { validateWorkflowEffort } from "./workflow-effort.js";
+import { validateKimiWorkflowEffort } from "./workflow-kimi-effort.js";
 import {
   assertWorkflowWorkerPermission,
   resolveWorkflowTaskPermission,
@@ -161,7 +162,10 @@ const resolveTaskModelRow = (
       catalogModel: pins.catalogModel,
       snapshot,
     });
-    const finalEffortError = effortError;
+    const kimiEffortError = worker === "kimi-code"
+      ? validateKimiWorkflowEffort({ model: resolution?.model, effort })
+      : undefined;
+    const finalEffortError = effortError ?? kimiEffortError;
     if (finalEffortError !== undefined) {
       return { id: task.id, worker, ...pinFields, ...(effort !== undefined ? { effort } : {}), error: finalEffortError };
     }

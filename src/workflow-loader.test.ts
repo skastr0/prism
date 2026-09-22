@@ -603,6 +603,37 @@ export default defineWorkflow({
     ]);
   });
 
+  test("validate rejects Kimi effort outside the selected model support_efforts row", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const previousKimiHome = process.env.KIMI_CODE_HOME;
+    process.env.KIMI_CODE_HOME = root;
+    try {
+      await writeFile(join(root, "config.toml"), `
+[models."kimi-code/kimi-for-coding"]
+support_efforts = ["low", "high", "max"]
+`);
+      await writeFile(file, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+export default defineWorkflow({ name: "kimi-effort", tasks: [defineTask({
+  id: "kimi",
+  prompt: "Review.",
+  output: Schema.Struct({ summary: Schema.String }),
+  worker: { worker: "kimi-code", model: "kimi-code/kimi-for-coding", effort: "medium" },
+})] });
+`);
+
+      await expect(validateWorkflowFile(file, { skipTypecheck: true, cwd: root })).rejects.toThrow(
+        'Kimi Code model "kimi-code/kimi-for-coding" does not list effort "medium". Supported for this model: low, high, max. Fix: set worker.effort to "low".',
+      );
+    } finally {
+      if (previousKimiHome === undefined) delete process.env.KIMI_CODE_HOME;
+      else process.env.KIMI_CODE_HOME = previousKimiHome;
+    }
+  });
+
   test("validate fails closed when claude-code is pinned to sandbox-read-only", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

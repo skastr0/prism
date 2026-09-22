@@ -1,25 +1,23 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
+import { validateWorkflowEffort } from "./workflow-effort.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines } from "./workflow-session.js";
+import { kimiCodeHome, validateKimiWorkflowEffort } from "./workflow-kimi-effort.js";
 
 export type KimiWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly effort?: string;
   readonly kimiHome?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"kimi-code">;
-
-const defaultKimiCodeHome = (): string =>
-  process.env.KIMI_CODE_HOME ?? join(homedir(), ".kimi-code");
 
 export class KimiWorkflowWorkerError extends Error {
   override readonly name = "KimiWorkflowWorkerError";
@@ -141,7 +139,11 @@ export const runKimiWorkflowTask = async (
   const prompt = options.repair !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const kimiHome = options.kimiHome ?? defaultKimiCodeHome();
+  const kimiHome = kimiCodeHome(options.kimiHome);
+  const fixedEffortError = validateWorkflowEffort({ worker: "kimi-code", effort: options.effort });
+  if (fixedEffortError !== undefined) throw new KimiWorkflowWorkerError(fixedEffortError);
+  const effortError = validateKimiWorkflowEffort({ model: options.model, effort: options.effort, kimiHome });
+  if (effortError !== undefined) throw new KimiWorkflowWorkerError(effortError);
 
   const args = buildKimiArgs({
     model: options.model,
@@ -156,7 +158,10 @@ export const runKimiWorkflowTask = async (
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
-    env: { KIMI_CODE_HOME: kimiHome },
+    env: {
+      KIMI_CODE_HOME: kimiHome,
+      ...(options.effort !== undefined ? { KIMI_MODEL_THINKING_EFFORT: options.effort } : {}),
+    },
     earlyExitPatterns: KIMI_AUTH_PROMPT_PATTERNS,
   });
   if (aborted) {

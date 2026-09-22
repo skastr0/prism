@@ -18,6 +18,10 @@ line. `0.4.0` was committed but never tagged or published.
   sets for Amp, Codex CLI, and Grok; modelspace effort resolution, validation,
   task identity, adapter flags, and `validate --table` output. Codex/OMP
   modelspace `variant` values now fail with an exact `effort` migration fix.
+- **Kimi Code workflow effort** — fixed `low|medium|high|xhigh|max` values map
+  to the undocumented `KIMI_MODEL_THINKING_EFFORT` variable in the spawned
+  process environment; validation narrows the set when the selected model's
+  `support_efforts` is declared in `<KIMI_CODE_HOME>/config.toml`.
 
 ### Changed
 

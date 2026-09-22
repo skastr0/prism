@@ -6,6 +6,7 @@ import { workflowWorkerHarnessIds } from "./lowerer-capabilities.js";
 import type { HarnessTypesSnapshot } from "./harness-types.js";
 import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 import { legacyReasoningVariantError, validateWorkflowEffort, workflowEffortValues } from "./workflow-effort.js";
+import { validateKimiWorkflowEffort } from "./workflow-kimi-effort.js";
 import { assertWorkflowWorkerPermission } from "./workflow-workers.js";
 import { resolveAmpCatalogPinPlan } from "./workflow-amp-worker.js";
 import type { WorkflowTaskWorkerOptions, WorkflowWorkerId } from "./workflows.js";
@@ -130,7 +131,7 @@ export const workflowWorkersModulePath = (prismHome: string): string =>
 
 export const decodeWorkflowWorkerCatalog = (
   input: unknown,
-  options: { readonly effortSnapshot?: HarnessTypesSnapshot } = {},
+  options: { readonly effortSnapshot?: HarnessTypesSnapshot; readonly kimiCodeHome?: string } = {},
 ): WorkflowWorkerCatalog => {
   let catalog: WorkflowWorkerCatalog;
   try {
@@ -176,6 +177,10 @@ export const decodeWorkflowWorkerCatalog = (
       snapshot: options.effortSnapshot,
     });
     if (effortError !== undefined) throw new Error(effortError);
+    if (config.worker === "kimi-code") {
+      const kimiEffortError = validateKimiWorkflowEffort({ model, effort, kimiHome: options.kimiCodeHome });
+      if (kimiEffortError !== undefined) throw new Error(kimiEffortError);
+    }
     if (config.worker === "amp-code") {
       resolveAmpCatalogPinPlan({
         mode: typeof config.model === "string" ? config.model : undefined,

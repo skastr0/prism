@@ -321,6 +321,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "kimi-code",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "fixed", control: "env KIMI_MODEL_THINKING_EFFORT", values: ["low", "medium", "high", "xhigh", "max"] },
     compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {

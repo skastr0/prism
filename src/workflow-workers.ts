@@ -181,6 +181,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runKimiWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "kimi-code", fallbackModel: options.model }),
+      effort: resolveWorkflowTaskEffort(task, { worker: "kimi-code", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,

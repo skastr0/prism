@@ -103,4 +103,49 @@ describe("runKimiWorkflowTask failure metadata (OBS-006)", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test("sets effort only in the spawned Kimi process environment", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-kimi-effort-env-"));
+    const receipt = join(root, "child-env.json");
+    const previousEffort = process.env.KIMI_MODEL_THINKING_EFFORT;
+    const previousReceipt = process.env.PRISM_KIMI_TEST_RECEIPT;
+    process.env.KIMI_MODEL_THINKING_EFFORT = "parent-value";
+    process.env.PRISM_KIMI_TEST_RECEIPT = receipt;
+    try {
+      const fakeKimi = join(root, "fake-kimi-env.mjs");
+      await writeFile(fakeKimi, [
+        "#!/usr/bin/env node",
+        "const fs = await import('node:fs/promises');",
+        "await fs.writeFile(process.env.PRISM_KIMI_TEST_RECEIPT, JSON.stringify({ effort: process.env.KIMI_MODEL_THINKING_EFFORT, home: process.env.KIMI_CODE_HOME, argv: process.argv.slice(2) }));",
+        "console.log(JSON.stringify({ role: 'assistant', content: JSON.stringify({ summary: 'ok' }) }));",
+        "",
+      ].join("\n"));
+      await chmod(fakeKimi, 0o755);
+
+      await runKimiWorkflowTask(task, {
+        cwd: root,
+        bin: fakeKimi,
+        model: "kimi-code/test-model",
+        effort: "high",
+        kimiHome: root,
+        resolvedPermission: "legacy",
+      });
+
+      const child = JSON.parse(await Bun.file(receipt).text()) as {
+        readonly effort: string;
+        readonly home: string;
+        readonly argv: readonly string[];
+      };
+      expect(child).toMatchObject({ effort: "high", home: root });
+      expect(child.argv).not.toContain("--effort");
+      expect(child.argv).not.toContain("--reasoning-effort");
+      expect(process.env.KIMI_MODEL_THINKING_EFFORT).toBe("parent-value");
+    } finally {
+      if (previousEffort === undefined) delete process.env.KIMI_MODEL_THINKING_EFFORT;
+      else process.env.KIMI_MODEL_THINKING_EFFORT = previousEffort;
+      if (previousReceipt === undefined) delete process.env.PRISM_KIMI_TEST_RECEIPT;
+      else process.env.PRISM_KIMI_TEST_RECEIPT = previousReceipt;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

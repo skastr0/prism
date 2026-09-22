@@ -4,7 +4,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Kimi Code, Amp Code, Grok Build, Factory Droid, Pi, and Oh My Pi, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Kimi Code, Amp Code, Grok Build, Pi, and Oh My Pi, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
@@ -20,7 +20,6 @@ A unified plugin distribution system for AI coding harnesses.
 |---------|-------|----------|--------|--------|
 | Claude Code | `~/.claude/CLAUDE.md` | generated skills-dir plugin `commands/` | generated skills-dir plugin `agents/` | `~/.claude/skills/` + generated skills-dir plugins |
 | OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/commands/` | `~/.config/opencode/agents/` | `~/.config/opencode/skills/` |
-| OpenClaw | - | - | - | `~/.openclaw/skills/` |
 | Hermes Agent | - | - | - | `~/.hermes/skills/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
 | Antigravity CLI | generated plugin `rules/` | - | generated plugin `agents/` | generated plugin `skills/` |
@@ -29,11 +28,8 @@ A unified plugin distribution system for AI coding harnesses.
 | Amp Orb | — | — | — | explicit `--root` hosted skills checkout |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | generated local plugin `agents/` | `~/.cursor/skills/` |
-| Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
 | Pi | generated package extension context | generated package `prompts/` | pi-agents markdown discovery | generated package `skills/` |
 | Oh My Pi | native extension context | `~/.omp/agent/commands/` | native agent discovery | `~/.omp/agent/skills/` |
-
-OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
 Hermes first-party support is skills plus CLI tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into Prism's CLI tool runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`); agents invoke them with `prism tools invoke <plugin> <tool-name> --input '<json>'`. Hermes profile-local skill installs use the normal `hermes` target against a profile home such as `~/.hermes/profiles/coder` with `--root` / `--compile-root` (tools stay under shared `PRISM_HOME`). Prism does not lower Hermes rules, commands, custom agents, SOUL/personality files, runtime delegation, or native Python plugins.
 
@@ -42,8 +38,6 @@ Claude Code is part of the `coding-harness` preset with compile-phase skills-dir
 Antigravity CLI is part of the `coding-harness` preset with compile-phase plugin-bundle support. Prism emits one generated plugin under `<antigravity-root>/plugins/prism-generated-<source-plugin>/` using Antigravity's native root `plugin.json`, `hooks.json`, `rules/`, `agents/`, and `skills/` layout. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject. Managed skills and concrete sop skills lower as plugin skills; official Antigravity CLI skills surface as slash commands, so Prism does not write direct command files and direct `targets.commands: ["antigravity-cli"]` fails manifest validation.
 
 Grok Build is part of the `coding-harness` preset. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, sop skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml`; preset expansion is artifact-aware, so `targets.commands: ["coding-harness"]` skips Grok while direct `targets.commands: ["grok"]` remains invalid.
-
-Factory Droid is part of the `coding-harness` preset with full compile-phase plugin-bundle support. Install-phase rules append/copy into `.factory` roots and install-phase commands still write `commands/`. Skills-only plugins still install shared skills directly into `.factory/skills/`; when a plugin also targets Factory compile surfaces, targeted skills are bundled into `<factory-root>/plugins/prism-generated-<source-plugin>/skills/` instead to avoid double-loading Prism-owned skill files. Compile-phase agents, sop skills, and hooks lower into the same generated bundle using Factory's native plugin layout: `.factory-plugin/plugin.json`, root `droids/`, `skills/`, and `hooks/hooks.json`. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`. Prism does not patch `~/.factory/settings.json` for generated plugin bundles.
 
 Kimi Code is part of the `coding-harness` preset with compile-phase generated plugin support. The active Kimi Code target uses the current `~/.kimi-code` home exclusively. Prism emits one generated user-scoped plugin under `<kimi-root>/plugins/managed/prism-generated-<source-plugin>/` with `kimi.plugin.json`, plugin skills, session-start context, and hook wrappers, then registers it in `<kimi-root>/plugins/installed.json` so Kimi loads it as an enabled plugin. Canonical tools lower to the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject. Prism patches `<kimi-root>/config.toml -> [[hooks]]` for Kimi hooks because official Kimi plugins ignore hook fields. The current Moonshot-hosted Kimi Code CLI docs also support project-local `.kimi-code/skills/`, but Prism keeps generated Kimi plugin output global/user-scoped for now because Kimi plugin installs are user-scoped. Compiled agents lower honestly as role/workflow skills, not native agent files, because Kimi has no headless agent/sub-agent file surface. The Prism workflow worker drives Kimi with `--prompt --output-format stream-json` and loads the generated plugin's `skills/` directory via `--skills-dir`; Kimi's prompt mode does not accept `--yolo` or `--auto`, so headless tool-use automation is limited to single-prompt responses.
 
@@ -334,7 +328,7 @@ export default {
 
 During compile, prism resolves canonical tool refs, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, and materializes ordinary resolved tool modules for lowering.
 
-Generated canonical tool execution is target-capability-gated. OpenCode, Amp Code, Pi, and Oh My Pi expose executable tools through native `registerTool` (or equivalent) plugin/extension APIs. Claude Code, Antigravity CLI, Kimi Code, Grok, Factory Droid, Hermes, Codex CLI, and Cursor expose tools through the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`), invoked as `prism tools invoke <plugin> <tool-name> --input '<json>'`; harnesses that inject tools advertise that surface to agents.
+Generated canonical tool execution is target-capability-gated. OpenCode, Amp Code, Pi, and Oh My Pi expose executable tools through native `registerTool` (or equivalent) plugin/extension APIs. Claude Code, Antigravity CLI, Kimi Code, Grok, Hermes, Codex CLI, and Cursor expose tools through the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/` (`catalog.json` + `runtime.mjs`), invoked as `prism tools invoke <plugin> <tool-name> --input '<json>'`; harnesses that inject tools advertise that surface to agents.
 
 ### Canonical tools vs harness-native plugins
 
@@ -409,11 +403,11 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "sops": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
-    "hooks": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"]
+    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "pi", "omp", "kimi-code", "cursor"],
+    "sops": ["opencode", "claude-code", "antigravity-cli", "grok", "pi", "omp", "kimi-code", "cursor"],
+    "tools": ["opencode", "antigravity-cli", "grok", "pi", "omp", "kimi-code", "cursor"],
+    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "pi", "omp", "kimi-code", "cursor"],
+    "hooks": ["opencode", "claude-code", "antigravity-cli", "grok", "pi", "omp", "kimi-code", "cursor"]
   }
 }
 ```
@@ -422,7 +416,7 @@ Notes:
 
 - compile-phase targets are `agents`, `sops`, `tools`, `modelspaces`, `skillspaces`, and `hooks`
 - `sops`, `tools`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target harnesses with executable generated-tool support (native `registerTool` and/or CLI runtime + skill inject): OpenCode, Amp, Pi, OMP, Claude Code, Antigravity CLI, Kimi Code, Grok, Factory Droid, Hermes, Codex CLI, Cursor
+- agents that bind canonical tools should target harnesses with executable generated-tool support (native `registerTool` and/or CLI runtime + skill inject): OpenCode, Amp, Pi, OMP, Claude Code, Antigravity CLI, Kimi Code, Grok, Hermes, Codex CLI, Cursor
 
 ### CLI
 
@@ -441,9 +435,6 @@ prism refresh ./my-plugin --harness antigravity-cli
 
 # Refresh Grok agents, skills, hooks, and canonical tools into a generated Grok plugin bundle
 prism refresh ./my-plugin --harness grok
-
-# Refresh Factory Droid agents, skills, hooks, and canonical tools into a generated Factory plugin bundle
-prism refresh ./my-plugin --harness factory-droid
 
 # Refresh Pi agents, prompt templates, hooks, and canonical tools into generated Pi surfaces
 prism refresh ./my-plugin --harness pi
@@ -506,16 +497,6 @@ prism plan ./my-plugin --harness claude-code
 - Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/` with skill inject
 - Emits `hooks/hooks.json` and bundled hook wrappers using Grok hook event names and Grok deny output for blocking `tool.before` hooks
 - Does not install commands or patch `config.toml` in PR1
-
-#### Factory Droid
-
-- Writes one generated plugin bundle per compiled source plugin under `<factory-root>/plugins/prism-generated-<source-plugin>/`
-- Writes `.factory-plugin/plugin.json` plus compiled droids into the generated plugin's `droids/<name>.md` with Factory frontmatter overrides from `targets.factory-droid`; known Factory tool categories are expanded to concrete tool arrays in droid frontmatter
-- Writes targeted managed skills and concrete sop skills into the generated plugin's `skills/<name>/SKILL.md`
-- Emits canonical `tools/*.tool.ts` to the shared CLI runtime at `<PRISM_HOME>/runtime/tools/<source-plugin>/`
-- Emits `hooks/hooks.json` and bundled hook wrappers using Factory hook event names and `${DROID_PLUGIN_ROOT}` wrapper commands
-- Bundles targeted skills and direct `skillRef(...)` dependencies, but fails closed for permission-only skill visibility because Factory's documented droid frontmatter does not expose per-droid skill allowlists
-- Does not install compile-owned commands or patch `settings.json`; install-phase rules and commands retain direct `.factory/` behavior, while skills-only plugins still install to `.factory/skills/` and compiled Factory bundles carry targeted skills inside the generated plugin to avoid double-loading Prism-owned skill files
 
 #### Kimi Code
 
@@ -610,14 +591,14 @@ my-plugin/
 │   └── *.md
 ├── agents/             # Shared custom agent definitions
 │   └── *.md
-├── skills/             # Shared skills (including OpenClaw and Hermes shared skill files)
+├── skills/             # Shared skills (including Hermes shared skill files)
 │   └── <skill-name>/
 │       ├── SKILL.md    # Skill definition
 │       └── *.md        # Supporting files
 ├── skillspaces/        # Compile-time skill name disambiguation tables
 │   └── *.skillspace.ts
 └── harness/            # Optional harness-specific overlays
-    └── <id>/           # e.g. opencode, openclaw
+    └── <id>/           # e.g. opencode, hermes
         ├── commands/
         │   └── *.md    # Replaces matching shared command files for that harness
         └── skills/
@@ -636,8 +617,8 @@ Install targeting lives in `plugin.json` and nowhere else.
   "description": "Shared standards plus harness-specific overlays",
   "targets": {
     "rules": ["coding-harness"],
-    "commands": ["claude-code", "opencode", "codex-cli", "cursor", "factory-droid"],
-    "agents": ["claude-code", "opencode", "factory-droid"],
+    "commands": ["claude-code", "opencode", "codex-cli", "cursor"],
+    "agents": ["claude-code", "opencode"],
     "skills": ["coding-harness", "claw-harness"],
     "skillspaces": ["opencode", "claude-code", "grok"]
   }
@@ -646,10 +627,10 @@ Install targeting lives in `plugin.json` and nowhere else.
 
 ### Preset groups
 
-- `coding-harness` → `claude-code`, `opencode2`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `omp`, `grok`, `devin` (`opencode` stays targetable for OpenCode 1.x until V1/V2 consolidate)
-- `claw-harness` → `openclaw`, `hermes`
+- `coding-harness` → `claude-code`, `opencode2`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `pi`, `omp`, `grok`, `devin` (`opencode` stays targetable for OpenCode 1.x until V1/V2 consolidate)
+- `claw-harness` → `hermes`
 
-Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Claude Code, Cursor, Amp Code, Kimi Code, Pi, and OMP remain command targets, but Prism lowers those commands through each harness's generated plugin, package, API, or native command surface instead of treating every target as a direct markdown-copy destination. Factory Droid remains included for install-phase commands because Droid exposes `.factory/commands/` files.
+Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Claude Code, Cursor, Amp Code, Kimi Code, Pi, and OMP remain command targets, but Prism lowers those commands through each harness's generated plugin, package, API, or native command surface instead of treating every target as a direct markdown-copy destination.
 
 ### Rules to remember
 
@@ -664,18 +645,12 @@ Use `harness/<id>/...` when one harness needs a different version of a shared ar
 
 ```text
 harness/
-├── opencode/
-│   └── commands/
-│       └── review.md
-└── openclaw/
-    └── skills/
-        └── debugging/
-            └── SKILL.md
+└── opencode/
+    └── commands/
+        └── review.md
 ```
 
 Overlay paths mirror the shared artifact paths. If both a shared file and a harness overlay exist at the same relative path, the harness overlay wins for that harness. Non-overridden files still come from the shared directories.
-
-For OpenClaw, both the shared skill tree and any matching `harness/openclaw/skills/...` replacements are materialized into the same `~/.openclaw/skills/` destination.
 
 For Hermes, both the shared skill tree and any matching `harness/hermes/skills/...` replacements are materialized into the same `~/.hermes/skills/` destination. Compile-phase tools materialize as the shared CLI runtime under `<PRISM_HOME>/runtime/tools/<source-plugin>/`.
 
@@ -883,7 +858,7 @@ prism refresh ./test-plugin --all
 
 Skills extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents from general-purpose into specialized assistants with procedural knowledge.
 
-**Supported by:** Claude Code (native), OpenCode (native), Oh My Pi (native), OpenClaw (skills root with shared files plus matching `harness/openclaw` overlays), Hermes (skills root with shared files plus matching `harness/hermes` overlays)
+**Supported by:** Claude Code (native), OpenCode (native), Oh My Pi (native), Hermes (skills root with shared files plus matching `harness/hermes` overlays)
 
 ### Skill Structure
 

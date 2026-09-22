@@ -13,9 +13,9 @@ Expand TS-007 acceptance matrix to cover all harnesses and prove create/idempote
 1. Extend `scripts/acceptance/lib/matrix.ts` with fixture helpers for remaining harnesses.
 2. Add per-harness overlay slices in `examples/prism-harness-qa/harness/` for direct-file and config-patch harnesses.
 3. Add gates in `scripts/acceptance/` for:
-   - direct-file family: codex-cli, factory-droid, openclaw, hermes (skills-only), cursor (rules+skills)
+   - direct-file family: codex-cli, hermes (skills-only), cursor (rules+skills)
    - config-patch family: opencode, codex-cli, kimi-code, grok, amp, pi
-   - plugin-bundle family: claude-code, antigravity-cli, grok, factory-droid, kimi-code, pi
+   - plugin-bundle family: claude-code, antigravity-cli, grok, kimi-code, pi
    - generated-MCP family: cursor, hermes
 4. Each gate asserts: first run creates, second run converges, plugin removal prunes all owned artifacts.
 5. Register gates in `scripts/acceptance/run-all.ts` with expected PASS/FAIL.

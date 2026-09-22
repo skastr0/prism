@@ -66,18 +66,16 @@ Fidelity legend: what a hook author gets per portable event on that target.
 | **kimi-code** | config-only `[[hooks]]`, beta, fail-open | ✔ | ✔ | ✖ | ✖ | ✔ | ✔ | block-only exit-2 |
 | **amp-code** | plugin API `amp.on`, experimental, 5 events | ✔ | ✔ | ✖ | ✖ | ✔ | **✖** no native event | block-only return-value; context stripped by validation |
 | **grok** | hooks.json, 14 events, only PreToolUse blocks, fail-open | ✔ | ✔ | ✖ | ✖ | ✔ | ✔ | block-only (JSON deny) — near native ceiling |
-| **factory-droid** | hooks.json plugin, 9 events, JSON stdout protocol | ✔ | ✔ | ✖ | ✖ | ✔ | ✔ | block-only exit-2 |
 | **pi** | extension API `pi.on`, 30 events | ✔ | ✔ | ✖ | ✖ | ✔ | ◐ →shutdown | block-only read; full result serialized but **unread** by extension |
 | **cursor** | native hooks (IDE ~21 events; CLI subset ~4), perm allow/deny/ask, CC-compat output mode | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | no lowerer (tools-only) |
-| **openclaw** | plugin `api.on`, ~32 hook points, Decision{block,params,requireApproval} | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | no lowerer |
 | **hermes** | shell hooks in config.yaml: any-language JSON wire, CLI+gateway, CC-style block accepted natively | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ | no lowerer (managed config.yaml region already exists) |
 
 Repo receipts: claude-code `src/compile/lowerers/claude-code.ts:220,287-289` +
 `shared.ts:163-183`; opencode `opencode.ts:878-886,906-993`; codex
 `codex-cli.ts:246-334`; antigravity `antigravity-cli.ts:215-253`; kimi
 `kimi-code.ts:475-518`; amp `amp-code.ts:213-288,317-375`; grok
-`grok.ts:229,303-318`; factory `factory-droid.ts:221,262-278`; pi
-`pi.ts:292-307,424-492`; capability declarations `src/lowerer-capabilities.ts`.
+`grok.ts:229,303-318`; pi `pi.ts:292-307,424-492`; capability declarations
+`src/lowerer-capabilities.ts`.
 
 ### Headline finding
 
@@ -144,14 +142,6 @@ Project-level hooks require `/hooks-trust`; plugin hooks dir supported. Has
 degraded observe. `PermissionDenied` is post-hoc observe, not a decision point
 → `permission.request` stays fail-closed.
 
-**factory-droid** — 9 events including `UserPromptSubmit`, `Stop`,
-`SubagentStop`, `PreCompact`, `Notification`, `SessionStart/End`. JSON stdout
-protocol documented natively (`continue`/`stopReason`/`permissionDecision`/
-`additionalContext`) — the current exit-2-only lowering under-uses the target.
-Receipt-checker refuted PostToolUse modify-output; stop-control unverified.
-`${DROID_PLUGIN_ROOT}` expansion, marketplace distribution, `hooksDisabled`
-global toggle all confirmed.
-
 **pi** — richest extension surface after Claude Code: 30 events incl.
 `tool_call` (block + arg mutation), `tool_result` (output mutation), `input`
 (block + transform user input → real `prompt.submit` mapping),
@@ -172,17 +162,6 @@ would make a lowerer cheap. Two caveats: the CLI supports only a ~4-event
 subset (IDE has ~21) — the exact CLI set needs a probe; enforcement is partly
 prompt-level rather than loop-level (per researcher, unrefuted). Currently
 `hooks: unsupported` in Prism (tools-only target).
-
-**openclaw** — no native hooks config, but a confirmed plugin API:
-`api.on(hookName, handler)` with Decision object
-`{block, blockReason, params (input rewrite), requireApproval, message}`,
-~32 hook points incl. `before_tool_call`, `after_tool_call`,
-`tool_result_persist`, `message_received`/`message_sending`, session +
-gateway lifecycle, compaction. In-process, priority-ordered, per-hook
-timeouts. Distribution: `openclaw.plugin.json` + `openclaw plugins install`.
-Mapping is natural for 5/6 portable events; `prompt.submit` maps to
-message-flow hooks whose semantics differ (messaging assistant, not a
-prompt REPL) — probe + degradation note.
 
 **hermes** — *(re-grounded 2026-07-08 against the local install's own docs —
 `~/.hermes/hermes-agent/website/docs/user-guide/features/hooks.md` — which
@@ -283,7 +262,6 @@ where declared, fail-closed only where required.**
 | target | change | cost |
 |---|---|---|
 | pi | read the already-serialized result in the extension (systemMessage/additionalContext); `prompt.submit`→`input` (block+modify); `tool.after` output mutation via `tool_result` | low — the data is already on the wire |
-| factory-droid | `prompt.submit`→`UserPromptSubmit`; switch to native JSON stdout protocol (permissionDecision, additionalContext); T2 `stop`/`subagent.stop`/`compact.before`/`notification` | low |
 | codex-cli | T2 `subagent.*`/`compact.*`; surface the **shell-only PreToolUse** caveat as a compile-time degradation note | low |
 | opencode | modify-input/-output via `tool.execute.*`; T2 via event bus; subagent blind-spot degradation note | low-med |
 | grok | `prompt.submit`→`UserPromptSubmit` (degraded observe-only); T2 observe events; document fail-open | low |
@@ -293,12 +271,10 @@ where declared, fail-closed only where required.**
 
 ### WS4 — new lowerers
 
-1. **cursor** — highest value of the three (real userbase, permission `ask`,
+1. **cursor** — high value (real userbase, permission `ask`,
    `updated_input`, CC-compat output mode). Scope to the CLI event subset;
    probe determines the exact set.
-2. **openclaw** — plugin lowerer via `api.on` + Decision object; 5/6 T1 events
-   map naturally; `prompt.submit` needs a semantics decision (message hooks).
-3. **hermes** — shell-hook lowerer via the existing managed config.yaml
+2. **hermes** — shell-hook lowerer via the existing managed config.yaml
    region + allowlist seeding: 5/6 T1 (permission.request fail-closed,
    prompt.submit inject-only) + subagent.stop. Cheaper than first assessed —
    the consent and non-TTY concerns dissolved on local-primary-source
@@ -322,10 +298,9 @@ amp's current plugin API shape, codex plugin-bundled hooks.
 
 ### Order
 
-WS1 → WS2 (baseline principle: fix Claude Code first) → WS3 pi + factory-droid
-(cheapest fidelity wins) → WS5 (visibility before breadth) → WS4 cursor →
-openclaw → probes-then-upgrades for kimi/amp → hermes. WS6 fixtures land
-incrementally with each lowerer they gate.
+WS1 → WS2 (fix Claude Code first) → WS3 pi → WS5 (visibility before breadth)
+→ WS4 cursor and hermes. WS6 fixtures land incrementally with each lowerer
+they gate.
 
 ## 6. Open questions
 
@@ -334,7 +309,7 @@ incrementally with each lowerer they gate.
    (Recommended: yes — 23 of 30 CC events have <4 harness equivalents.)
 2. **Default degradation policy** — flip from fail-closed to
    degrade-with-report? (Recommended: degrade, with `'fail'` opt-in per hook.)
-3. **Scope of WS4** — cursor/openclaw/hermes lowerers this cycle, or capability
+3. **Scope of WS4** — cursor and hermes lowerers this cycle, or capability
    table entries only?
 
 ---

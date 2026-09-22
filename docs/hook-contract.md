@@ -110,7 +110,7 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
 T1 rows (every T2 row in S0 is `unsupported`, with `note: "pending S<n>"` for
 harnesses in the program sequence — claude S1, codex S2, hermes S3, grok S4,
 opencode S5, antigravity S6, kimi S7, amp S8; plain `unsupported` for
-factory-droid, pi, cursor, openclaw):
+pi, cursor):
 
 | harness | tool.before | tool.after | prompt.submit | permission.request | session.start | session.end |
 |---|---|---|---|---|---|---|
@@ -121,10 +121,8 @@ factory-droid, pi, cursor, openclaw):
 | kimi-code | native PreToolUse [block] | native PostToolUse [] | unsupported "pending S7 probe" | unsupported | native SessionStart [] | native SessionEnd [] |
 | amp-code | native tool.call [block] | native tool.result [] | unsupported | unsupported | native session.start [] | unsupported "Amp has no session-end plugin event" |
 | grok | native PreToolUse [block] | native PostToolUse [] | unsupported "pending S4" | unsupported "grok PermissionDenied is post-hoc observe-only" | native SessionStart [] | native SessionEnd [] |
-| factory-droid | native PreToolUse [block] | native PostToolUse [] | unsupported | unsupported | native SessionStart [] | native SessionEnd [] |
 | pi | native tool_call [block] | native tool_result [] | unsupported | unsupported | native session_start [] | degraded session_shutdown [] note:"shutdown conflates quit and session switch" |
 | cursor | unsupported (×6) — no hook lowerer yet | | | | | |
-| openclaw | unsupported (×6) — no hook lowerer yet | | | | | |
 | hermes | unsupported "pending S3" (×6) | | | | | |
 
 ## 5. Degradation policy + fidelity report

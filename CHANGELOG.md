@@ -11,6 +11,10 @@ line. `0.4.0` was committed but never tagged or published.
 
 ## Unreleased
 
+### Removed
+
+- Factory Droid and OpenClaw harness targets, lowerers, catalogs, fixtures, and documentation.
+
 ## 0.7.1 - 2026-09-22
 
 ### Added

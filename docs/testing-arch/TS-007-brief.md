@@ -10,7 +10,7 @@
 ## Core Design Questions
 
 1. **What does "all harnesses" mean?** Twelve registry IDs exist, but surface kinds differ sharply (direct-file, config-patch, plugin-bundle, generated-MCP, skills-only). A uniform assertion set will over-claim for some harnesses and under-test others.
-2. **How do we sandbox install-phase global roots?** `--compile-root` isolates compile output, but install-phase `refresh` still resolves `~/.claude`, `~/.codex`, etc. via `expandPath(harness.globalConfigPath)`. Global-only harnesses (openclaw, hermes, kimi-code) cannot be tested safely without a test-only root override.
+2. **How do we sandbox install-phase global roots?** `--compile-root` isolates compile output, but install-phase `refresh` still resolves `~/.claude`, `~/.codex`, etc. via `expandPath(harness.globalConfigPath)`. Global-only harnesses (hermes, kimi-code) cannot be tested safely without a test-only root override.
 3. **Which plan object is the source of truth for AC3?** `refresh --dry-run`, `prism plan`, and doctor's compile self-check emit related but not identical envelopes. The matrix needs one canonical plan/report shape (likely `SyncPlan` / refresh JSON) and should compare that, not just file trees.
 4. **What is cleanup?** It is not deleting a plugin directory; it is refreshing after removing a plugin from the corpus and asserting that Prism-owned files, shared-file regions, and `PRISM_HOME/runtime/mcp/<plugin>/` are pruned.
 

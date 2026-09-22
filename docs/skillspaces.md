@@ -14,7 +14,6 @@ Local global skill roots inspected:
 - Claude Code: `/Users/guilhermecastro/.claude/skills` — 131 skills
 - Codex: `/Users/guilhermecastro/.codex/skills` — 77 skills
 - Grok Build: not included in this snapshot
-- Factory Droid: not included in this snapshot
 
 Most skill names are identical across the inspected harnesses. The first skillspace records those common names with identical `opencode`, `claude-code`, and `codex-cli` target names, plus a small number of harness-specific entries:
 
@@ -22,7 +21,7 @@ Most skill names are identical across the inspected harnesses. The first skillsp
 - Claude-only examples: `agent-browser` and several specialized design/domain-analysis skills not present in the current OpenCode and Codex roots
 - Codex-only examples: `prism-usage`, `codex-primary-runtime`
 
-The compiler currently lowers agents for OpenCode, Claude Code, Codex CLI, Antigravity CLI, Amp Code, Grok Build, and Factory Droid, with target-specific capability gates. Grok and Factory skillspace bindings are allowed when the skill names are known for the target environment; do not infer them from the older OpenCode/Claude/Codex snapshot without checking the target skill root.
+The compiler currently lowers agents for OpenCode, Claude Code, Codex CLI, Antigravity CLI, Amp Code, and Grok Build, with target-specific capability gates. Grok skillspace bindings are allowed when the skill names are known for the target environment; do not infer them from the older OpenCode/Claude/Codex snapshot without checking the target skill root.
 
 ## Authoring Pattern
 
@@ -41,4 +40,4 @@ export default {
 } satisfies TraitSource;
 ```
 
-The target lowerer decides what this means. OpenCode emits `permission.skill` with `*` denied and the resolved skill names allowed. Claude Code and Grok emit resolved skill names into generated agent frontmatter. Factory Droid bundles targeted skills in generated plugins and direct `skillRef(...)` dependencies still render in the generated droid body, but Factory does not currently expose a documented per-droid skill permission frontmatter field, so permission-only skill visibility fails closed for that target.
+The target lowerer decides what this means. OpenCode emits `permission.skill` with `*` denied and the resolved skill names allowed. Claude Code and Grok emit resolved skill names into generated agent frontmatter.

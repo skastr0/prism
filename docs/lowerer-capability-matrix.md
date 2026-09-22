@@ -64,7 +64,6 @@ The `mcpConfig` surface is `unsupported` on every harness.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | CLI runtime + skill inject | plugin hooks | none for generated bundle | `live-proven` |
 | OpenCode | `native-plugin-api` | root markdown | root skills | native plugin tools | native plugin hooks | `opencode.json` agent/plugin entries | `live-proven` |
-| OpenClaw | unsupported | unsupported | direct skills | unsupported | unsupported | none | `unsupported` |
 | Hermes Agent | unsupported | unsupported | root/profile skills | CLI runtime | config hooks | none for tools | `live-proven` |
 | Codex CLI | unsupported | root TOML files | root skills | CLI runtime + skill inject | `config.toml` hooks | none for tools | `live-proven` |
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` (live dispatch verified, smoke fixture pending) |
@@ -72,13 +71,11 @@ The `mcpConfig` surface is `unsupported` on every harness.
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
 | Amp Orb | unsupported | unsupported | flat text skills in an explicit checkout | unsupported | unsupported | none | `unsupported` (install-only; no compile lowerer) |
 | Cursor | `native-plugin-bundle` for commands, agents, hooks | plugin subagents | direct skills + plugin sop skills | CLI runtime | plugin command hooks | none for tools | `compile-verified` (workflow worker live-dispatchable) |
-| Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | CLI runtime | plugin hooks | none for generated bundle | `compile-verified` |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |
 | Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none | `live-proven` (live dispatch verified, smoke fixture pending) |
 | Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` |
 | Devin CLI | unsupported (plugins beta deferred) | unsupported (subagent AGENT.md later) | direct skills | unsupported (PR1) | project `hooks.v1.json` / global `config.json#hooks` members | none (never whole-file `config.json`) | `live-proven` |
 
-Factory Droid remains closed at `compile-verified` with no workflow worker.
 Cursor now has a prompt-injected Agent CLI workflow worker (`agent --print
 --output-format stream-json`). Compile emits plugin subagents, sop skills,
 and Claude-shaped plugin command hooks into `plugins/local/prism-generated-*`.
@@ -163,18 +160,6 @@ Canonical tools call OMP's native `registerTool` API; supported hooks run throug
 the same extension and generated wrappers. No Pi package/settings surface is
 shared between the two targets.
 
-Factory Droid compile output follows the documented plugin layout: only
-`.factory-plugin/plugin.json` lives under `.factory-plugin/`, while generated
-droids, skills, and hooks live at the plugin root. Factory rules and
-commands remain install-phase direct-file artifacts, because Droid's native
-plugin command surface is still a slash-command file surface rather than a
-compile-owned canonical command model. When a generated Factory bundle contains
-agents, tools, or hooks, Prism bundles targeted managed skills into that plugin
-to avoid double-loading the same Prism-owned skill from `.factory/skills/`.
-Permission-only skill visibility still fails closed because the official Droid
-frontmatter documents `tools` but not a per-droid skill allowlist. Canonical
-tools are CLI-invoked under the shared `PRISM_HOME` runtime.
-
 Hermes profile-local tools use the existing root override rather than a new
 target. Hermes profiles are separate Hermes homes, so
 `prism refresh --plugin ./plugin --harness hermes --compile-only --compile-root ~/.hermes/profiles/<name>`
@@ -201,12 +186,9 @@ workflow worker still prompt-injects identity, resumes with `--resume`, and maps
 - Claude Code plugins and reference: https://code.claude.com/docs/en/plugins and https://code.claude.com/docs/en/plugins-reference
 - Antigravity plugins, migration, and hooks: https://antigravity.google/docs/cli-plugins, https://antigravity.google/docs/gcli-migration, and https://www.antigravity.google/docs/hooks
 - Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks. Current Kimi Code CLI details live in the Moonshot-hosted docs rather than the older `www.kimi.com/code/docs/...` pages.
-- Factory Droid plugins, custom droids, skills, hooks, and MCP: https://docs.factory.ai/cli/configuration/plugins, https://docs.factory.ai/cli/configuration/custom-droids, https://docs.factory.ai/cli/configuration/skills, https://docs.factory.ai/reference/hooks-reference, and https://docs.factory.ai/cli/configuration/mcp
 - Amp plugins and plugin API: https://ampcode.com/manual and https://ampcode.com/manual/plugin-api
 - Pi agents, extensions, SDK, skills, prompts, packages, and settings: https://pi.dev/packages/pi-agents, https://pi.dev/docs/latest/extensions, https://pi.dev/docs/latest/sdk, https://pi.dev/docs/latest/skills, https://pi.dev/docs/latest/prompt-templates, https://pi.dev/docs/latest/packages, and https://pi.dev/docs/latest/settings
 - Hermes profiles, profile commands, MCP, and plugin surfaces: https://hermes-agent.nousresearch.com/docs/user-guide/profiles/, https://hermes-agent.nousresearch.com/docs/reference/profile-commands/, https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference/, and https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins
-- OpenClaw skills: https://docs.openclaw.ai/tools/skills
-- Factory plugin/settings hierarchy: https://docs.factory.ai/guides/building/building-plugins and https://docs.factory.ai/enterprise/hierarchical-settings-and-org-control
 - Grok Build skills/plugins: https://docs.x.ai/build/features/skills-plugins-marketplaces
 - Cursor rules, skills, commands, plugins, and MCP: https://cursor.com/docs/rules, https://cursor.com/docs/skills, https://cursor.com/docs/cli/reference/slash-commands, https://cursor.com/docs/reference/plugins, and https://cursor.com/docs/mcp
 - Codex public docs describe skills and plugins as reusable workflow/package surfaces, while Prism's Codex CLI config contract remains tracked from the local Codex configuration surface and current repo tests: https://developers.openai.com/codex/skills and https://developers.openai.com/codex/plugins

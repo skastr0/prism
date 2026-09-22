@@ -112,11 +112,9 @@ Explore interactively with `prism plugins <dir>` (plugin manager TUI) and valida
 | Amp Orb | `amp-orb` | explicit `--root` skills checkout | — |
 | Antigravity CLI | `antigravity-cli` | `~/.gemini/antigravity-cli/` | `.agents/` |
 | Cursor | `cursor` | `~/.cursor/` | `.cursor/` |
-| Factory Droid | `factory-droid` | `~/.factory/` | `.factory/` |
 | Pi | `pi` | `~/.pi/agent/` | `.pi/` |
 | Oh My Pi | `omp` | `~/.omp/agent/` | `.omp/` |
 | Hermes | `hermes` | `~/.hermes/` | — |
-| OpenClaw | `openclaw` | `~/.openclaw/` | — |
 | Devin CLI | `devin` | `~/.config/devin/` | `.devin/` |
 
 Each harness has a dedicated lowerer that knows its native surface — plugin bundle, TS plugin API, markdown file, or config patch — and golden-fixture tests pin the generated output. The full support matrix, including which targets are proven live versus compile-verified, lives in [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
@@ -420,7 +418,7 @@ The smoke script installs packed tarballs into a clean temporary project, compil
 
 Experimental, and honest about it: the package format, generated outputs, and harness adapters may change.
 
-- Ten harness targets are **live-proven** (real workers dispatched end-to-end); Cursor, Factory Droid, and Pi are **compile-verified** — generated output is pinned by golden tests, live dispatch intentionally deferred; OpenClaw currently receives direct skill files only. See [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)
+- Ten harness targets are **live-proven** (real workers dispatched end-to-end); Cursor and Pi are **compile-verified** — generated output is pinned by golden tests, live dispatch intentionally deferred. See [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)
 - The workflow engine runs an Effect-based DAG with a durable SQLite ledger; it does not claim `@effect/workflow`-style durable execution
 - Workflow production hardening is tracked in the open: [`docs/workflow-production-readiness-audit-2026-07-21.md`](docs/workflow-production-readiness-audit-2026-07-21.md)
 

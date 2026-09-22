@@ -305,13 +305,11 @@ Add `grok` to `HarnessId`:
 export type HarnessId =
   | "claude-code"
   | "opencode"
-  | "openclaw"
   | "hermes"
   | "codex-cli"
   | "antigravity-cli"
   | "amp-code"
   | "cursor"
-  | "factory-droid"
   | "grok";
 ```
 

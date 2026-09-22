@@ -49,6 +49,17 @@ test("amp-orb accepts UTF-8 skill text and rejects a NUL byte", async () => {
       files: [{ relativePath: "release-notes/SKILL.md", sourcePath: source }],
     }),
   ).rejects.toThrow(/not text/);
+
+  await writeFile(source, Buffer.concat([
+    Buffer.from("---\nname: release-notes\ndescription: bad\n---\n"),
+    Buffer.from([0xe9, 0xe8, 0xfc]),
+  ]));
+  await expect(
+    assertAmpOrbSkillPlan({
+      root,
+      files: [{ relativePath: "release-notes/SKILL.md", sourcePath: source }],
+    }),
+  ).rejects.toThrow(/not valid UTF-8/);
 });
 
 test("amp-orb refuses a root that is not a git checkout", async () => {
@@ -106,7 +117,7 @@ test("amp-orb rejects a non-text SKILL.md and any file that is not SKILL.md", as
       root,
       files: [{ relativePath: "release-notes/SKILL.md", sourcePath: binary }],
     }),
-  ).rejects.toThrow(/not text/);
+  ).rejects.toThrow(/not valid UTF-8|not text/);
 
   const skillMd = await writeSkill(root, "release-notes");
   const extra = join(root, "release-notes", "references", "checklist.md");

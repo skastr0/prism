@@ -9,7 +9,7 @@
  */
 
 import { basename, join, relative, resolve, sep } from "node:path";
-import { exists, listDirRecursive, readFile } from "./fs.js";
+import { exists, listDirRecursive } from "./fs.js";
 
 export const AMP_ORB_SKILL_LIMITS = {
   maxSkills: 200,
@@ -43,12 +43,23 @@ const skillDirectoryName = (relativePath: string): string | undefined => {
   return skillDir;
 };
 
-const assertText = (relativePath: string, content: string): void => {
-  if (DISALLOWED_CONTROL.test(content)) {
+const assertText = async (relativePath: string, sourcePath: string): Promise<string> => {
+  const fs = await import("node:fs/promises");
+  const bytes = await fs.readFile(sourcePath);
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new AmpOrbSkillError(
+      `amp-orb skill file '${relativePath}' is not valid UTF-8 text. Hosted Amp skill files must be text.`,
+    );
+  }
+  if (DISALLOWED_CONTROL.test(content) || content.includes("\u007F") || content.includes("\uFFFD")) {
     throw new AmpOrbSkillError(
       `amp-orb skill file '${relativePath}' is not text. Hosted Amp skill files must be text.`,
     );
   }
+  return content;
 };
 
 const assertWithin = (root: string, targetPath: string): void => {
@@ -123,9 +134,10 @@ export const assertAmpOrbSkillPlan = async (options: {
     }
 
     let skillBytes = 0;
+    let skillMdText = "";
     for (const file of files) {
-      const content = await readFile(file.sourcePath);
-      assertText(file.relativePath, content);
+      const content = await assertText(file.relativePath, file.sourcePath);
+      if (file.relativePath === `${skillDir}/SKILL.md`) skillMdText = content;
       const bytes = Buffer.byteLength(content, "utf8");
       if (bytes > AMP_ORB_SKILL_LIMITS.maxFileBytes) {
         throw new AmpOrbSkillError(
@@ -141,8 +153,7 @@ export const assertAmpOrbSkillPlan = async (options: {
     }
     repoBytes += skillBytes;
 
-    const raw = await readFile(skillMd.sourcePath);
-    const frontmatterName = readSkillFrontmatterName(raw);
+    const frontmatterName = readSkillFrontmatterName(skillMdText);
     if (frontmatterName !== skillDir) {
       throw new AmpOrbSkillError(
         `amp-orb skill directory '${skillDir}' must match SKILL.md name '${frontmatterName ?? "(missing)"}'.`,

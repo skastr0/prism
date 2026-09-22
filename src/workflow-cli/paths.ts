@@ -8,6 +8,3 @@ export const prismWorkflowAuthoringSkillPath = (prismHome: string): string =>
 
 export const prismWorkflowModelsSkillPath = (prismHome: string): string =>
   join(prismWorkflowAuthoringDir(prismHome), "models", "SKILL.md");
-
-export const prismWorkflowModelPreferencesPath = (prismHome: string): string =>
-  join(prismHome, "state", "workflow-model-preferences.json");

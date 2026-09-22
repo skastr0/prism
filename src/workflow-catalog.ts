@@ -522,7 +522,7 @@ const scaffoldWorkflowHeader = (name: string): string => `/**
  * Discover harness models: prism workflow models --offer
  * Refresh slugs:           prism workflow refresh-harness-types
  * Authoring skill:         prism workflow skill
- * Model quiz skill:        prism workflow skill --models
+ * Raw model discovery:     prism workflow skill --models
  */`;
 
 export interface ScaffoldSourcePin {
@@ -599,4 +599,69 @@ const Result = Schema.Struct({
 });
 `;
   return `${header}\n${renderScaffoldRun(name, pins)}`;
+};
+
+const scaffoldNamedWorkerHeader = (name: string): string => `/**
+ * ${name} — scaffolded by \`prism workflow scaffold\`.
+ * Lives at ~/.prism/workflows/${name}.workflow.ts by convention — never inside
+ * (or git-added to) the project repo it drives; tasks reference their target
+ * repo by absolute path, so the file's own location doesn't matter to it.
+ * Edit the tasks, then:
+ *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
+ *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts
+ *
+ * Installed named workers: prism workflow workers
+ * Authoring skill:         prism workflow skill
+ */
+
+import { Effect, Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+import { workers } from "prism/refs/workers";
+
+const Result = Schema.Struct({
+  worker: Schema.String,
+  summary: Schema.String,
+});`;
+
+/**
+ * A starter workflow bound to installed named workers.
+ *
+ * The worker's name survives in the source as a `workers.*` ref — the task
+ * never inlines the harness, model, or effort behind it, and the description
+ * that guided the choice is not copied into the prompt. The cache key derives
+ * from the task id, never the curated name: a named worker is a configuration,
+ * not a cache namespace, so renaming an alias must not invalidate unchanged
+ * semantics (the content hash already separates effective settings).
+ */
+export const scaffoldNamedWorkerSource = (
+  name: string,
+  refs: readonly [string] | readonly [string, string],
+): string => {
+  const ids = refs.map((_, index) => (index === 0 ? "a" : "b"));
+  const tasks = refs.map((ref, index) => {
+    const id = ids[index]!;
+    return `      const ${id} = defineTask({
+        id: ${JSON.stringify(id)},
+        prompt: ${JSON.stringify('Return a one-line summary in "summary".')},
+        output: Result,
+        cacheKey: ${JSON.stringify(`${name}-${id}-v1`)},
+        worker: ${ref},
+      });`;
+  }).join("\n");
+  const run = refs.length === 1
+    ? `      const result = yield* wf.runTask(a);
+      return { results: [result] };`
+    : `      const results = yield* Effect.all([wf.runTask(a), wf.runTask(b)], { concurrency: "unbounded" });
+      return { results };`;
+  return `${scaffoldNamedWorkerHeader(name)}
+
+export const workflow = defineWorkflow({
+  name: ${JSON.stringify(name)},
+  run: (wf) =>
+    Effect.gen(function* () {
+${tasks}
+${run}
+    }),
+});
+`;
 };

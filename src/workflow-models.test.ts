@@ -11,7 +11,6 @@ import {
   modelFamilyId,
   parseWorkflowWorkerId,
   pickPluginFreeScaffoldPins,
-  pickScaffoldModel,
   projectWorkerModelCatalog,
   sampleWorkerModels,
   renderWorkerModelCatalogHuman,
@@ -126,7 +125,7 @@ describe("renderWorkerModelCatalogHuman", () => {
 });
 
 describe("pickPluginFreeScaffoldPins", () => {
-  test("omits invented slugs unless the user stated a preference", () => {
+  test("omits invented slugs and orders discoverable workers first", () => {
     const pins = pickPluginFreeScaffoldPins(snapshot);
     expect(pins).toEqual([
       { worker: "cursor" },
@@ -134,41 +133,8 @@ describe("pickPluginFreeScaffoldPins", () => {
     ]);
   });
 
-  test("uses stated preferences when present", () => {
-    const pins = pickPluginFreeScaffoldPins(snapshot, [
-      { worker: "cursor", model: "composer-2.5-fast" },
-      { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
-    ]);
-    expect(pins).toEqual([
-      { worker: "cursor", model: "composer-2.5-fast" },
-      { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
-    ]);
-  });
-
   test("falls back to claude-code when no snapshot", () => {
     expect(pickPluginFreeScaffoldPins(undefined)).toEqual([{ worker: "claude-code" }]);
-  });
-
-  test("pickScaffoldModel prefers -fast then -low", () => {
-    const catalogs = projectWorkerModelCatalog(snapshot);
-    expect(pickScaffoldModel(catalogs, "cursor")).toBe("composer-2.5-fast");
-  });
-
-  test("pickScaffoldModel prefers OMP flash selectors", () => {
-    const catalogs = projectWorkerModelCatalog({
-      generatedAt: "2026-09-09T00:00:00.000Z",
-      harnesses: [{
-        harness: "omp",
-        source: "command",
-        models: [
-          { id: "opencode-go/gpt-5.6-luna" },
-          { id: "opencode-go/glm-5.3-flash" },
-          { id: "ollama-cloud/glm-5.3-flash" },
-          { id: "opencode-go/glm-5.3-pro" },
-        ],
-      }],
-    });
-    expect(pickScaffoldModel(catalogs, "omp")).toBe("ollama-cloud/glm-5.3-flash");
   });
 });
 

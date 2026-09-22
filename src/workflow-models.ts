@@ -203,57 +203,11 @@ export const renderWorkerModelCatalogHuman = (
   return lines.join("\n");
 };
 
-export interface ScaffoldWorkerPin {
-  readonly worker: WorkflowWorkerId;
-  readonly model?: string;
-  readonly catalogModel?: string;
-  readonly effort?: string;
-}
-
 export interface WorkerModelSample {
   readonly slug: string;
   readonly pin: "model" | "catalogModel";
   readonly kind?: "dial" | "plugin-mode" | "model";
 }
-
-const SCAFFOLD_WORKER_PREFERENCE: readonly WorkflowWorkerId[] = [
-  "cursor",
-  "amp-code",
-  "claude-code",
-  "codex-cli",
-  "opencode2",
-];
-
-export const pickScaffoldModel = (
-  catalogs: readonly WorkerModelCatalog[],
-  worker: WorkflowWorkerId,
-): string | undefined => {
-  const entry = catalogs.find((catalog) => catalog.worker === worker);
-  const slugs = entry?.families.flatMap((family) => [...family.slugs]) ?? [];
-  if (slugs.length === 0) return undefined;
-  if (worker === "amp-code") {
-    return slugs.includes("low") ? "low" : slugs.find((slug) => !slug.includes("/")) ?? slugs[0];
-  }
-  if (worker === "cursor") {
-    return slugs.find((slug) => slug.startsWith("composer-") && slug.endsWith("-fast"))
-      ?? slugs.find((slug) => slug.endsWith("-low") && !slug.includes("thinking"))
-      ?? slugs.find((slug) => slug.endsWith("-fast") && !slug.includes("thinking"))
-      ?? slugs[0];
-  }
-  if (worker === "omp") {
-    const notConsoleGo = (slug: string) => !slug.startsWith("opencode-go/");
-    return slugs.find((slug) => notConsoleGo(slug) && slug.includes("flash") && !slug.includes("pro"))
-      ?? slugs.find((slug) => slug.includes("flash") && !slug.includes("pro"))
-      ?? slugs.find((slug) => notConsoleGo(slug) && slug.endsWith("-fast"))
-      ?? slugs.find((slug) => slug.endsWith("-fast"))
-      ?? slugs.find(notConsoleGo)
-      ?? slugs[0];
-  }
-  return slugs.find((slug) => slug.endsWith("-fast") && !slug.includes("thinking"))
-    ?? slugs.find((slug) => slug.endsWith("-fast"))
-    ?? slugs.find((slug) => slug.endsWith("-low"))
-    ?? slugs[0];
-};
 
 const ampSampleKind = (
   family: HarnessModelFamily,
@@ -308,30 +262,37 @@ export const sampleWorkerModels = (
 
 export const pickPluginFreeScaffoldPins = (
   snapshot: HarnessTypesSnapshot | undefined,
-  preferred: readonly ScaffoldWorkerPin[] = [],
 ): readonly [ScaffoldWorkerPin] | readonly [ScaffoldWorkerPin, ScaffoldWorkerPin] => {
   const catalogs = projectWorkerModelCatalog(snapshot);
   const withModels = new Set(
     catalogs.filter((entry) => entry.modelCount > 0).map((entry) => entry.worker),
   );
-  const preferredWorkers = preferred.map((pin) => pin.worker);
   const ordered = [
-    ...preferredWorkers,
-    ...SCAFFOLD_WORKER_PREFERENCE.filter((worker) => withModels.has(worker) && !preferredWorkers.includes(worker)),
+    ...SCAFFOLD_WORKER_PREFERENCE.filter((worker) => withModels.has(worker)),
     ...catalogs
       .map((entry) => entry.worker)
-      .filter((worker) => withModels.has(worker) && !SCAFFOLD_WORKER_PREFERENCE.includes(worker) && !preferredWorkers.includes(worker)),
+      .filter((worker) => withModels.has(worker) && !SCAFFOLD_WORKER_PREFERENCE.includes(worker)),
   ];
   const unique = [...new Set(ordered)];
-  const toPin = (worker: WorkflowWorkerId): ScaffoldWorkerPin => {
-    const hit = preferred.find((pin) => pin.worker === worker);
-    if (hit !== undefined) return hit;
-    return { worker };
-  };
-  if (unique.length >= 2) return [toPin(unique[0]!), toPin(unique[1]!)];
-  if (unique.length === 1) return [toPin(unique[0]!)];
+  if (unique.length >= 2) return [{ worker: unique[0]! }, { worker: unique[1]! }];
+  if (unique.length === 1) return [{ worker: unique[0]! }];
   return [{ worker: "claude-code" }];
 };
+
+export interface ScaffoldWorkerPin {
+  readonly worker: WorkflowWorkerId;
+  readonly model?: string;
+  readonly catalogModel?: string;
+  readonly effort?: string;
+}
+
+const SCAFFOLD_WORKER_PREFERENCE: readonly WorkflowWorkerId[] = [
+  "cursor",
+  "amp-code",
+  "claude-code",
+  "codex-cli",
+  "opencode2",
+];
 
 export const enrichHarnessModelTypeError = (
   message: string,

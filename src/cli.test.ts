@@ -218,11 +218,12 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   const skill = await runCli(["workflow", "skill"], env, { cwd: root });
   expect(skill.exitCode).toBe(0);
   expect(skill.stdout).toContain("Plugins are optional");
-  expect(skill.stdout).toContain("prism workflow models");
+  expect(skill.stdout).toContain("prism workflow workers");
   expect(skill.stdout).toContain("wf.phase");
   expect(skill.stdout).toContain("prism/refs/sops");
   expect(skill.stdout).not.toContain("agent:");
-  expect(skill.stdout).toContain("prism workflow models --offer");
+  expect(skill.stdout).toContain("prism workflow skill --models");
+  expect(skill.stdout).toContain("Installed named workers (current machine truth)");
 
   const skillWrite = await runCli(["workflow", "skill", "--write"], env, { cwd: root });
   expect(skillWrite.exitCode).toBe(0);
@@ -238,16 +239,11 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   expect(offer.exitCode).toBe(0);
   const offerJson = JSON.parse(offer.stdout) as {
     snapshotPresent: boolean;
-    workers: ReadonlyArray<{ worker: string; sample: string[]; preference?: { model?: string } }>;
+    workers: ReadonlyArray<{ worker: string; sample: string[] }>;
   };
   expect(offerJson.snapshotPresent).toBe(true);
   expect(offerJson.workers.length).toBeGreaterThan(0);
   expect(offerJson.workers.some((entry) => entry.sample.length > 0 || entry.worker.length > 0)).toBe(true);
-
-  const prefer = await runCli(["workflow", "models", "prefer", "claude-code", "--model", "sonnet", "--json"], env, { cwd: root });
-  expect(prefer.exitCode).toBe(0);
-  const preferJson = JSON.parse(prefer.stdout) as { preferences: { workers: ReadonlyArray<{ worker: string; model?: string }> } };
-  expect(preferJson.preferences.workers).toEqual([{ worker: "claude-code", model: "sonnet" }]);
 
   const scaffold = await runCli(["workflow", "scaffold", "plugin-free"], env, { cwd: root });
   expect(scaffold.exitCode).toBe(0);
@@ -342,27 +338,112 @@ test("workflow skill rejects --harness/--all/--dry-run without --install", async
   expect(result.stderr + result.stdout).toContain("require --install");
 });
 
-test("workflow models prefer amp catalog pins survive scaffold --print", async () => {
+test("named workers: install, list, export, and scaffold bind the generated ref", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
   const env = { PRISM_HOME: prismHome };
 
-  const prefer = await runCli([
-    "workflow", "models", "prefer", "amp-code",
-    "--catalog-model", "anthropic/claude-haiku-4-5-20251001",
-    "--effort", "none",
-  ], env, { cwd: root });
-  expect(prefer.exitCode).toBe(0);
+  const catalog = {
+    version: 1,
+    workers: [
+      {
+        name: "reviewer",
+        description: "Careful code review; low risk tolerance.",
+        config: { worker: "claude-code" },
+      },
+      {
+        name: "bulk",
+        description: "Cheap bulk iteration; verify with typecheck.",
+        config: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
+      },
+    ],
+  };
+  const sourcePath = join(root, "workers.json");
+  await writeFile(sourcePath, JSON.stringify(catalog, null, 2));
 
-  const none = await runCli(["workflow", "scaffold", "unpinned", "--print"], env, { cwd: root });
-  expect(none.exitCode).toBe(0);
-  expect(none.stdout).toContain('worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }');
+  const install = await runCli(["workflow", "workers", "install", sourcePath], env, { cwd: root });
+  expect(install.exitCode).toBe(0);
+  expect(install.stdout).toContain("Installed 2 named workers");
+  expect(install.stdout).toContain("replaced any previously installed catalog");
 
-  const unpinnedHome = join(root, "unpinned-home");
-  const unpinned = await runCli(["workflow", "scaffold", "plain", "--print"], { PRISM_HOME: unpinnedHome }, { cwd: root });
-  expect(unpinned.exitCode).toBe(0);
-  expect(unpinned.stdout).toContain('worker: { worker: "claude-code" }');
-  expect(unpinned.stdout).not.toContain("catalogModel");
+  const list = await runCli(["workflow", "workers", "--json"], env, { cwd: root });
+  expect(list.exitCode).toBe(0);
+  const listJson = JSON.parse(list.stdout) as {
+    catalogPath: string;
+    modulePath: string;
+    workers: ReadonlyArray<{ name: string; ref: string; description: string }>;
+  };
+  expect(listJson.workers.map((worker) => worker.ref)).toEqual(["workers.reviewer", "workers.bulk"]);
+  expect(await pathExists(listJson.modulePath)).toBe(true);
+
+  const exported = await runCli(["workflow", "workers", "export"], env, { cwd: root });
+  expect(exported.exitCode).toBe(0);
+  expect(JSON.parse(exported.stdout)).toEqual(catalog);
+
+  // Explicit choice binds the named worker; the raw pin never appears in source.
+  const pinned = await runCli(["workflow", "scaffold", "review-flow", "--worker", "bulk", "--print"], env, { cwd: root });
+  expect(pinned.exitCode).toBe(0);
+  expect(pinned.stdout).toContain("worker: workers.bulk");
+  expect(pinned.stdout).not.toContain("catalogModel");
+  expect(pinned.stdout).not.toContain('"amp-code"');
+
+  // No --worker chooses the first curated entry; the name still survives as a ref.
+  const first = await runCli(["workflow", "scaffold", "first-flow", "--print"], env, { cwd: root });
+  expect(first.exitCode).toBe(0);
+  expect(first.stdout).toContain("worker: workers.reviewer");
+
+  // Unknown names fail with the installed list instead of silently scaffolding raw.
+  const unknown = await runCli(["workflow", "scaffold", "nope", "--worker", "ghost", "--print"], env, { cwd: root });
+  expect(unknown.exitCode).not.toBe(0);
+  expect(unknown.stderr + unknown.stdout).toContain("No installed named worker \"ghost\"");
+
+  // No catalog anywhere: raw scaffolding keeps its defaults, --worker is rejected.
+  const rawHome = { PRISM_HOME: join(root, "raw-home") };
+  const raw = await runCli(["workflow", "scaffold", "raw-flow", "--print"], rawHome, { cwd: root });
+  expect(raw.exitCode).toBe(0);
+  expect(raw.stdout).toContain('worker: { worker: "claude-code" }');
+  const rawWorker = await runCli(["workflow", "scaffold", "raw-worker", "--worker", "bulk", "--print"], rawHome, { cwd: root });
+  expect(rawWorker.exitCode).not.toBe(0);
+  expect(rawWorker.stderr + rawWorker.stdout).toContain("no catalog is installed");
+
+  // Duplicate names across install files fail closed and install nothing.
+  const duplicate = join(root, "duplicate.json");
+  await writeFile(duplicate, JSON.stringify({
+    version: 1,
+    workers: [{ name: "reviewer", description: "Duplicate.", config: { worker: "grok" } }],
+  }));
+  const dup = await runCli(["workflow", "workers", "install", sourcePath, duplicate], env, { cwd: root });
+  expect(dup.exitCode).not.toBe(0);
+  expect(dup.stderr + dup.stdout).toContain("Duplicate named worker");
+}, 30_000);
+
+test("workflow skill --json exposes the installed named workers", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const env = { PRISM_HOME: prismHome };
+
+  const sourcePath = join(root, "workers.json");
+  await writeFile(sourcePath, JSON.stringify({
+    version: 1,
+    workers: [{ name: "reviewer", description: "Careful review.", config: { worker: "claude-code" } }],
+  }));
+  const install = await runCli(["workflow", "workers", "install", sourcePath], env, { cwd: root });
+  expect(install.exitCode).toBe(0);
+
+  const skill = await runCli(["workflow", "skill", "--json"], env, { cwd: root });
+  expect(skill.exitCode).toBe(0);
+  const skillJson = JSON.parse(skill.stdout) as {
+    markdown: string;
+    workers: ReadonlyArray<{ name: string; ref: string; description: string; config: unknown }>;
+  };
+  expect(skillJson.workers.map((worker) => worker.ref)).toEqual(["workers.reviewer"]);
+  expect(skillJson.markdown).toContain("workers.reviewer");
+  expect(skillJson.markdown).toContain("Careful review.");
+
+  const printed = await runCli(["workflow", "skill"], env, { cwd: root });
+  expect(printed.exitCode).toBe(0);
+  expect(printed.stdout).toContain("Installed named workers (current machine truth)");
+  expect(printed.stdout).toContain("workers.reviewer");
 }, 30_000);
 
 test("workflow typecheck accepts a workflow against shipped Prism declarations", async () => {

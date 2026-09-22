@@ -91,6 +91,7 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
+  scaffoldNamedWorkerSource,
   scaffoldWorkflowSource,
   searchCatalog,
   WORKFLOW_WORKERS,
@@ -104,18 +105,20 @@ import {
   renderWorkerModelCatalogHuman,
   renderWorkerModelCountsHuman,
 } from "./workflow-models.js";
-import { renderWorkflowAuthoringSkillMarkdown, writeWorkflowAuthoringSkill } from "./workflow-cli/skill.js";
+import { renderWorkflowSkillMarkdown, writeWorkflowAuthoringSkill, type WorkflowSkillContext } from "./workflow-cli/skill.js";
 import { renderWorkflowModelsSkillMarkdown, writeWorkflowModelsSkill } from "./workflow-cli/models-skill.js";
 import { installWorkflowSkills, renderWorkflowSkillInstallHuman } from "./workflow-cli/skill-install.js";
 import {
-  clearWorkflowModelPreference,
-  loadWorkflowModelPreferences,
-  preferenceScaffoldPins,
-  upsertWorkflowModelPreference,
-  writeWorkflowModelPreferences,
-} from "./workflow-cli/model-preferences.js";
+  exportWorkflowWorkers,
+  installWorkflowWorkersFromFiles,
+  listWorkflowWorkers,
+  projectNamedWorkerRefs,
+} from "./workflow-cli/workers-cli.js";
 import { buildWorkflowModelOffer, renderWorkflowModelOfferHuman } from "./workflow-cli/model-offer.js";
-import { prismWorkflowModelPreferencesPath } from "./workflow-cli/paths.js";
+import {
+  loadWorkflowWorkerCatalog,
+  namedWorkerRef,
+} from "./workflow-named-workers.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
 import { runConfigureTui } from "./configure/index.js";
@@ -524,7 +527,7 @@ workflow
   .description("Print the embedded workflow-authoring skill (plugin-free)")
   .option("--write", "Write the skill (SKILL.md + references) under PRISM_HOME/runtime/workflow-authoring/")
   .option("--install", "Install the embedded workflow skills into detected harness skill directories")
-  .option("--models", "Print the model-preference quiz skill")
+  .option("--models", "Print the raw model-pin discovery skill")
   .option("--harness <ids>", "Comma-separated harness ids for --install")
   .option("--all", "Install into every supported harness (with --install)")
   .option("--dry-run", "Preview --install without writing")
@@ -563,7 +566,28 @@ workflow
         await writeStdout(`${renderWorkflowModelsSkillMarkdown()}\n`);
         return;
       }
-      await writeStdout(`${renderWorkflowAuthoringSkillMarkdown()}\n`);
+      // The printed skill embeds current truth: the machine's installed named
+      // workers and this project's compiled SOP refs. Installed (static) skill
+      // copies instruct the agent to run exactly this command for fresh data.
+      const workersCatalog = await Effect.runPromise(loadWorkflowWorkerCatalog(prismHome));
+      const surface = await buildWorkflowCatalog({ prismHome });
+      const context: WorkflowSkillContext = {
+        workers: workersCatalog,
+        project: surface.catalog === null
+          ? { surfaceDir: surface.surfaceDir, present: false, namespaces: [] }
+          : { surfaceDir: surface.surfaceDir, present: true, namespaces: projectCompactIndex(surface.catalog, surface.surfaceDir).namespaces },
+      };
+      const markdown = renderWorkflowSkillMarkdown(context);
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify({
+          name: "prism-workflow",
+          markdown,
+          workers: projectNamedWorkerRefs(workersCatalog),
+          projectRefs: context.project,
+        }, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`${markdown}\n`);
     } catch (error) {
       printCliError(error, "Workflow skill failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
@@ -572,7 +596,7 @@ workflow
 
 const workflowModels = workflow
   .command("models")
-  .description("List live harness model slugs (plugin-free). Family-grouped; filter with --worker and --query. --offer quizzes with samples + prefs");
+  .description("List live harness model slugs for raw worker pins (plugin-free). Family-grouped; filter with --worker and --query. --offer samples every worker");
 
 workflowModels
   .command("list", { isDefault: true })
@@ -580,7 +604,7 @@ workflowModels
   .option("--json", "Emit machine-readable JSON")
   .option("--worker <id>", "One workflow worker (cursor, amp-code, ...)")
   .option("--query <text>", "Case-insensitive substring over family ids and slugs")
-  .option("--offer", "Workers, slug counts, five-slug samples, and stated preferences")
+  .option("--offer", "Workers, slug counts, and five-slug samples for raw pin discovery")
   .action(async (options: {
     readonly json?: boolean;
     readonly worker?: string;
@@ -591,11 +615,8 @@ workflowModels
       const worker = options.worker === undefined ? undefined : parseWorkflowWorkerId(options.worker);
       const result = buildWorkflowModelCatalog({ worker, query: options.query });
       if (options.offer === true) {
-        const prismHome = resolvePrismHome();
         const offer = buildWorkflowModelOffer({
           catalogs: result.catalogs,
-          preferences: loadWorkflowModelPreferences(prismHome),
-          preferencesPath: prismWorkflowModelPreferencesPath(prismHome),
           snapshotPresent: result.snapshotPresent,
         });
         if (options.json === true) {
@@ -620,66 +641,6 @@ workflowModels
       })}\n`);
     } catch (error) {
       printCliError(error, "Workflow models failed");
-      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    }
-  });
-
-workflowModels
-  .command("prefer [worker]")
-  .description("Save or clear a stated workflow model preference for one worker")
-  .option("--model <slug>", "Harness-bound worker.model slug (Amp: --mode dial or plugin key)")
-  .option("--catalog-model <slug>", "Amp catalog slug for worker.catalogModel")
-  .option("--effort <value>", "Amp reasoning effort")
-  .option("--notes <text>", "Free-form preference notes")
-  .option("--clear", "Remove the stated preference for the worker")
-  .option("--json", "Emit machine-readable JSON")
-  .action(async (workerArg: string | undefined, options: {
-    readonly model?: string;
-    readonly catalogModel?: string;
-    readonly effort?: string;
-    readonly notes?: string;
-    readonly clear?: boolean;
-    readonly json?: boolean;
-  }) => {
-    try {
-      const prismHome = resolvePrismHome();
-      let preferences = loadWorkflowModelPreferences(prismHome);
-      if (options.notes !== undefined) {
-        const notes = options.notes.trim();
-        preferences = notes.length > 0
-          ? { ...preferences, notes }
-          : { version: preferences.version, ...(preferences.updatedAt !== undefined ? { updatedAt: preferences.updatedAt } : {}), workers: preferences.workers };
-      }
-      if (workerArg !== undefined) {
-        const worker = parseWorkflowWorkerId(workerArg);
-        if (options.clear === true) {
-          preferences = clearWorkflowModelPreference(preferences, worker);
-        } else {
-          const model = options.model?.trim();
-          const catalogModel = options.catalogModel?.trim();
-          const effort = options.effort?.trim();
-          if ((model === undefined || model.length === 0) && (catalogModel === undefined || catalogModel.length === 0) && (effort === undefined || effort.length === 0)) {
-            throw new CliUsageError("prefer needs --model, --catalog-model, and/or --effort, or --clear");
-          }
-          preferences = upsertWorkflowModelPreference(preferences, {
-            worker,
-            ...(model !== undefined && model.length > 0 ? { model } : {}),
-            ...(catalogModel !== undefined && catalogModel.length > 0 ? { catalogModel } : {}),
-            ...(effort !== undefined && effort.length > 0 ? { effort } : {}),
-          });
-        }
-      } else if (options.clear === true || options.model !== undefined || options.catalogModel !== undefined || options.effort !== undefined) {
-        throw new CliUsageError("prefer <worker> is required unless you are only setting --notes");
-      }
-      const written = writeWorkflowModelPreferences(prismHome, preferences);
-      const saved = loadWorkflowModelPreferences(prismHome);
-      if (options.json === true) {
-        await writeStdout(`${JSON.stringify({ path: written.path, preferences: saved }, null, 2)}\n`);
-        return;
-      }
-      await writeStdout(`Wrote ${written.path}\n`);
-    } catch (error) {
-      printCliError(error, "Workflow models prefer failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
@@ -729,21 +690,48 @@ workflow
 
 workflow
   .command("scaffold <name>")
-  .description("Write a validating starter workflow (harness workers with a prompt and typed IO)")
+  .description("Write a validating starter workflow (installed named worker when the catalog has one, raw harness worker otherwise)")
   .option("--print", "Print to stdout instead of writing a file")
+  .option("--worker <name>", "Bind the task to an installed named worker by catalog name")
   .option(
     "--out <path>",
     "Output path (default: ~/.prism/workflows/<name>.workflow.ts — never the project repo; workflows reference their target repo by absolute path and are never git-added)",
   )
-  .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
+  .action(async (name: string, options: { readonly print?: boolean; readonly worker?: string; readonly out?: string }) => {
     try {
       const prismHome = resolvePrismHome();
-      const pins = pickPluginFreeScaffoldPins(
-        loadHarnessTypesSnapshot(prismHome),
-        preferenceScaffoldPins(loadWorkflowModelPreferences(prismHome)),
-      );
-      const source = scaffoldWorkflowSource(name, pins);
-      const workers = pins.map((pin) => pin.worker);
+      const catalog = await Effect.runPromise(loadWorkflowWorkerCatalog(prismHome));
+      let source: string;
+      let workersUsed: string[];
+      if (catalog.workers.length > 0) {
+        const chosen = options.worker === undefined
+          ? catalog.workers[0]!
+          : catalog.workers.find((entry) => entry.name === options.worker);
+        if (chosen === undefined) {
+          throw new CliUsageError(
+            [
+              `No installed named worker ${JSON.stringify(options.worker)}.`,
+              `Installed: ${catalog.workers.map((entry) => entry.name).join(", ")}`,
+              "List details: `prism workflow workers`",
+            ].join("\n"),
+          );
+        }
+        source = scaffoldNamedWorkerSource(name, [namedWorkerRef(chosen.name)]);
+        workersUsed = [chosen.name];
+      } else {
+        if (options.worker !== undefined) {
+          throw new CliUsageError(
+            [
+              `--worker ${JSON.stringify(options.worker)} needs an installed named worker, but no catalog is installed.`,
+              "Install one: `prism workflow workers install ./workers.json`",
+              "Raw harness workers remain available: rerun scaffold without --worker.",
+            ].join("\n"),
+          );
+        }
+        const pins = pickPluginFreeScaffoldPins(loadHarnessTypesSnapshot(prismHome));
+        source = scaffoldWorkflowSource(name, pins);
+        workersUsed = pins.map((pin) => pin.worker);
+      }
       if (options.print === true) {
         await writeStdout(source);
         return;
@@ -754,11 +742,66 @@ workflow
       await ensureDir(dirname(outPath));
       await writeFile(outPath, source, "utf8");
       await writeStdout(
-        `Wrote ${outPath} (workers: ${workers.join(", ")}).\nSkill: ${skill.path}\nNext: prism workflow validate ${outPath}\n`,
+        `Wrote ${outPath} (workers: ${workersUsed.join(", ")}).\nSkill: ${skill.path}\nNext: prism workflow validate ${outPath}\n`,
       );
     } catch (error) {
       printCliError(error, "Workflow scaffold failed");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+const workflowWorkers = workflow
+  .command("workers")
+  .description("Installed named worker catalog (machine-global): list, install portable JSON, or export");
+
+workflowWorkers
+  .command("list", { isDefault: true })
+  .description("List installed named workers: names, descriptions, raw configs")
+  .option("--json", "Emit machine-readable JSON")
+  .action(async (options: { readonly json?: boolean }) => {
+    try {
+      const result = await Effect.runPromise(listWorkflowWorkers(resolvePrismHome()));
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify({
+          catalogPath: result.catalogPath,
+          modulePath: result.modulePath,
+          workers: projectNamedWorkerRefs(result.catalog),
+        }, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`${result.human}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow workers failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowWorkers
+  .command("install <files...>")
+  .description("Explicitly replace the installed catalog with portable named-worker JSON files (unique names merge; duplicates fail)")
+  .action(async (files: ReadonlyArray<string>) => {
+    try {
+      if (files.length === 0) {
+        throw new CliUsageError("install needs at least one portable worker catalog JSON file");
+      }
+      const result = await Effect.runPromise(installWorkflowWorkersFromFiles(resolvePrismHome(), files));
+      await writeStdout(`${result.human}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow workers install failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowWorkers
+  .command("export")
+  .description("Print the installed catalog as portable JSON (nothing is written back to your source files)")
+  .action(async () => {
+    try {
+      const result = await Effect.runPromise(exportWorkflowWorkers(resolvePrismHome()));
+      await writeStdout(result.json);
+    } catch (error) {
+      printCliError(error, "Workflow workers export failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 

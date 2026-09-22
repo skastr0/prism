@@ -6,27 +6,80 @@ import { dirname, join } from "node:path";
 import { SKILL_VALIDATION } from "../types.js";
 import { prismWorkflowAuthoringSkillPath } from "./paths.js";
 import { WORKFLOW_SKILL_REFERENCES } from "./skill-references/index.js";
-import { renderWorkflowAuthoringSkillMarkdown, writeWorkflowAuthoringSkill } from "./skill.js";
+import { renderWorkflowAuthoringSkillMarkdown, renderWorkflowSkillMarkdown, writeWorkflowAuthoringSkill } from "./skill.js";
+import { renderWorkflowModelsSkillMarkdown } from "./models-skill.js";
 
-test("embedded workflow skill teaches the plugin-free path", () => {
+test("embedded workflow skill teaches the named-worker path", () => {
   const markdown = renderWorkflowAuthoringSkillMarkdown();
   expect(markdown).toContain("name: prism-workflow");
   expect(markdown).toContain("Plugins are optional");
-  expect(markdown).toContain("prism workflow models");
-  expect(markdown).toContain("prism workflow models --offer");
+  expect(markdown).toContain("prism workflow workers");
+  expect(markdown).toContain('from "prism/refs/workers"');
+  expect(markdown).toContain("worker: workers.reviewer");
+  // reviewer is an example, not a guarantee about any machine's catalog.
+  expect(markdown).toContain("example ref");
   expect(markdown).not.toContain("agent:");
-  expect(markdown).toContain("catalogModel");
-  expect(markdown).toContain("gemini-3.8-flash-low");
-  expect(markdown).toContain("sandbox-read-only");
-  expect(markdown).toContain("claude-code");
-  expect(markdown).toContain("opencode2");
+  expect(markdown).toContain("omit the field");
+  // The static embedded copy must send the agent to fresh truth, not stale prefs.
+  expect(markdown).toContain("prism workflow skill");
+  expect(markdown).toContain("never the catalog");
+  expect(markdown).not.toContain("models prefer");
+  expect(markdown).not.toContain("workflow-model-preferences");
+  // Raw combinatorics live in the models skill, not in the primary authoring path.
+  expect(markdown).toContain("skill --models");
+  expect(markdown).not.toContain("sandbox-read-only");
+  expect(markdown).not.toContain("catalogModel");
+  expect(markdown).not.toContain("gemini-3.8-flash-low");
+  expect((markdown.match(/import \{ workers \}/g) ?? []).length).toBe(2);
+  // SOP routing stays in the primary skill.
   expect(markdown).toContain("wf.phase");
   expect(markdown).toContain("prism/refs/sops");
   expect(markdown).toContain("catalog --sop");
   expect(markdown).not.toContain("orbit");
-  expect(markdown).toContain("omit model");
-  expect(markdown).toContain("Save only their answer");
-  expect(markdown).not.toContain("prefer cursor --model composer-2.5-fast");
+});
+
+test("the printed skill embeds the installed catalog and project refs", () => {
+  const markdown = renderWorkflowSkillMarkdown({
+    workers: {
+      version: 1,
+      workers: [{
+        name: "reviewer",
+        description: "Careful code review; low risk tolerance.",
+        config: { worker: "claude-code" },
+      }],
+    },
+    project: {
+      surfaceDir: "/tmp/prism/state/projects/k/generated",
+      present: true,
+      namespaces: [{ namespace: "forge", sopRefs: ["sops.forge.beacon"] }],
+    },
+  });
+  expect(markdown).toContain("workers.reviewer");
+  expect(markdown).toContain("Careful code review; low risk tolerance.");
+  expect(markdown).toContain("sops.forge.beacon");
+  // Descriptions guide selection; they must not leak into prompt guidance.
+  expect(markdown).toContain("never prompt content");
+});
+
+test("the printed skill says so when nothing is installed or compiled", () => {
+  const markdown = renderWorkflowSkillMarkdown({
+    workers: { version: 1, workers: [] },
+    project: { surfaceDir: "/tmp/none/generated", present: false, namespaces: [] },
+  });
+  expect(markdown).toContain("No named workers installed");
+  expect(markdown).toContain("Raw worker configurations remain available");
+  expect(markdown).toContain("No compiled plugin refs");
+});
+
+test("the models skill carries the raw-pin combinatorics the primary skill omits", () => {
+  const markdown = renderWorkflowModelsSkillMarkdown();
+  expect(markdown).toContain("catalogModel");
+  expect(markdown).toContain("gemini-3.8-flash-low");
+  expect(markdown).toContain("sandbox-read-only");
+  expect(markdown).toContain("restrictedTools");
+  expect(markdown).toContain("provider/id");
+  expect(markdown).not.toContain("models prefer");
+  expect(markdown).not.toContain("workflow-model-preferences");
 });
 
 test("writeWorkflowAuthoringSkill materializes SKILL.md under PRISM_HOME", async () => {

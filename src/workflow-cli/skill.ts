@@ -6,6 +6,16 @@
  * generated from this binary, so the CLI is the single source of truth for what
  * an agent is told — `--write` materializes them under PRISM_HOME and
  * `--install` drops them into detected harness skill directories.
+ *
+ * Two renderings share one body:
+ *
+ * - `renderWorkflowAuthoringSkillMarkdown()` — the static embedded copy that
+ *   is written and installed. Installed skills are static, so the body itself
+ *   instructs the agent to fetch fresh context with `prism workflow skill`.
+ * - `renderWorkflowSkillMarkdown(context)` — what `prism workflow skill`
+ *   prints: the same body plus the machine's current installed named-worker
+ *   catalog and the current project's compiled SOP refs. One normal skill call
+ *   is enough to author with named workers.
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -13,35 +23,38 @@ import { dirname, join } from "node:path";
 import type { EmbeddedSkill, EmbeddedSkillFile } from "./skill-files.js";
 import { prismWorkflowAuthoringSkillPath } from "./paths.js";
 import { WORKFLOW_SKILL_REFERENCES } from "./skill-references/index.js";
+import { namedWorkerRef, type WorkflowWorkerCatalog } from "../workflow-named-workers.js";
 
 export const WORKFLOW_AUTHORING_SKILL_NAME = "prism-workflow";
 
-export const renderWorkflowAuthoringSkillMarkdown = (): string => `---
-name: ${WORKFLOW_AUTHORING_SKILL_NAME}
-description: Author and run Prism workflows — typed task graphs over real harness CLIs. Use when writing, typechecking, validating, running, scheduling, or debugging a *.workflow.ts. Plugins are optional.
----
+/** Current-context inputs the printed skill embeds. */
+export interface WorkflowSkillContext {
+  readonly workers: WorkflowWorkerCatalog;
+  readonly project: {
+    readonly surfaceDir: string;
+    readonly present: boolean;
+    readonly namespaces: ReadonlyArray<{ readonly namespace: string; readonly sopRefs: readonly string[] }>;
+  };
+}
 
-# Prism workflows
-
-Workflows are the flagship. A \`.workflow.ts\` file dispatches real harness CLIs (\`cursor\`, \`amp-code\`, \`claude-code\`, …). A Prism plugin is an optional add-on for compiled \`sops.*\` phase bindings.
+const workflowSkillBody = (): string => `Workflows are the flagship. A \`.workflow.ts\` file dispatches real harness CLIs (\`cursor\`, \`amp-code\`, \`claude-code\`, …). A Prism plugin is an optional add-on for compiled \`sops.*\` phase bindings.
 
 Live runs spend real tokens. Rehearse with \`typecheck\`, \`validate\`, and \`--mock-output\`.
 
-## First moves (no plugin)
+## Start from current truth
+
+Installed named workers and compiled project refs change independently of any skill copy. Before authoring, run \`prism workflow skill\` — it prints this guide plus the machine's current worker catalog and this project's refs. A static installed copy of this skill is a starting point, never the catalog.
+
+## First moves
 
 \`\`\`bash
-prism workflow refresh-harness-types
-prism workflow models --offer
-# Stop. Quiz the user from that offer. Save only their answer:
-#   prism workflow models prefer <worker> --model <slug>
-# Amp catalog: --catalog-model <slug> [--effort <value>]
-prism workflow scaffold hello
+prism workflow skill                                # this guide + current catalog + project refs
+prism workflow workers                              # installed named workers (names, descriptions, configs)
+prism workflow scaffold hello --worker <name>       # omit --worker to use the first curated entry
 prism workflow typecheck ~/.prism/workflows/hello.workflow.ts
 prism workflow validate ~/.prism/workflows/hello.workflow.ts --table
 prism workflow run ~/.prism/workflows/hello.workflow.ts --mock-output mocks.json
 \`\`\`
-
-Print this skill anytime: \`prism workflow skill\`. Model quiz: \`prism workflow skill --models\`.
 
 ## Reference chapters
 
@@ -60,34 +73,36 @@ Read the one you need before you guess at semantics. They sit next to this file 
 \`\`\`ts
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
+import { workers } from "prism/refs/workers";
 
 export const workflow = defineWorkflow({
   name: "hello",
   tasks: [defineTask({
-    id: "cursor",
-    prompt: "Reply with summary: hello",
+    id: "review",
+    prompt: "Return a one-line summary in \\"summary\\".",
     output: Schema.Struct({ summary: Schema.String }),
-    worker: { worker: "cursor" }, // omit model → harness default. Pin only from \`prism workflow models --offer\`.
+    worker: workers.reviewer, // example ref — pick an installed name from \`prism workflow workers\`
   })],
 });
 \`\`\`
 
+\`workers.reviewer\` is a typed ref to one installed named worker: its harness, model, effort, and permission were curated once in the catalog. The generated ref is literal raw config, so the existing DSL is unchanged — no new agent type.
+
+Raw configurations remain available as the escape hatch:
+
+\`\`\`ts
+worker: { worker: "cursor" }  // omit model → harness default. Pin only slugs from \`prism workflow models\`.
+\`\`\`
+
 A task is \`id\`, \`prompt\`, an Effect Schema \`output\`, and an optional \`worker\`, \`finish\`, \`phase\`, and \`cacheKey\`. The dynamic form takes \`run: (wf) => Effect.gen(...)\` and threads typed outputs between tasks with \`yield* wf.runTask(task)\` — use it whenever the graph branches, loops, or fans out. There is no \`agent\` field on a task.
 
-- \`worker.model\` is harness-bound. There is no shared model type.
-- Cursor slugs are effort-suffixed. \`gemini-3.8-flash\` is not a slug; use \`gemini-3.8-flash-low|medium|high\`.
-- OMP pins are \`provider/id\` selectors from \`omp models --json\` (e.g. \`ollama-cloud/glm-5.3-flash\`). Bare ids such as \`gpt-5.6-luna\` are not selectors. \`opencode-go/*\` is Console Go and 400s in workflow \`--print\` (\`MissingSessionID\`). Thinking stays on \`--thinking\` / a \`:high\` config suffix, not \`worker.effort\`.
-- Amp: \`worker.model\` is a \`--mode\` dial (\`low|medium|high|ultra\`) or plugin key. Catalog slugs go in \`worker.catalogModel\`. Reasoning goes in \`worker.effort\`. Example: \`{ worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }\`.
-- Discover slugs: \`prism workflow models --offer\` then \`--worker <id> --query <text>\`. Do not invent slugs.
-- \`worker.permission\` is harness-bound. Do not copy Codex \`sandbox-read-only\` onto Claude, Grok, Amp, or OMP.
+## Choosing a worker
 
-| Worker | Allowed \`permission\` |
-|---|---|
-| \`claude-code\` | \`legacy\` \`permissive\` \`restricted\` (+ \`restrictedTools\`) \`full-access\` |
-| \`codex-cli\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-read-only\` \`sandbox-workspace-write\` |
-| \`cursor\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-workspace-write\` |
-| \`devin\` \`omp\` | \`legacy\` \`permissive\` \`restricted\` \`full-access\` |
-| \`amp-code\` \`antigravity-cli\` \`grok\` \`hermes\` \`kimi-code\` \`opencode\` \`opencode2\` | \`legacy\` \`permissive\` \`full-access\` |
+Pick a named worker by its description — what it is for, its strengths, its limits — and state the goal in the prompt. Descriptions guide selection; they are never task instructions. Do not copy a worker description into a prompt, and do not re-derive harness or model choices the catalog already made. Multiple names may share one harness.
+
+## Raw configurations (escape hatch)
+
+Named workers are the primary path. When none fits, compose a raw \`worker: { worker, model, permission, ... }\` instead — the DSL takes it unchanged. Discover live slugs and the per-harness combination rules (model dials, Amp catalog slugs and effort, permission modes) with \`prism workflow skill --models\`; never invent a slug and never write \`model: ""\` — omit the field so the harness default stays.
 
 ## SOP phases (optional plugin)
 
@@ -98,6 +113,7 @@ phase with \`wf.phase\`, then \`ctx.task({ worker, prompt })\`:
 import { Effect } from "effect";
 import { defineWorkflow } from "prism";
 import { sops } from "prism/refs/sops";
+import { workers } from "prism/refs/workers";
 
 export const workflow = defineWorkflow({
   name: "forge-explore",
@@ -106,7 +122,7 @@ export const workflow = defineWorkflow({
       return yield* wf.phase(sops.forge.forge.phases.explore, (ctx) =>
         ctx.task({
           id: "explore",
-          worker: { worker: "claude-code" },
+          worker: workers.reviewer,
           prompt: "Inspect the repo; return seams, risks, and a direction.",
         }),
       );
@@ -115,10 +131,10 @@ export const workflow = defineWorkflow({
 \`\`\`
 
 \`wf.phase\` applies the SOP's input/output schemas, acceptance criteria, and
-framing. Discover what is compiled here: \`prism workflow catalog --sop forge\`.
-Refs live at \`~/.prism/state/projects/<key>/generated/\` — run from the repo
-root so the project key matches. If \`prism workflow refs\` is missing/stale,
-refresh the plugin (not required for plugin-free workflows).
+framing. The refs compiled for this project are listed below when present.
+Discover details: \`prism workflow catalog --sop <name>\`. Refs live at
+\`~/.prism/state/projects/<key>/generated/\` — run from the repo root so the
+project key matches.
 
 ## Jev decisions (no worker)
 
@@ -132,9 +148,12 @@ A workflow may declare \`schedule: { cron, timezone, overlap, missedRuns }\`. **
 
 | Command | What it does |
 |---|---|
-| \`models\` | Live harness slugs. \`--offer\` quizzes with samples + prefs. \`prefer\` saves them |
+| \`workers\` | Installed named workers: names, descriptions, raw configs |
+| \`workers install <files...>\` | Explicitly replace the installed catalog with portable JSON files (merges unique names, rejects duplicates) |
+| \`workers export\` | Print the installed catalog as portable JSON (nothing is written to the source files) |
+| \`models\` | Live harness slugs for raw pins. \`--offer\` samples; you combine pins explicitly |
 | \`catalog\` | Workers + slug counts. \`--query\` searches models when no plugin |
-| \`scaffold <name>\` | Starter in \`~/.prism/workflows/\` with typed pins when a snapshot exists |
+| \`scaffold <name>\` | Starter in \`~/.prism/workflows/\`; \`--worker <name>\` binds an installed named worker |
 | \`refresh-harness-types\` | Write \`prism/harnesses\` unions from installed CLIs |
 | \`typecheck <file>\` | Generated tsconfig + shipped declarations |
 | \`validate <file>\` | Every probed pin: worker, model, catalog, effort, permission |
@@ -143,19 +162,10 @@ A workflow may declare \`schedule: { cron, timezone, overlap, missedRuns }\`. **
 | \`cache\` | Persisted task cache entries |
 | \`schedule\` | \`install\` \`list\` \`show\` \`enable\` \`disable\` \`remove\` |
 | \`scheduler\` | \`serve\` \`reconcile\` \`install-service\` \`uninstall-service\` \`status\` |
-| \`skill\` | Print this guide. \`--models\` prints the quiz. \`--write\` / \`--install\` place both |
+| \`skill\` | Print this guide with current workers + project refs. \`--models\` prints raw-pin discovery. \`--write\` / \`--install\` place the static embedded copy |
 | \`refs\` | Optional compiled plugin refs |
 
 Workflow files live in \`~/.prism/workflows/\`, never inside the repo they drive.
-
-## Pinning models
-
-1. \`prism workflow refresh-harness-types\`
-2. \`prism workflow models --offer\` — workers, slug counts, five-slug samples, current prefs
-3. Quiz the user from the offer. Save only their answer: \`prism workflow models prefer <id> --model <slug>\` (Amp catalog: \`--catalog-model\`)
-4. Copy a stated preference into \`worker.model\` (Amp: \`catalogModel\` / \`effort\`). No preference → omit the field so the harness default stays.
-
-If typecheck rejects a family name, the error should list the effort-suffixed slugs. Fix the one-line pin; do not invent a shared model type. Never write \`model: ""\`.
 
 ## Validate before you spend
 
@@ -163,8 +173,65 @@ If typecheck rejects a family name, the error should list the effort-suffixed sl
 
 ## Full DSL
 
-This skill covers the flagship path: models, scaffold, validate, run — no plugin required. The complete field reference is in the Prism repo: \`docs/workflows.md\` (tasks, finish criteria, cache, ledger, workers, Jev) and \`docs/workflow-scheduling.md\` (cron, cursor, overlap, the scheduler).
-`;
+This skill covers the flagship path: named workers, raw pins, scaffold, validate, run — no plugin required. The complete field reference is in the Prism repo: \`docs/workflows.md\` (tasks, finish criteria, cache, ledger, workers, Jev, named workers) and \`docs/workflow-scheduling.md\` (cron, cursor, overlap, the scheduler).`;
+
+/** The static embedded skill: body plus the fresh-context instruction. */
+export const renderWorkflowAuthoringSkillMarkdown = (): string => `---
+name: ${WORKFLOW_AUTHORING_SKILL_NAME}
+description: Author and run Prism workflows — typed task graphs over real harness CLIs, selecting curated named workers by description. Use when writing, typechecking, validating, running, scheduling, or debugging a *.workflow.ts. Plugins are optional.
+---
+
+# Prism workflows
+
+${workflowSkillBody()}`;
+
+const renderInstalledWorkersSection = (catalog: WorkflowWorkerCatalog): string => {
+  if (catalog.workers.length === 0) {
+    return [
+      "## Installed named workers (current machine truth)",
+      "",
+      "No named workers installed. Install a portable catalog: `prism workflow workers install ./workers.json`. Raw worker configurations remain available.",
+    ].join("\n");
+  }
+  return [
+    "## Installed named workers (current machine truth)",
+    "",
+    'Import `{ workers } from "prism/refs/workers"` and set `worker: workers.<name>`. Choose by description; the description is selection guidance, never prompt content.',
+    "",
+    ...catalog.workers.flatMap(({ name, description, config }) => [
+      `- \`${namedWorkerRef(name)}\` — ${description}`,
+      `  Configuration: \`${JSON.stringify(config)}\``,
+    ]),
+  ].join("\n");
+};
+
+const renderProjectRefsSection = (project: WorkflowSkillContext["project"]): string => {
+  if (!project.present) {
+    return [
+      "## Compiled SOP refs (this project)",
+      "",
+      `No compiled plugin refs at ${project.surfaceDir}. SOP phases are optional; compile with \`prism refresh <plugin-path>\` only if you want \`sops.*\`.`,
+    ].join("\n");
+  }
+  const lines = Object.entries(groupNamespaces(project.namespaces)).flatMap(([namespace, sopRefs]) => [
+    `- \`${namespace}\`: ${sopRefs.join(", ")}`,
+  ]);
+  return [
+    "## Compiled SOP refs (this project)",
+    "",
+    `Import \`import { sops } from "prism/refs/sops";\` from the repo root. Surface: ${project.surfaceDir}`,
+    ...lines,
+  ].join("\n");
+};
+
+const groupNamespaces = (
+  namespaces: ReadonlyArray<{ readonly namespace: string; readonly sopRefs: readonly string[] }>,
+): Record<string, readonly string[]> =>
+  Object.fromEntries(namespaces.filter((ns) => ns.sopRefs.length > 0).map((ns) => [ns.namespace, ns.sopRefs]));
+
+/** What `prism workflow skill` prints: the body plus live catalog and project refs. */
+export const renderWorkflowSkillMarkdown = (context: WorkflowSkillContext): string =>
+  `${renderWorkflowAuthoringSkillMarkdown()}\n\n${renderInstalledWorkersSection(context.workers)}\n\n${renderProjectRefsSection(context.project)}\n`;
 
 /** Every file of the authoring skill, relative to its own directory. */
 export const workflowAuthoringSkillFiles = (): readonly EmbeddedSkillFile[] => [

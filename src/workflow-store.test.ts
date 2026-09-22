@@ -3537,21 +3537,31 @@ describe("workflow store", () => {
   test("prompt hash is produced via canonical stableJsonHash pipeline (key-order and non-ASCII stable)", () => {
     // Verify: promptHash equals what stableJsonHash would produce, not what a raw JSON.stringify would.
     // This proves key-order independence: stableJsonHash sorts keys before hashing.
-    const workflow = createWorkflow({ worker: "grok", model: "grok-build" });
+    const workflow = defineWorkflow({
+      name: "store-smoke",
+      tasks: [defineTask({
+        id: "build",
+        prompt: "Build the slice.",
+        output: Output,
+        cacheKey: "builder-cache",
+        worker: { worker: "claude-code", model: "claude-opus-4-8", effort: "high" },
+      })] as const,
+    });
     const task = workflow.tasks[0]!;
     const identity = workflowTaskIdentity(workflow.name, task);
     const outputSchema = (task.output as { readonly ast?: unknown }).ast ?? null;
 
     // Construct the same payload as workflowTaskIdentity does internally in canonical order.
     const canonicalOrder = {
-      identityVersion: 4,
+      identityVersion: 5,
       workerJsonContractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
       workerJsonInstructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
       prompt: task.prompt,
-      worker: task.worker?.worker ?? null,
+      worker: "claude-code",
       workerSemantics: "native-cli-v1",
-      model: task.worker?.model ?? null,
-      profile: task.worker?.profile ?? null,
+      model: "claude-opus-4-8",
+      profile: null,
+      configuration: { effort: "high" },
       outputSchema,
       finish: {
         maxRepairs: task.finish?.maxRepairs ?? 0,
@@ -3578,6 +3588,7 @@ describe("workflow store", () => {
       finish: canonicalOrder.finish,
       outputSchema: canonicalOrder.outputSchema,
       profile: canonicalOrder.profile,
+      configuration: canonicalOrder.configuration,
       model: canonicalOrder.model,
       workerSemantics: canonicalOrder.workerSemantics,
       worker: canonicalOrder.worker,

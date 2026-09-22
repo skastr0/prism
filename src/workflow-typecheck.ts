@@ -13,6 +13,7 @@ import {
   projectGeneratedRefsDir,
 } from "./project-key.js";
 import { harnessModelsModulePath, harnessTypesExist } from "./harness-types.js";
+import { workflowWorkersModulePath } from "./workflow-named-workers.js";
 import {
   buildWorkflowPaths,
   generateWorkflowTsconfig,
@@ -144,10 +145,16 @@ const resolveWorkflowTypeEnvironment = (
 
   const harnessTypesPath = harnessTypesExist(prismHome) ? harnessModelsModulePath(prismHome) : undefined;
 
+  // The named-workers module is regenerated before load typechecks; only map
+  // the specifier when the generated file is present so a not-yet-ensured
+  // environment degrades like the optional refs instead of hard-failing.
+  const workersModulePath = workflowWorkersModulePath(prismHome);
+
   const paths = buildWorkflowPaths({
     typeDirs,
     refsDir: hasRefs ? dirname(refsPath) : undefined,
     harnessTypesPath,
+    workersModulePath: existsSync(workersModulePath) ? workersModulePath : undefined,
   });
 
   const onDiskBase = readOnDiskWorkflowCompilerOptions(prismHome);

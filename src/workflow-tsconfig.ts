@@ -33,6 +33,8 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessModelsModulePath } from "./harness-types.js";
+import { Effect } from "effect";
+import { ensureWorkflowWorkersModule } from "./workflow-named-workers.js";
 
 // ---------------------------------------------------------------------------
 // Platform package root resolution
@@ -325,6 +327,8 @@ export const buildWorkflowPaths = (options: {
   readonly refsDir?: string;
   /** Absolute path to the global harness-models.ts (`prism/harnesses`). */
   readonly harnessTypesPath?: string;
+  /** Global literal named-worker module, independent of optional plugin refs. */
+  readonly workersModulePath?: string;
 }): Record<string, string[]> => {
   const paths: Record<string, string[]> = {};
   const { prismTypesDir, effectDtsDir } = options.typeDirs;
@@ -338,6 +342,9 @@ export const buildWorkflowPaths = (options: {
   }
   if (options.harnessTypesPath) {
     paths["prism/harnesses"] = [options.harnessTypesPath];
+  }
+  if (options.workersModulePath) {
+    paths["prism/refs/workers"] = [options.workersModulePath];
   }
   if (effectDtsDir) {
     paths["effect"] = [join(effectDtsDir, "index.d.ts")];
@@ -417,6 +424,7 @@ export const generateWorkflowTsconfig = async (
     typeDirs,
     refsDir: options.refsDir,
     harnessTypesPath,
+    workersModulePath: await Effect.runPromise(ensureWorkflowWorkersModule(options.prismHome)),
   });
 
   const include: string[] = [];

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { Effect } from "effect";
 import { expandPath } from "./fs.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 import { resolvePrismHome } from "./prism-home.js";
@@ -18,6 +19,7 @@ import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 // runtime and the file's `from "effect"` rewrite resolve to the binary's
 // Effect instance used by authored workflow modules.
 import { prepareImportWrapper } from "./compile/load.js";
+import { ensureWorkflowWorkersModule } from "./workflow-named-workers.js";
 import {
   checkWorkflowRefsFreshness,
   typecheckWorkflowFile,
@@ -211,21 +213,27 @@ export const loadWorkflowFile = async (
   options: { readonly prismHome?: string; readonly skipTypecheck?: boolean } = {},
 ): Promise<AnyWorkflowDefinition> => {
   const resolved = expandPath(filePath);
+  const prismHome = options.prismHome ?? resolvePrismHome();
+
+  // Named-worker refs must be freshly generated before both the transparent
+  // typecheck (which maps `prism/refs/workers`) and the runtime import
+  // rewriting below, so a same-process install/update/removal is honored and
+  // the module always exists for the type environment. Installed truth only:
+  // never reads a catalog from the user's repository.
+  await Effect.runPromise(ensureWorkflowWorkersModule(prismHome));
 
   // Ref-freshness check (async; runs concurrently with typecheck below).
-  const freshnessCheck = checkWorkflowRefsFreshness({
-    prismHome: options.prismHome,
-  });
+  const freshnessCheck = checkWorkflowRefsFreshness({ prismHome });
 
   // Transparent typecheck pre-step: fail fast with structured diagnostics.
   if (options.skipTypecheck !== true) {
-    typecheckWorkflowFile(resolved, { prismHome: options.prismHome });
+    typecheckWorkflowFile(resolved, { prismHome });
   }
 
   // Await freshness so any warning is emitted before execution output.
   await freshnessCheck;
 
-  const wrapper = await prepareImportWrapper(resolved, { workflow: true });
+  const wrapper = await prepareImportWrapper(resolved, { workflow: true, prismHome });
   let module: WorkflowModule;
   try {
     module = (await import(wrapper.specifier)) as WorkflowModule;

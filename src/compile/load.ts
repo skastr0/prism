@@ -53,6 +53,9 @@ import { existsSync } from "node:fs";
 import { PluginManifestError } from "../errors.js";
 import { validateSkillName } from "../manifest.js";
 import { harnessModelsModulePath } from "../harness-types.js";
+import { ensureWorkflowWorkersModule } from "../workflow-named-workers.js";
+import { computeContentHash } from "../content-hash.js";
+import { readFile } from "../fs.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "../project-key.js";
 import { rewriteGeneratedRefsForRuntime } from "../workflow-generated-surface.js";
@@ -568,23 +571,32 @@ const copyTransformedPluginTree = async (options: {
 export const resolveEffectRuntimePath = async (): Promise<string> =>
   (await getImportRuntimePaths()).effect;
 
-const workflowRefsDirForImport = async (): Promise<string> => {
-  const prismHome = resolvePrismHome();
+const workflowRefsDirForImport = async (prismHome: string): Promise<string> => {
   const { key } = deriveProjectKey();
   const refsDir = projectGeneratedRefsDir(prismHome, key);
   if (!existsSync(join(refsDir, "sops.ts"))) return refsDir;
   return rewriteGeneratedRefsForRuntime(refsDir, await resolveEffectRuntimePath());
 };
 
-const workflowRefsTargetPath = async (): Promise<string> =>
-  join(await workflowRefsDirForImport(), "sops.ts");
+const workflowRefsTargetPath = async (prismHome: string): Promise<string> =>
+  join(await workflowRefsDirForImport(prismHome), "sops.ts");
 
-const workflowRefsModuleTargets = async (cacheBust: string): Promise<Record<string, string>> => {
-  const refsDir = await workflowRefsDirForImport();
+const workflowRefsModuleTargets = async (cacheBust: string, prismHome: string): Promise<Record<string, string>> => {
+  const refsDir = await workflowRefsDirForImport(prismHome);
   const modules = ["sops", "models"] as const;
-  return Object.fromEntries(
-    modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
-  );
+  const workersPath = await Effect.runPromise(ensureWorkflowWorkersModule(prismHome));
+  // Bun keys its import cache for a `file://` URL on the URL path and ignores
+  // a query, but honors the query on a plain absolute path — so the workers
+  // target is the plain path plus the generated module's content hash. New or
+  // changed installed refs get a fresh module identity in the same process;
+  // unchanged content keeps reusing the cached module.
+  const workersContentHash = computeContentHash(await readFile(workersPath));
+  return {
+    ...Object.fromEntries(
+      modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
+    ),
+    "prism/refs/workers": `${workersPath}?hash=${workersContentHash}`,
+  };
 };
 
 /**
@@ -593,15 +605,16 @@ const workflowRefsModuleTargets = async (cacheBust: string): Promise<Record<stri
  * to the generated project refs file (cache-busted so refreshed refs are
  * re-read across runs in the same process).
  */
-const workflowSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
+const workflowSpecifierOverrides = async (prismHome?: string): Promise<LoadSpecifierOverrides> => {
+  const home = prismHome ?? resolvePrismHome();
   const runtimePaths = await getImportRuntimePaths();
   const cacheBust = `?t=${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const harnessTypesPath = harnessModelsModulePath(resolvePrismHome());
+  const harnessTypesPath = harnessModelsModulePath(home);
   return {
     prism: toFileSpecifier(runtimePaths.workflowDsl),
     effect: toFileSpecifier(runtimePaths.effect),
-    prismRefs: `${toFileSpecifier(await workflowRefsTargetPath())}${cacheBust}`,
-    prismRefsModules: await workflowRefsModuleTargets(cacheBust),
+    prismRefs: `${toFileSpecifier(await workflowRefsTargetPath(home))}${cacheBust}`,
+    prismRefsModules: await workflowRefsModuleTargets(cacheBust, home),
     ...(existsSync(harnessTypesPath)
       ? { prismHarnesses: `${toFileSpecifier(harnessTypesPath)}${cacheBust}` }
       : {}),
@@ -620,6 +633,13 @@ const pluginSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
 export interface PrepareImportWrapperOptions {
   /** When true, resolve `prism`/`prism/refs` for workflow execution rather than plugin compilation. */
   readonly workflow?: boolean;
+  /**
+   * Explicit Prism home for workflow-mode resolution (generated refs, harness
+   * types, and the named-workers module). Defaults to `resolvePrismHome()`.
+   * Callers that pass an explicit home to the loader must thread it here too so
+   * runtime imports cannot resolve against a different home than the typecheck.
+   */
+  readonly prismHome?: string;
 }
 
 export const prepareImportWrapper = async (
@@ -633,7 +653,7 @@ export const prepareImportWrapper = async (
   const pluginRoot = await findPluginRoot(sourcePath);
   const mode = options.workflow ? "workflow" : "plugin";
   const overrides = options.workflow
-    ? await workflowSpecifierOverrides()
+    ? await workflowSpecifierOverrides(options.prismHome)
     : await pluginSpecifierOverrides();
   const cacheKey = `${mode}:${pluginRoot}`;
   // A workflow transform embeds a cache-busted `prism/refs` URL. Reusing the

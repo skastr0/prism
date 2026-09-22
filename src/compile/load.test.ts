@@ -49,11 +49,13 @@ test("workflow imports never reuse a transformed tree with stale prism refs", as
   const sourcePath = join(root, "workflow.ts");
   await writeText(sourcePath, 'import { agents } from "prism/refs";\nexport default agents;\n');
 
-  const first = await prepareImportWrapper(sourcePath, { workflow: true });
+  // Explicit prism home keeps the named-workers module generation (and any
+  // generated-refs rewrite) inside the temp root instead of the real ~/.prism.
+  const first = await prepareImportWrapper(sourcePath, { workflow: true, prismHome: root });
   const firstSource = await readFile(first.transformedPath, "utf8");
   await first.cleanup();
 
-  const second = await prepareImportWrapper(sourcePath, { workflow: true });
+  const second = await prepareImportWrapper(sourcePath, { workflow: true, prismHome: root });
   try {
     const secondSource = await readFile(second.transformedPath, "utf8");
     expect(second.transformedPath).not.toBe(first.transformedPath);

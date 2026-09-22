@@ -159,12 +159,12 @@ const buildManifestTargets = (options: PluginScaffoldOptions): PluginManifestTar
     targets.rules = ["coding-harness"];
     targets.commands = [
       "claude-code",
-      "opencode2",
+      "opencode",
       "codex-cli",
       "cursor",
     ];
   }
-  if (options.withAgent) targets.agents = ["claude-code", "opencode2"];
+  if (options.withAgent) targets.agents = ["claude-code", "opencode"];
   if (options.withSkill) targets.skills = ["coding-harness", "claw-harness"];
   return targets;
 };

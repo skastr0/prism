@@ -1472,49 +1472,6 @@ test("compile-only into one compile-root keeps sibling harness trees", async () 
   expect(await pathExists(claudeAgent)).toBe(true);
 }, 30_000);
 
-test("compile-root rejects opencode + opencode2 sharing one nested home", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "shared-opencode");
-  const compileRoot = join(root, "sandbox");
-  const prismHome = join(root, "prism-home");
-  await mkdir(pluginRoot, { recursive: true });
-  await mkdir(compileRoot, { recursive: true });
-  await mkdir(prismHome, { recursive: true });
-  await writeFile(
-    join(pluginRoot, "plugin.json"),
-    JSON.stringify(
-      {
-        name: "shared-opencode",
-        version: "0.1.0",
-        targets: { agents: ["opencode", "opencode2"] },
-      },
-      null,
-      2,
-    ),
-  );
-
-  const result = await runCli(
-    [
-      "refresh",
-      "--plugin",
-      pluginRoot,
-      "--harness",
-      "opencode,opencode2",
-      "--compile-only",
-      "--compile-root",
-      compileRoot,
-      "--no-validate",
-    ],
-    { PRISM_HOME: prismHome },
-  );
-
-  expect(result.exitCode).not.toBe(0);
-  const output = `${result.stdout}\n${result.stderr}`;
-  expect(output).toContain(".config/opencode");
-  expect(output).toContain("opencode2");
-  expect(output).toMatch(/share compile-root path/);
-}, 30_000);
-
 test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {
   const root = await createTempRoot();
 
@@ -1784,9 +1741,7 @@ test("bare doctor defaults to detected-installed harnesses and prints the detect
   const homeRoot = join(root, "home");
   const prismHome = join(root, "prism-home");
 
-  // Only claude-code and codex-cli have a global config root on this fake
-  // HOME; every other supported harness's root is absent. Hide the host
-  // opencode2 binary so PATH does not leak into HOME-isolated detection.
+  // Only claude-code and codex-cli have global config roots on this fake HOME.
   await mkdir(join(homeRoot, ".claude"), { recursive: true });
   await mkdir(join(homeRoot, ".codex"), { recursive: true });
   await mkdir(prismHome, { recursive: true });
@@ -1794,7 +1749,6 @@ test("bare doctor defaults to detected-installed harnesses and prints the detect
   const result = await runCli(["doctor"], {
     HOME: homeRoot,
     PRISM_HOME: prismHome,
-    PRISM_WORKFLOW_OPENCODE2_BIN: "/nonexistent/opencode2",
   });
 
   expect(result.exitCode).toBe(0);
@@ -1825,7 +1779,6 @@ test("bare refresh/plan default to detected-installed harnesses (fake HOME, matc
   const env = {
     HOME: homeRoot,
     PRISM_HOME: prismHome,
-    PRISM_WORKFLOW_OPENCODE2_BIN: "/nonexistent/opencode2",
   };
   for (const command of ["refresh", "plan"]) {
     // `plan` has no --dry-run flag (it is always a dry run); `refresh` needs
@@ -1858,13 +1811,12 @@ test("bare invocation fails with a helpful error when no harness is installed (n
   const env = {
     HOME: homeRoot,
     PRISM_HOME: prismHome,
-    PRISM_WORKFLOW_OPENCODE2_BIN: "/nonexistent/opencode2",
   };
   const doctorResult = await runCli(["doctor"], env);
 
   expect(doctorResult.exitCode).toBe(2);
   expect(doctorResult.stderr).toContain(
-    "No installed harnesses detected (config root for most harnesses; opencode2 by `opencode2` on PATH).",
+    "No installed harnesses detected.",
   );
   expect(doctorResult.stderr).toContain("Please specify --harness <ids> or --all.");
   // Never a silent no-op and never a silent fall-through to --all: no

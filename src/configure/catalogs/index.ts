@@ -16,7 +16,6 @@ import { hermesCatalog } from "./hermes.js";
 import { kimiCodeCatalog } from "./kimi-code.js";
 import { ompCatalog } from "./omp.js";
 import { opencodeCatalog } from "./opencode.js";
-import { opencode2Catalog } from "./opencode2.js";
 import { piCatalog } from "./pi.js";
 import type { HarnessCatalog } from "./types.js";
 
@@ -34,7 +33,6 @@ export { readCatalogSettings } from "./read.js";
 export const HARNESS_CATALOGS: Record<HarnessId, HarnessCatalog> = {
   "claude-code": claudeCodeCatalog,
   opencode: opencodeCatalog,
-  opencode2: opencode2Catalog,
   hermes: hermesCatalog,
   "codex-cli": codexCliCatalog,
   "antigravity-cli": antigravityCliCatalog,

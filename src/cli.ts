@@ -11,7 +11,6 @@ import {
   getAllHarnessIds,
   getHarness,
   isValidHarnessId,
-  collidingCompileSandboxGroups,
   resolveCompileSandboxRoot,
   resolveHarnessRoot,
 } from "./harnesses.js";
@@ -3701,7 +3700,7 @@ function resolveRequestedHarnesses(
     const detected = detectInstalledHarnessIds();
     if (detected.length === 0) {
       console.error(
-        "No installed harnesses detected (config root for most harnesses; opencode2 by `opencode2` on PATH).",
+        "No installed harnesses detected.",
       );
       console.error("Please specify --harness <ids> or --all.");
       exitWith(EXIT_CODES.usage);
@@ -3863,34 +3862,6 @@ async function runCompilePhaseForPlugin(options: {
     manifestHasCompileTargets(options.manifest, id),
   );
   const nestCompileRoot = compileHarnessIds.length > 1;
-
-  if (options.compileRoot && nestCompileRoot) {
-    const collisions = collidingCompileSandboxGroups(
-      options.compileRoot,
-      compileHarnessIds,
-      options.scope,
-    );
-    if (collisions.length > 0) {
-      const collision = collisions[0]!;
-      const ids = collision.harnesses.join(" + ");
-      const headline =
-        `${ids} share compile-root path ${collision.root} ` +
-        `(OpenCode 1.x and 2 use the same config home).`;
-      const hint =
-        "Compile one of them, or pass a per-harness --compile-root. " +
-        "coding-harness targets opencode2 only; --harness opencode stays V1.";
-      if (!options.quiet) {
-        console.log(`\n${indent}❌ Compile failed: ${headline}`);
-        console.log(`${indent}   hint: ${hint}`);
-      }
-      return compilePhaseFailure(compileBackups, results, {
-        harness: collision.harnesses[0],
-        path: collision.root,
-        headline,
-        hint,
-      });
-    }
-  }
 
   for (const harnessId of options.harnesses) {
     if (!manifestHasCompileTargets(options.manifest, harnessId)) continue;

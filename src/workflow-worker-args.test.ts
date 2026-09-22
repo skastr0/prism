@@ -69,7 +69,6 @@ describe("workflow worker argument builders", () => {
 
   test("opencode passes the model and prompt without an agent selector", () => {
     const args = buildOpenCodeArgs({
-      cwd: "/repo",
       model: "provider/model",
       prompt: "return json",
     });
@@ -120,7 +119,7 @@ describe("workflow worker argument builders", () => {
   });
 
   test("workflow workers expose one task execution entrypoint", () => {
-    for (const worker of ["amp-code", "antigravity-cli", "claude-code", "codex-cli", "cursor", "grok", "hermes", "kimi-code", "opencode", "opencode2"]) {
+    for (const worker of ["amp-code", "antigravity-cli", "claude-code", "codex-cli", "cursor", "grok", "hermes", "kimi-code", "opencode"]) {
       const adapter = getWorkflowWorkerAdapter(worker);
       expect(typeof adapter.runTask).toBe("function");
       expect("continueTask" in adapter).toBe(false);
@@ -146,7 +145,7 @@ describe("workflow worker continuation arg mapping", () => {
   });
 
   test("opencode uses exact session id", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p", sessionId: "s1" });
+    const args = buildOpenCodeArgs({ prompt: "p", sessionId: "s1" });
     expect(args.slice(args.indexOf("-s"), args.indexOf("-s") + 2)).toEqual(["-s", "s1"]);
     expect(args).not.toContain("--continue");
   });
@@ -323,46 +322,46 @@ describe("antigravity-cli permission arg mapping", () => {
 });
 
 describe("opencode permission arg mapping", () => {
-  test("legacy emits no --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "legacy" });
-    expect(args).not.toContain("--dangerously-skip-permissions");
+  test("legacy omits --auto", () => {
+    const args = buildOpenCodeArgs({ prompt: "p", permission: "legacy" });
+    expect(args).not.toContain("--auto");
   });
 
-  test("permissive emits --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", model: "provider/model", prompt: "p", permission: "permissive" });
-    expect(args).toContain("--dangerously-skip-permissions");
+  test("permissive emits --auto", () => {
+    const args = buildOpenCodeArgs({ model: "provider/model", prompt: "p", permission: "permissive" });
+    expect(args).toContain("--auto");
     expect(args).not.toContain("--agent");
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "provider/model"]);
   });
 
-  test("default emits permissive --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p" });
-    expect(args).toContain("--dangerously-skip-permissions");
+  test("default emits --auto", () => {
+    const args = buildOpenCodeArgs({ prompt: "p" });
+    expect(args).toContain("--auto");
   });
 
   test("restricted throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "restricted" }))
+    expect(() => buildOpenCodeArgs({ prompt: "p", permission: "restricted" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("interactive throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "interactive" }))
+    expect(() => buildOpenCodeArgs({ prompt: "p", permission: "interactive" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-read-only throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "sandbox-read-only" }))
+    expect(() => buildOpenCodeArgs({ prompt: "p", permission: "sandbox-read-only" }))
       .toThrow(WorkflowPermissionError);
   });
 
   test("sandbox-workspace-write throws WorkflowPermissionError", () => {
-    expect(() => buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "sandbox-workspace-write" }))
+    expect(() => buildOpenCodeArgs({ prompt: "p", permission: "sandbox-workspace-write" }))
       .toThrow(WorkflowPermissionError);
   });
 
-  test("full-access emits --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", prompt: "p", permission: "full-access" });
-    expect(args).toContain("--dangerously-skip-permissions");
+  test("full-access emits --auto", () => {
+    const args = buildOpenCodeArgs({ prompt: "p", permission: "full-access" });
+    expect(args).toContain("--auto");
   });
 });
 

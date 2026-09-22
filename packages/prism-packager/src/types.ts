@@ -6,7 +6,6 @@
 export type HarnessId =
   | "claude-code"
   | "opencode"
-  | "opencode2"
   | "hermes"
   | "codex-cli"
   | "antigravity-cli"
@@ -231,7 +230,6 @@ export interface UnifiedFrontmatter {
   // Harness-specific overrides (typed where known)
   "claude-code"?: ClaudeCodeFrontmatter;
   opencode?: OpenCodeAgentFrontmatter;
-  opencode2?: OpenCodeAgentFrontmatter;
   hermes?: Record<string, unknown>;
   "codex-cli"?: CodexCliFrontmatter;
   "antigravity-cli"?: Record<string, unknown>;

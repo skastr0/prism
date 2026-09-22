@@ -223,7 +223,6 @@ export const syncWorkflowRefsForProject = async (options: {
 
 const SUPPORTED_TARGETS = [
   "opencode",
-  "opencode2",
   "claude-code",
   "antigravity-cli",
   "codex-cli",
@@ -240,7 +239,6 @@ const SUPPORTED_TARGETS = [
 const getLowerer = (target: string): LowererModule => {
   switch (target) {
     case "opencode":
-    case "opencode2":
       return { planLowering: planOpenCodeLowering };
     case "claude-code":
       return { planLowering: planClaudeCodeLowering };

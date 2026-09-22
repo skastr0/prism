@@ -90,7 +90,6 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
         "kimi-code",
         "omp",
         "opencode",
-        "opencode2",
       ].sort(),
     );
   });

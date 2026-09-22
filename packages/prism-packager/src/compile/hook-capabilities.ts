@@ -185,9 +185,6 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
       controls: ["systemMessage", "additionalContext"],
       note: "idle transition proxy",
     },
-    // OpenCode's plugin API is tool/permission/chat-centric — it has no clean
-    // lifecycle hook for these events, and the lowerer wires none. Honest
-    // unsupported rather than a forced mapping onto an unverified bus event.
     "tool.failure": {
       kind: "unsupported",
       note: "no distinct opencode failure event (tool.execute.after carries only a success flag)",
@@ -212,61 +209,6 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
     notification: {
       kind: "unsupported",
       note: "opencode has no notification plugin hook (tui.toast is output, not a lifecycle hook)",
-    },
-  },
-  opencode2: {
-    "tool.before": { kind: "native", nativeEvent: "tool.execute.before", controls: ["block"] },
-    "tool.after": {
-      kind: "native",
-      nativeEvent: "tool.execute.after",
-      controls: ["systemMessage", "additionalContext"],
-    },
-    "prompt.submit": {
-      kind: "native",
-      nativeEvent: "chat.message",
-      controls: ["systemMessage", "additionalContext"],
-    },
-    "permission.request": {
-      kind: "native",
-      nativeEvent: "permission.ask",
-      controls: ["block", "systemMessage"],
-    },
-    "session.start": {
-      kind: "degraded",
-      nativeEvent: "session.status",
-      controls: ["systemMessage", "additionalContext"],
-      note: "busy transition proxy",
-    },
-    "session.end": {
-      kind: "degraded",
-      nativeEvent: "session.status/session.idle",
-      controls: ["systemMessage", "additionalContext"],
-      note: "idle transition proxy",
-    },
-    "tool.failure": {
-      kind: "unsupported",
-      note: "no distinct opencode2 failure event (tool.execute.after carries only a success flag)",
-    },
-    stop: { kind: "unsupported", note: "opencode2 has no turn-stop plugin hook" },
-    "subagent.start": {
-      kind: "unsupported",
-      note: "opencode2 has no subagent lifecycle event (tool.execute.* does not fire for subagents)",
-    },
-    "subagent.stop": {
-      kind: "unsupported",
-      note: "opencode2 has no subagent lifecycle event",
-    },
-    "compact.before": {
-      kind: "unsupported",
-      note: "opencode2 compaction is not exposed as a blocking/injecting plugin hook",
-    },
-    "compact.after": {
-      kind: "unsupported",
-      note: "opencode2 compaction is not exposed as a plugin hook",
-    },
-    notification: {
-      kind: "unsupported",
-      note: "opencode2 has no notification plugin hook (tui.toast is output, not a lifecycle hook)",
     },
   },
   "antigravity-cli": {

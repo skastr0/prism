@@ -39,7 +39,6 @@ test("compile target capabilities are derived from lowerer capability profiles",
   expect(sorted(compileSupportedHarnesses)).toEqual(
     sorted([
       "opencode",
-      "opencode2",
       "claude-code",
       "antigravity-cli",
       "codex-cli",
@@ -87,7 +86,6 @@ test("agent model-binding demand follows lowerer surfaces", () => {
       "codex-cli",
       "grok",
       "opencode",
-      "opencode2",
       "pi",
       "omp",
     ]),

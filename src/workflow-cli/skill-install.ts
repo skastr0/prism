@@ -1,16 +1,8 @@
 /**
  * Install the embedded workflow skills into detected harness skill directories.
  *
- * `prism workflow skill` and `--write` are Prism-internal: they print the skill
- * or materialize it under PRISM_HOME, which no harness reads. This module is the
- * plugin-free delivery path — it drops the same files where a harness actually
- * discovers skills, so an agent can learn the workflow surface without a
- * compiled Prism plugin.
- *
- * The target layout comes from the harness registry (`skillsDir` under the
- * harness's `globalConfigPath`), not from a table duplicated here. Harnesses
- * that share a root (OpenCode 1.x and 2 share `~/.config/opencode/`) collapse
- * to one write.
+ * The CLI prints or materializes its own skill files separately. This module
+ * delivers them to each harness's registered global skill directory.
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -75,7 +67,6 @@ export const installWorkflowSkills = async (
 
   const targets: WorkflowSkillInstallTarget[] = [];
   const skipped: WorkflowSkillInstallSkip[] = [];
-  const writtenSkillDirs = new Set<string>();
 
   for (const harnessId of harnesses) {
     const harness = getHarness(harnessId);
@@ -102,11 +93,6 @@ export const installWorkflowSkills = async (
 
     for (const skill of skills) {
       const skillDir = join(root, harness.skillsDir, skill.name);
-      if (writtenSkillDirs.has(skillDir)) {
-        skipped.push({ harness: harnessId, reason: `shares ${skillDir} with another harness` });
-        continue;
-      }
-      writtenSkillDirs.add(skillDir);
 
       const files: string[] = [];
       for (const file of skill.files) {

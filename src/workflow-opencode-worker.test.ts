@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
-import { buildOpenCode2Args, buildOpenCodeArgs, OpenCodeWorkflowWorkerError, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
+import { buildOpenCodeArgs, OpenCodeWorkflowWorkerError, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
 import type { StableSessionId } from "./workflow-session.js";
 
@@ -28,26 +28,14 @@ const fakeOpenCodeEventStream = (callsFile: string, sessionId: string): string =
 ].join("\n");
 
 describe("opencode worker session id", () => {
-  test("buildOpenCodeArgs requests the json event stream and uses exact session resume", () => {
-    const fresh = buildOpenCodeArgs({ cwd: "/r", prompt: "p" });
-    expect(fresh.slice(fresh.indexOf("--format"), fresh.indexOf("--format") + 2)).toEqual(["--format", "json"]);
-    expect(fresh).not.toContain("-s");
-    expect(fresh).not.toContain("--continue");
-    expect(fresh).not.toContain("--fork");
-
-    const resume = buildOpenCodeArgs({ cwd: "/r", prompt: "p", sessionId: "ses_1" });
-    expect(resume.slice(resume.indexOf("-s"), resume.indexOf("-s") + 2)).toEqual(["-s", "ses_1"]);
-    expect(resume).toContain("--format");
-  });
-
-  test("buildOpenCode2Args uses V2 flags only", () => {
-    const fresh = buildOpenCode2Args({ prompt: "p" });
+  test("buildOpenCodeArgs uses OpenCode v2 flags and exact session resume", () => {
+    const fresh = buildOpenCodeArgs({ prompt: "p" });
     expect(fresh.slice(0, 3)).toEqual(["run", "--format", "json"]);
     expect(fresh).toContain("--auto");
     expect(fresh).not.toContain("--dir");
     expect(fresh).not.toContain("--dangerously-skip-permissions");
 
-    const resume = buildOpenCode2Args({ prompt: "p", sessionId: "ses_1" });
+    const resume = buildOpenCodeArgs({ prompt: "p", sessionId: "ses_1" });
     expect(resume.slice(resume.indexOf("-s"), resume.indexOf("-s") + 2)).toEqual(["-s", "ses_1"]);
     expect(resume).toContain("--auto");
     expect(resume).not.toContain("--dir");

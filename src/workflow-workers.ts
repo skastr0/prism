@@ -15,7 +15,7 @@ import { buildGrokArgs, runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { buildHermesArgs, runHermesWorkflowTask } from "./workflow-hermes-worker.js";
 import { mapDevinPermissionMode, runDevinWorkflowTask } from "./workflow-devin-worker.js";
 import { buildKimiArgs, runKimiWorkflowTask } from "./workflow-kimi-worker.js";
-import { buildOpenCode2Args, buildOpenCodeArgs, runOpenCode2WorkflowTask, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
+import { buildOpenCodeArgs, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import { buildOmpArgs, runOmpWorkflowTask } from "./workflow-omp-worker.js";
 import type {
   WorkflowTaskExecution,
@@ -204,17 +204,6 @@ const workflowWorkerAdapters = {
       repair: options.context?.repair,
     }),
   },
-  opencode2: {
-    id: "opencode2",
-    runTask: (task, options) => runOpenCode2WorkflowTask(task, {
-      cwd: options.cwd,
-      model: resolveWorkflowTaskModel(task, { worker: "opencode2", fallbackModel: options.model }),
-      resolvedPermission: options.resolvedPermission,
-      abortSignal: options.abortSignal,
-      reportProgress: options.context?.reportProgress,
-      repair: options.context?.repair,
-    }),
-  },
   omp: {
     id: "omp",
     runTask: (task, options) => {
@@ -301,10 +290,7 @@ export const assertWorkflowWorkerPermission = (
       });
       return;
     case "opencode":
-      buildOpenCodeArgs({ cwd: "/", prompt: "p", permission: mode });
-      return;
-    case "opencode2":
-      buildOpenCode2Args({ prompt: "p", permission: mode });
+      buildOpenCodeArgs({ prompt: "p", permission: mode });
       return;
     default:
       return;

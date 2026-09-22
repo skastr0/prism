@@ -332,9 +332,9 @@ shows what is happening while it happens.
 
 Transient worker failures retry with bounded attempts and backoff; config errors and cancellations never do. Each task pins one of seven permission modes, from `sandbox-read-only` to `full-access` — enforced per worker.
 
-### Twelve harness adapters
+### Eleven harness adapters
 
-`amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `cursor` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `opencode2` · `omp`
+`amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `cursor` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `opencode` · `omp`
 
 ### Curate once, author by role
 

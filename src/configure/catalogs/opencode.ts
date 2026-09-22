@@ -427,7 +427,7 @@ export const opencodeCatalog: HarnessCatalog = {
   refresh: {
     lastResearched: "2026-08-11",
     procedure: [
-      "Run `opencode --help` and `opencode run --help` (note --model, --agent, --format json, --dangerously-skip-permissions)",
+      "Run `opencode --version`, `opencode --help`, and `opencode run --help`; verify --model, --agent, --format json, --auto, and no --dir or --dangerously-skip-permissions",
       "Read ~/.config/opencode/opencode.json top-level keys (redact mcp.*.environment, provider.*.options.apiKey)",
       "Read ~/.config/opencode/tui.json",
       "Diff against https://opencode.ai/config.json Config properties",
@@ -436,6 +436,7 @@ export const opencodeCatalog: HarnessCatalog = {
       "Update fields[] and lastResearched",
     ],
     sources: [
+      "opencode --version",
       "opencode --help",
       "opencode run --help",
       "~/.config/opencode/opencode.json",
@@ -454,7 +455,7 @@ export const opencodeCatalog: HarnessCatalog = {
     "Rules use marker regions in AGENTS.md (and alternative CLAUDE.md when present).",
     "Compile owns agents/<name>.md, skills/<sop>/SKILL.md, and plugins/prism-generated-<plugin>/dist/server.mjs (native @opencode-ai/plugin API).",
     "Install-phase commands write commands/*.md directly; skills install to skills/.",
-    "Workflow worker: PRISM_WORKFLOW_OPENCODE_BIN or `opencode`; args `run --dir --agent --format json [--model] [--dangerously-skip-permissions]`.",
+    "Workflow worker uses PRISM_WORKFLOW_OPENCODE_BIN or `opencode`; args are `run --format json [--model] [--auto]`, with the project selected by process cwd.",
     "MCP env blocks and provider apiKey are secrets — never display raw.",
     "Live top-level keys observed: $schema, agent, mcp, permission, plugin, small_model.",
   ],

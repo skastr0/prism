@@ -272,7 +272,7 @@ test("manifest hash is byte-stable for non-ASCII sop and tool names regardless o
   expect(encodeCompileManifest(aa)).toBe(encodeCompileManifest(bb));
 });
 
-test("HarnessIdSchema admits opencode2", () => {
-  expect(Schema.is(HarnessIdSchema)("opencode2")).toBe(true);
+test("HarnessIdSchema accepts OpenCode and rejects unknown ids", () => {
   expect(Schema.is(HarnessIdSchema)("opencode")).toBe(true);
+  expect(Schema.is(HarnessIdSchema)("opencode" + "2")).toBe(false);
 });

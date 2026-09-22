@@ -88,23 +88,6 @@ test("--dry-run reports the plan and writes nothing", async () => {
   }
 });
 
-test("harnesses sharing a root collapse to one write instead of racing the same paths", async () => {
-  // OpenCode 1.x and 2 share ~/.config/opencode/ until they consolidate.
-  const root = await makeRoot();
-  const result = await installWorkflowSkills({
-    harnesses: ["opencode", "opencode2"],
-    roots: rootsAt(root),
-  });
-
-  const skillDirs = result.targets.map((target) => target.skillDir);
-  expect(new Set(skillDirs).size).toBe(skillDirs.length);
-  expect(result.targets.every((target) => target.harness === "opencode")).toBe(true);
-  expect(result.skipped).toEqual([
-    { harness: "opencode2", reason: `shares ${join(root, "skills", WORKFLOW_AUTHORING_SKILL_NAME)} with another harness` },
-    { harness: "opencode2", reason: `shares ${join(root, "skills", WORKFLOW_MODELS_SKILL_NAME)} with another harness` },
-  ]);
-});
-
 test("installs into every requested harness at its own root", async () => {
   const claudeRoot = await makeRoot();
   const codexRoot = await makeRoot();

@@ -54,7 +54,7 @@ prism workflow models --worker cursor --query opus
 | \`codex-cli\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-read-only\` \`sandbox-workspace-write\` |
 | \`cursor\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-workspace-write\` |
 | \`devin\` \`omp\` | \`legacy\` \`permissive\` \`restricted\` \`full-access\` |
-| \`amp-code\` \`antigravity-cli\` \`grok\` \`hermes\` \`kimi-code\` \`opencode\` \`opencode2\` | \`legacy\` \`permissive\` \`full-access\` |
+| \`amp-code\` \`antigravity-cli\` \`grok\` \`hermes\` \`kimi-code\` \`opencode\` | \`legacy\` \`permissive\` \`full-access\` |
 
 - Nothing is saved by this skill. Pins live in the workflow source; the harness default stays when you omit the field.
 

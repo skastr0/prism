@@ -23,7 +23,6 @@ export const HarnessIdSchema = Schema.Literals([
   "hermes",
   "kimi-code",
   "opencode",
-  "opencode2",
   "omp",
   "pi",
 ]);

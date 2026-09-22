@@ -339,8 +339,8 @@ describe("compile manifest writer", () => {
 
 });
 
-test("compile-manifest harness ids include opencode2", () => {
-  expect(isCompileManifestHarnessId("opencode2")).toBe(true);
+test("compile-manifest accepts OpenCode and rejects unknown harness ids", () => {
   expect(isCompileManifestHarnessId("opencode")).toBe(true);
+  expect(isCompileManifestHarnessId("opencode" + "2")).toBe(false);
   expect(isCompileManifestHarnessId("not-a-harness")).toBe(false);
 });

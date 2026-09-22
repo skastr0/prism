@@ -11,9 +11,14 @@ line. `0.4.0` was committed but never tagged or published.
 
 ## Unreleased
 
+### Changed
+
+- The `opencode` harness and workflow worker now target OpenCode v2, using `opencode run --format json [--auto]` from the task directory.
+
 ### Removed
 
 - Factory Droid and OpenClaw harness targets, lowerers, catalogs, fixtures, and documentation.
+- The separate `opencode2` id and OpenCode v1 worker path; manifests using the removed id fail validation.
 
 ## 0.7.1 - 2026-09-22
 

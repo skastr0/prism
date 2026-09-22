@@ -96,7 +96,6 @@ export type WorkflowWorkerId =
   | "hermes"
   | "kimi-code"
   | "opencode"
-  | "opencode2"
   | "omp";
 
 /**

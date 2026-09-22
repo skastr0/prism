@@ -233,6 +233,16 @@ test("validateSkill warns when body exceeds recommended length", async () => {
   expect(result.skillPath).toBe(skillPath);
 });
 
+test("readManifest rejects an unknown OpenCode target id", async () => {
+  const pluginRoot = await createPluginWithManifest("unknown-opencode-target", {
+    agents: ["opencode" + "2"],
+  });
+
+  await expectManifestValidationDetails(pluginRoot, [
+    "targets.agents contains unknown target '" + "opencode" + "2" + "'",
+  ]);
+});
+
 test("readManifest rejects unsupported direct agents and accepts supported Hermes hooks", async () => {
   const agentPluginRoot = await createPluginWithManifest("unsupported-hermes-agent", {
     agents: ["hermes"],

@@ -230,7 +230,7 @@ describe("workflow authoring primitives", () => {
     });
 
     const model = resolveWorkflowTaskModel(build);
-    const args = buildOpenCodeArgs({ cwd: "/tmp", model, prompt: build.prompt, permission: "legacy" });
+    const args = buildOpenCodeArgs({ model, prompt: build.prompt, permission: "legacy" });
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "crof/kimi-k2.6"]);
   });
 
@@ -485,7 +485,7 @@ describe("workflow authoring primitives", () => {
       worker: { worker: "opencode" },
     });
     const permission = resolveWorkflowTaskPermission(task, "sandbox-read-only");
-    expect(() => buildOpenCodeArgs({ cwd: "/tmp", prompt: task.prompt, permission }))
+    expect(() => buildOpenCodeArgs({ prompt: task.prompt, permission }))
       .toThrow(WorkflowPermissionError);
   });
 

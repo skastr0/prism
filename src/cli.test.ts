@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
 import { Database } from "bun:sqlite";
-import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,6 +9,7 @@ import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { deriveProjectKey } from "./project-key.js";
 import { WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore } from "./workflow-store.js";
 import { registerWorkflowStore } from "./workflow-store-registry.js";
+import { WORKFLOW_SKILL_REFERENCES } from "./workflow-cli/skill-references/index.js";
 import { effectImportPath } from "./testing/prism-sandbox.js";
 
 const tempRoots: string[] = [];
@@ -117,67 +118,22 @@ test("workflow run, update, and resume expose no runtime-limit flags and no cach
   }
 });
 
-test("workflow scaffold writes to ~/.prism/workflows by default and never instructs git add (PQ-176)", async () => {
+test("workflow scaffold is absent from help and rejected without writing files", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
-  const fakeHome = join(root, "home");
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-  await mkdir(fakeHome, { recursive: true });
-  // Copy the fixture rather than compiling the checked-in example in place —
-  // refresh writes a fresh prism.lock next to the plugin source, which would
-  // otherwise dirty the repo on every test run.
-  const pluginPath = join(root, "prism-harness-qa");
-  await cp(join(repoRoot, "examples", "prism-harness-qa"), pluginPath, { recursive: true });
-  // HOME redirects the harness roots (~/.claude, ~/.codex) into the sandbox —
-  // refresh must never touch the real machine's harness configs.
-  const env = { PRISM_HOME: prismHome, HOME: fakeHome };
+  const env = { PRISM_HOME: prismHome };
+  const help = await runCli(["workflow", "--help"], env, { cwd: root });
+  expect(help.exitCode).toBe(0);
+  expect(help.stdout).not.toContain("scaffold");
 
-  const refresh = await runCli(
-    ["refresh", pluginPath, "--harness", "claude-code,codex-cli", "--scope", "global"],
-    env,
-    { cwd: projectRoot },
-  );
-  expect(refresh.stderr).toBe("");
-  expect(refresh.exitCode).toBe(0);
+  const removed = await runCli(["workflow", "scaffold", "review"], env, { cwd: root });
+  expect(removed.exitCode).not.toBe(0);
+  expect(removed.stderr).toContain("unknown command 'scaffold'");
+  expect(await pathExists(prismHome)).toBe(false);
+  expect(await pathExists(join(root, "review.workflow.ts"))).toBe(false);
+});
 
-  const scaffold = await runCli(["workflow", "scaffold", "pq176-smoke"], env, { cwd: projectRoot });
-  expect(scaffold.exitCode).toBe(0);
-  expect(scaffold.stdout).not.toContain("git add");
-
-  const expectedPath = join(prismHome, "workflows", "pq176-smoke.workflow.ts");
-  expect(scaffold.stdout).toContain(expectedPath);
-  expect(await pathExists(expectedPath)).toBe(true);
-  // Never written under the project repo the doc warns against.
-  expect(await pathExists(join(projectRoot, "workflows", "pq176-smoke.workflow.ts"))).toBe(false);
-
-  const source = await readFile(expectedPath, "utf8");
-  expect(source).not.toContain("git add");
-  expect(source).toContain("worker: { worker:");
-
-  const validate = await runCli(["workflow", "validate", expectedPath], env, { cwd: projectRoot });
-  expect(validate.exitCode).toBe(0);
-  const summary = JSON.parse(validate.stdout) as { dynamic: boolean };
-  // The scaffold's `run:` fan-out is dynamic (tasks constructed at runtime),
-  // so validate's static summary reports no enumerable tasks — expected.
-  expect(summary.dynamic).toBe(true);
-
-  // The scaffold template names its tasks "a" and (when two workers are
-  // picked) "b" — supply both; an unused mock key is harmless.
-  const mockOutputPath = join(root, "mock-output.json");
-  await writeFile(
-    mockOutputPath,
-    JSON.stringify({ a: { worker: "x", summary: "ok" }, b: { worker: "x", summary: "ok" } }),
-  );
-  const run = await runCli(
-    ["workflow", "run", expectedPath, "--mock-output", mockOutputPath],
-    env,
-    { cwd: projectRoot },
-  );
-  expect(run.exitCode).toBe(0);
-}, 60_000);
-
-test("workflow refresh-harness-types writes a global cache and plugin-free scaffold works", async () => {
+test("workflow refresh-harness-types supports plugin-free skill discovery and direct DSL authoring", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
   const env = { PRISM_HOME: prismHome };
@@ -245,14 +201,6 @@ test("workflow refresh-harness-types writes a global cache and plugin-free scaff
   expect(offerJson.workers.length).toBeGreaterThan(0);
   expect(offerJson.workers.some((entry) => entry.sample.length > 0 || entry.worker.length > 0)).toBe(true);
 
-  const scaffold = await runCli(["workflow", "scaffold", "plugin-free"], env, { cwd: root });
-  expect(scaffold.exitCode).toBe(0);
-  expect(scaffold.stdout).toContain("workers:");
-  expect(scaffold.stdout).toContain(join(prismHome, "runtime", "workflow-authoring", "SKILL.md"));
-  const source = await readFile(join(prismHome, "workflows", "plugin-free.workflow.ts"), "utf8");
-  expect(source).not.toContain("agent:");
-  expect(source).not.toContain('from "prism/refs"');
-
   const workflowPath = join(root, "typed-harness.workflow.ts");
   await writeFile(workflowPath, `
 import { Schema } from "effect";
@@ -268,14 +216,6 @@ export const workflow = defineWorkflow({
   })],
 });
 `);
-  const scaffoldTypecheck = await runCli(
-    ["workflow", "typecheck", join(prismHome, "workflows", "plugin-free.workflow.ts")],
-    env,
-    { cwd: root },
-  );
-  expect(scaffoldTypecheck.exitCode).toBe(0);
-  expect(scaffoldTypecheck.stderr).toBe("");
-
   const typecheck = await runCli(["workflow", "typecheck", workflowPath], env, { cwd: root });
   expect(typecheck.exitCode).toBe(0);
   expect(typecheck.stderr).toBe("");
@@ -338,7 +278,7 @@ test("workflow skill rejects --harness/--all/--dry-run without --install", async
   expect(result.stderr + result.stdout).toContain("require --install");
 });
 
-test("named workers: install, list, export, and scaffold bind the generated ref", async () => {
+test("named workers: install, list, export, and reject duplicate names", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
   const env = { PRISM_HOME: prismHome };
@@ -380,32 +320,6 @@ test("named workers: install, list, export, and scaffold bind the generated ref"
   expect(exported.exitCode).toBe(0);
   expect(JSON.parse(exported.stdout)).toEqual(catalog);
 
-  // Explicit choice binds the named worker; the raw pin never appears in source.
-  const pinned = await runCli(["workflow", "scaffold", "review-flow", "--worker", "bulk", "--print"], env, { cwd: root });
-  expect(pinned.exitCode).toBe(0);
-  expect(pinned.stdout).toContain("worker: workers.bulk");
-  expect(pinned.stdout).not.toContain("catalogModel");
-  expect(pinned.stdout).not.toContain('"amp-code"');
-
-  // No --worker chooses the first curated entry; the name still survives as a ref.
-  const first = await runCli(["workflow", "scaffold", "first-flow", "--print"], env, { cwd: root });
-  expect(first.exitCode).toBe(0);
-  expect(first.stdout).toContain("worker: workers.reviewer");
-
-  // Unknown names fail with the installed list instead of silently scaffolding raw.
-  const unknown = await runCli(["workflow", "scaffold", "nope", "--worker", "ghost", "--print"], env, { cwd: root });
-  expect(unknown.exitCode).not.toBe(0);
-  expect(unknown.stderr + unknown.stdout).toContain("No installed named worker \"ghost\"");
-
-  // No catalog anywhere: raw scaffolding keeps its defaults, --worker is rejected.
-  const rawHome = { PRISM_HOME: join(root, "raw-home") };
-  const raw = await runCli(["workflow", "scaffold", "raw-flow", "--print"], rawHome, { cwd: root });
-  expect(raw.exitCode).toBe(0);
-  expect(raw.stdout).toContain('worker: { worker: "claude-code" }');
-  const rawWorker = await runCli(["workflow", "scaffold", "raw-worker", "--worker", "bulk", "--print"], rawHome, { cwd: root });
-  expect(rawWorker.exitCode).not.toBe(0);
-  expect(rawWorker.stderr + rawWorker.stdout).toContain("no catalog is installed");
-
   // Duplicate names across install files fail closed and install nothing.
   const duplicate = join(root, "duplicate.json");
   await writeFile(duplicate, JSON.stringify({
@@ -417,10 +331,10 @@ test("named workers: install, list, export, and scaffold bind the generated ref"
   expect(dup.stderr + dup.stdout).toContain("Duplicate named worker");
 }, 30_000);
 
-test("workflow skill --json exposes the installed named workers", async () => {
+test("workflow skill supplies a typed DSL example that runs both branches without a plugin", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
-  const env = { PRISM_HOME: prismHome };
+  const env = { PRISM_HOME: prismHome, REVIEW_COMMIT: "1a2b3c4d5e6f7890abcdef1234567890abcdef1234" };
 
   const sourcePath = join(root, "workers.json");
   await writeFile(sourcePath, JSON.stringify({
@@ -444,6 +358,70 @@ test("workflow skill --json exposes the installed named workers", async () => {
   expect(printed.exitCode).toBe(0);
   expect(printed.stdout).toContain("Installed named workers (current machine truth)");
   expect(printed.stdout).toContain("workers.reviewer");
+  expect(printed.stdout).not.toContain("scaffold");
+
+  // Execute the actual printed documentation, not a separately maintained fixture.
+  const source = /```ts\n([\s\S]*?)\n```/.exec(printed.stdout)?.[1];
+  expect(source).toBeDefined();
+  const workflowPath = join(prismHome, "workflows", "review-change.workflow.ts");
+  await mkdir(dirname(workflowPath), { recursive: true });
+  await writeFile(workflowPath, source!);
+  for (const command of ["typecheck", "validate"]) {
+    const result = await runCli(["workflow", command, workflowPath], env, { cwd: root });
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+  }
+
+  const mockPath = join(root, "mocks.json");
+  const mockJson = /```json\n([\s\S]*?)\n```/.exec(printed.stdout)?.[1];
+  expect(mockJson).toBeDefined();
+  await writeFile(mockPath, mockJson!);
+  const reviewed = await runCli([
+    "workflow", "run", workflowPath, "--mock-output", mockPath,
+    "--store", join(root, "reviewed.sqlite"),
+  ], env, { cwd: root });
+  expect(reviewed.stderr).toBe("");
+  expect(reviewed.exitCode).toBe(0);
+  const reviewedRun = JSON.parse(reviewed.stdout);
+  expect(reviewedRun.output).toEqual({ findings: ["src/parser.ts:42 rejects a valid empty input."] });
+  expect(reviewedRun.tasks.map((task: { id: string }) => task.id)).toEqual(["inspect", "review"]);
+
+  // Missing review mock makes an accidentally unconditional downstream task fail.
+  await writeFile(mockPath, JSON.stringify({ inspect: { files: [] } }));
+  const empty = await runCli([
+    "workflow", "run", workflowPath, "--mock-output", mockPath,
+    "--store", join(root, "empty.sqlite"),
+  ], env, { cwd: root });
+  expect(empty.stderr).toBe("");
+  expect(empty.exitCode).toBe(0);
+  const emptyRun = JSON.parse(empty.stdout);
+  expect(emptyRun.output).toEqual({ findings: [] });
+  expect(emptyRun.tasks.map((task: { id: string }) => task.id)).toEqual(["inspect"]);
+}, 60_000);
+
+test("workflow skill references are readable without installation or a source checkout", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const env = { PRISM_HOME: prismHome };
+  for (const reference of WORKFLOW_SKILL_REFERENCES) {
+    const chapter = reference.relativePath.replace(/^references\//, "").replace(/\.md$/, "");
+    const result = await runCli(["workflow", "skill", "--reference", chapter, "--json"], env, { cwd: root });
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(reference);
+  }
+  const plain = await runCli(["workflow", "skill", "--reference", "topology"], env, { cwd: root });
+  expect(plain.exitCode).toBe(0);
+  expect(plain.stdout).toContain("# Composition topologies");
+
+  const missing = await runCli(["workflow", "skill", "--reference", "missing"], env, { cwd: root });
+  expect(missing.exitCode).not.toBe(0);
+  expect(missing.stderr).toContain('Unknown workflow reference "missing"');
+  expect(missing.stderr).toContain("topology");
+  const conflict = await runCli(["workflow", "skill", "--reference", "topology", "--write"], env, { cwd: root });
+  expect(conflict.exitCode).not.toBe(0);
+  expect(conflict.stderr).toContain("--reference cannot be combined");
+  expect(await pathExists(prismHome)).toBe(false);
 }, 30_000);
 
 test("workflow typecheck accepts a workflow against shipped Prism declarations", async () => {

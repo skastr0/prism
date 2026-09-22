@@ -42,7 +42,7 @@ These imports resolve through a **generated tsconfig**, not your project's own m
 - `prism workflow workers install <files...>` validates portable catalogs and generates the **global** `prism/refs/workers` module. It needs no plugin or modelspace.
 - `prism workflow refresh-harness-types` discovers models from local harness caches/CLIs and writes a **global** cache at `~/.prism/state/harness-types/` (not project-keyed). That file path-maps `prism/harnesses` and augments `worker.model` so plugin-free workflows typecheck against what is actually installed.
 - `prism refresh <plugin-path>` is optional. When you have a plugin it writes the refs surface (`generated/{models,sops}.ts`) and path-maps `prism/refs`.
-- `prism workflow scaffold <name> --worker <catalog-name>` writes a starter using the named worker. Without `--worker`, it uses the first installed entry; without a catalog, it retains raw-harness scaffolding.
+- `prism workflow skill` teaches direct DSL authoring with the installed workers and project refs. Write the workflow for its goal; Prism does not generate workflow source or choose workers for you.
 - `prism workflow typecheck <file>` and `prism workflow validate <file>` use that generated environment automatically.
 
 Workflow **store and plugin refs** are project-scoped. Named workers and harness model types follow the machine (`PRISM_HOME`). From a directory that was never compiled, plugin refs will not resolve, but `prism/refs/workers` works independently. Discover what is available with:
@@ -51,6 +51,7 @@ Workflow **store and plugin refs** are project-scoped. Named workers and harness
 prism workflow workers                # installed names, descriptions, configurations
 prism workflow skill                  # authoring guide + current workers + project SOP refs
 prism workflow skill --install        # install discovery skills into detected harnesses
+prism workflow skill --reference topology # read graph composition guidance without installation
 prism workflow skill --models         # deliberate raw harness/model selection
 prism workflow refresh-harness-types  # optional: refresh machine-wide model unions
 prism workflow models --offer         # raw harness inventory and samples
@@ -87,7 +88,7 @@ These are examples, not built-in workers. Multiple names can use the same harnes
 prism workflow workers install ./workers.json
 prism workflow workers
 prism workflow workers export > ./exported-workers.json
-prism workflow scaffold review --worker reviewer
+prism workflow skill
 ```
 
 **Install replaces the entire installed catalog.** To combine files, pass them together: `prism workflow workers install ./base.json ./team.json`. Unique names merge in file order; duplicates fail before changing the previous install. Export emits the same portable JSON shape and adds no machine paths or authentication data. Never put secrets in catalog values. Installing does not install or authenticate harnesses, verify model entitlement, or run inference.

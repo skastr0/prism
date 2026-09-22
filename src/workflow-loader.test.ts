@@ -393,7 +393,7 @@ export default defineWorkflow({ name: "explicit-profile-missing-target", tasks: 
 `;
 };
 
-const scaffoldLikeDynamicWorkflowSource = () => {
+const dynamicFanOutWorkflowSource = () => {
   return `
 import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
@@ -405,12 +405,12 @@ const probe = (id: string, worker: "claude-code" | "grok") =>
     id,
     prompt: \`Run under \${worker}.\`,
     output: Result,
-    cacheKey: \`scaffold-\${worker}-v1\`,
+    cacheKey: \`fan-out-\${worker}-v1\`,
     worker: { worker },
   });
 
 export const workflow = defineWorkflow({
-  name: "scaffold-like",
+  name: "dynamic-fan-out",
   run: (wf) =>
     Effect.gen(function* () {
       const results = yield* Effect.all(
@@ -654,7 +654,7 @@ export default defineWorkflow({
   test("validate annotates a dynamic workflow with statically discoverable worker ids (WDX-009)", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
-    await writeFile(file, scaffoldLikeDynamicWorkflowSource());
+    await writeFile(file, dynamicFanOutWorkflowSource());
 
     const summary = await validateWorkflowFile(file);
 

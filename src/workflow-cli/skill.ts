@@ -37,7 +37,7 @@ export interface WorkflowSkillContext {
   };
 }
 
-const workflowSkillBody = (): string => `Workflows are the flagship. A \`.workflow.ts\` file dispatches real harness CLIs (\`cursor\`, \`amp-code\`, \`claude-code\`, …). A Prism plugin is an optional add-on for compiled \`sops.*\` phase bindings.
+const workflowSkillBody = (): string => `Write a \`.workflow.ts\` directly with the Prism DSL. It dispatches real harness CLIs through curated workers; a plugin is optional and adds compiled \`sops.*\` phase bindings.
 
 Live runs spend real tokens. Rehearse with \`typecheck\`, \`validate\`, and \`--mock-output\`.
 
@@ -45,44 +45,65 @@ Live runs spend real tokens. Rehearse with \`typecheck\`, \`validate\`, and \`--
 
 Installed named workers and compiled project refs change independently of any skill copy. Before authoring, run \`prism workflow skill\` — it prints this guide plus the machine's current worker catalog and this project's refs. A static installed copy of this skill is a starting point, never the catalog.
 
-## First moves
+## Author from the goal
+
+1. Define the requested outcome, its inputs, and what evidence will establish success. Choose tasks and dependencies for that goal.
+2. Choose installed workers by the descriptions in the current catalog. Use only the listed names; no worker name is built in. Inspect relevant SOP contracts with \`prism workflow catalog --sop <name>\` when compiled refs are present.
+3. Write the workflow directly in \`<PRISM_HOME>/workflows/<name>.workflow.ts\` (default \`~/.prism/workflows/\`), outside the target repository. Run Prism from the target repo root; use absolute paths when tasks address another repo. Export \`workflow = defineWorkflow(...)\`.
+4. Give each task a stable, unique \`id\`, a goal-specific \`prompt\`, an Effect Schema \`output\`, and its chosen \`worker\`. Use \`run: (wf) => Effect.gen(...)\` for data dependencies, branching, loops, and parallelism. A static \`tasks: [defineTask(...)]\` list is enough for independent tasks.
+5. Include changing inputs in the prompt: commit SHA, file contents, upstream values the task actually needs. Cache reuse cannot detect changes hidden behind phrases like “the current diff.” Names and descriptions are not cache namespaces.
+6. Typecheck, inspect validation, then mock each relevant branch before spending tokens. Fix the workflow itself when a check fails.
 
 \`\`\`bash
-prism workflow skill                                # this guide + current catalog + project refs
-prism workflow workers                              # installed named workers (names, descriptions, configs)
-prism workflow scaffold hello --worker <name>       # omit --worker to use the first curated entry
-prism workflow typecheck ~/.prism/workflows/hello.workflow.ts
-prism workflow validate ~/.prism/workflows/hello.workflow.ts --table
-prism workflow run ~/.prism/workflows/hello.workflow.ts --mock-output mocks.json
+prism workflow skill              # current catalog + project refs + this guide
+# Write your goal-specific .workflow.ts with your file editor, then:
+prism workflow typecheck ~/.prism/workflows/review-change.workflow.ts
+prism workflow validate ~/.prism/workflows/review-change.workflow.ts --table
+prism workflow run ~/.prism/workflows/review-change.workflow.ts --mock-output mocks.json
 \`\`\`
 
 ## Reference chapters
 
-Read the one you need before you guess at semantics. They sit next to this file under \`references/\`.
+Read the one you need before you guess at semantics. Installed copies include these files under \`references/\`. From any CLI installation, print one directly with \`prism workflow skill --reference <chapter>\`; no source checkout or skill installation is required.
 
-| Chapter | Read it when |
+| Chapter / \`--reference\` value | Read it when |
 |---|---|
-| [references/topology.md](references/topology.md) | Choosing a shape — council → fusion, pipeline, build → QA gate → review → synthesize, adversarial verify, loop-until, mock-first. Also side-effecting tasks and multi-worker checkouts. |
-| [references/cache-and-finish.md](references/cache-and-finish.md) | Setting \`cacheKey\`, reasoning about resume, or adding \`finish\` criteria (deterministic + judge, \`maxRepairs\`). |
-| [references/observability.md](references/observability.md) | Reading a run — \`runs summary\` / \`events\` / \`trace\`, the machine-wide \`--all\` view, and stop → edit → resume. |
-| [references/scheduling.md](references/scheduling.md) | Putting a workflow on a cron — the declare / install / serve gates and what each one does not do. |
-| [references/jev.md](references/jev.md) | Batched classification or scoring over one shared state, without a worker. |
+| [topology](references/topology.md) | Choosing a graph: pipeline, fan-out, loops, gates, or concurrent writers. |
+| [cache-and-finish](references/cache-and-finish.md) | Cache identity, resume, deterministic checks, judges, and repairs. |
+| [observability](references/observability.md) | Run evidence, waiting, cancellation, and stop → edit → resume. |
+| [scheduling](references/scheduling.md) | Cron declaration, installation, and scheduler operation. |
+| [jev](references/jev.md) | Typed classification or scoring over shared state without a worker. |
 
-## Authoring surface
+## DSL: typed data flows between tasks
+
+This example inspects a specific commit, then reviews only its changed files. \`workers.reviewer\` is an example ref: substitute a suitable name from the current catalog. Set \`REVIEW_COMMIT\` to the full commit SHA before typecheck, validate, or run. The workflow needs no plugin.
 
 \`\`\`ts
-import { Schema } from "effect";
+import { Config, Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 import { workers } from "prism/refs/workers";
 
 export const workflow = defineWorkflow({
-  name: "hello",
-  tasks: [defineTask({
-    id: "review",
-    prompt: "Return a one-line summary in \\"summary\\".",
-    output: Schema.Struct({ summary: Schema.String }),
-    worker: workers.reviewer, // example ref — pick an installed name from \`prism workflow workers\`
-  })],
+  name: "review-change",
+  run: (wf) => Effect.gen(function* () {
+    const revision = yield* Config.NonEmptyString("REVIEW_COMMIT");
+    const inspected = yield* wf.runTask(defineTask({
+      id: "inspect",
+      prompt: "List the files changed by commit " + revision + ". Do not edit files.",
+      output: Schema.Struct({ files: Schema.Array(Schema.String) }),
+      worker: workers.reviewer,
+    }));
+    if (inspected.files.length === 0) return { findings: [] };
+
+    return yield* wf.runTask(defineTask({
+      id: "review",
+      prompt: "Find correctness regressions in commit " + revision
+        + " for these files: " + JSON.stringify(inspected.files)
+        + ". Return concrete findings with file and line evidence; do not edit files.",
+      output: Schema.Struct({ findings: Schema.Array(Schema.String) }),
+      worker: workers.reviewer,
+    }));
+  }),
 });
 \`\`\`
 
@@ -94,11 +115,22 @@ Raw configurations remain available as the escape hatch:
 worker: { worker: "cursor" }  // omit model → harness default. Pin only slugs from \`prism workflow models\`.
 \`\`\`
 
-A task is \`id\`, \`prompt\`, an Effect Schema \`output\`, and an optional \`worker\`, \`finish\`, \`phase\`, and \`cacheKey\`. The dynamic form takes \`run: (wf) => Effect.gen(...)\` and threads typed outputs between tasks with \`yield* wf.runTask(task)\` — use it whenever the graph branches, loops, or fans out. There is no \`agent\` field on a task.
+A task is \`id\`, \`prompt\`, an Effect Schema \`output\`, and optional \`worker\`, \`finish\`, \`phase\`, and \`cacheKey\`. \`yield* wf.runTask(task)\` returns the decoded output, not a result wrapper. For independent tasks, \`yield* Effect.all([wf.runTask(a), wf.runTask(b)], { concurrency: 2 })\` runs both concurrently. Use ordinary \`if\` / \`for\` for branches and loops; give repeated tasks distinct ids. There is no \`agent\` field on a task and no session continuation implied by reusing a named worker.
+
+\`mocks.json\` maps task ids to schema-valid outputs. For the example:
+
+\`\`\`json
+{
+  "inspect": { "files": ["src/parser.ts"] },
+  "review": { "findings": ["src/parser.ts:42 rejects a valid empty input."] }
+}
+\`\`\`
+
+Also test the no-files branch with \`{ "inspect": { "files": [] } }\`. Use separate \`--store <path>\` ledgers for distinct mock cases so a cached output cannot mask a branch. Mock runs exercise the graph and schemas, not the live harness or the truth of a finding. Run without \`--mock-output\` only when ready for real inference.
 
 ## Choosing a worker
 
-Pick a named worker by its description — what it is for, its strengths, its limits — and state the goal in the prompt. Descriptions guide selection; they are never task instructions. Do not copy a worker description into a prompt, and do not re-derive harness or model choices the catalog already made. Multiple names may share one harness.
+Pick a named worker by its description — what it is for, its strengths, its limits — and state the goal in the prompt. List the current names and configurations with \`prism workflow workers\`. Descriptions guide selection; they are never task instructions. Do not copy a worker description into a prompt, and do not re-derive harness or model choices the catalog already made. Multiple names may share one harness.
 
 ## Raw configurations (escape hatch)
 
@@ -153,7 +185,6 @@ A workflow may declare \`schedule: { cron, timezone, overlap, missedRuns }\`. **
 | \`workers export\` | Print the installed catalog as portable JSON (nothing is written to the source files) |
 | \`models\` | Live harness slugs for raw pins. \`--offer\` samples; you combine pins explicitly |
 | \`catalog\` | Workers + slug counts. \`--query\` searches models when no plugin |
-| \`scaffold <name>\` | Starter in \`~/.prism/workflows/\`; \`--worker <name>\` binds an installed named worker |
 | \`refresh-harness-types\` | Write \`prism/harnesses\` unions from installed CLIs |
 | \`typecheck <file>\` | Generated tsconfig + shipped declarations |
 | \`validate <file>\` | Every probed pin: worker, model, catalog, effort, permission |
@@ -162,18 +193,18 @@ A workflow may declare \`schedule: { cron, timezone, overlap, missedRuns }\`. **
 | \`cache\` | Persisted task cache entries |
 | \`schedule\` | \`install\` \`list\` \`show\` \`enable\` \`disable\` \`remove\` |
 | \`scheduler\` | \`serve\` \`reconcile\` \`install-service\` \`uninstall-service\` \`status\` |
-| \`skill\` | Print this guide with current workers + project refs. \`--models\` prints raw-pin discovery. \`--write\` / \`--install\` place the static embedded copy |
+| \`skill\` | Print this guide with current workers + project refs. \`--reference <chapter>\` prints a chapter; \`--models\` prints raw-pin discovery. \`--write\` / \`--install\` place the static embedded copy |
 | \`refs\` | Optional compiled plugin refs |
 
 Workflow files live in \`~/.prism/workflows/\`, never inside the repo they drive.
 
 ## Validate before you spend
 
-\`prism workflow validate <file> --table\` lists every task the \`run:\` graph dispatches, including Amp catalog/effort. Illegal Amp efforts and illegal \`worker.permission\` values fail closed with the same remediation as run.
+\`prism workflow validate <file> --table\` reports the tasks and pins its probe can discover, including Amp catalog/effort. Data-dependent branches still need mock runs with inputs that reach them; validation is not proof of every path. Illegal Amp efforts and illegal \`worker.permission\` values fail closed with the same remediation as run.
 
 ## Full DSL
 
-This skill covers the flagship path: named workers, raw pins, scaffold, validate, run — no plugin required. The complete field reference is in the Prism repo: \`docs/workflows.md\` (tasks, finish criteria, cache, ledger, workers, Jev, named workers) and \`docs/workflow-scheduling.md\` (cron, cursor, overlap, the scheduler).`;
+Author directly with named workers or raw pins, then typecheck, validate, and run — no plugin required. For depth without a source checkout, use the reference chapters above and \`prism workflow <command> --help\`. The complete field reference also lives in the Prism repo: \`docs/workflows.md\` and \`docs/workflow-scheduling.md\`.`;
 
 /** The static embedded skill: body plus the fresh-context instruction. */
 export const renderWorkflowAuthoringSkillMarkdown = (): string => `---

@@ -9,8 +9,6 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
-  scaffoldNamedWorkerSource,
-  scaffoldWorkflowSource,
   searchCatalog,
   WORKFLOW_WORKERS,
   type GeneratedSurface,
@@ -148,66 +146,6 @@ describe("workflowWorker capability-bit coverage assertion (fixture)", () => {
       .map(([harness]) => harness as FixtureWorkflowWorkerHarnessId);
     expect(flagged).not.toContain("delta");
     expect((flagged as string[]).sort()).toEqual(["alpha", "beta", "gamma"].sort());
-  });
-});
-
-describe("scaffoldWorkflowSource", () => {
-  test("defaults to claude-code and does not import prism/refs or name an agent", () => {
-    const src = scaffoldWorkflowSource("bare");
-    expect(src).toContain('name: "bare"');
-    expect(src).toContain('worker: { worker: "claude-code" }');
-    expect(src).toContain("refresh-harness-types");
-    expect(src).toContain("workflow models");
-    expect(src).toContain("workflow skill");
-    expect(src).not.toContain('from "prism/refs"');
-    expect(src).not.toContain("agent:");
-  });
-
-  test("pins a typed worker.model per task", () => {
-    const src = scaffoldWorkflowSource("typed", [
-      { worker: "cursor", model: "composer-2.5-fast" },
-      { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
-    ]);
-    expect(src).toContain('worker: { worker: "cursor", model: "composer-2.5-fast" }');
-    expect(src).toContain('worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" }');
-    expect(src).not.toContain("const probe");
-  });
-
-  test("never instructs git add — workflows live outside the project repo", () => {
-    expect(scaffoldWorkflowSource("my-flow")).not.toContain("git add");
-  });
-
-  test("degrades to a single task when only one worker is available", () => {
-    const singleWorkerSrc = scaffoldWorkflowSource("solo-flow", [{ worker: "claude-code" }]);
-    expect(singleWorkerSrc).toContain('worker: { worker: "claude-code" }');
-    expect(singleWorkerSrc).not.toContain("Effect.all");
-    expect(singleWorkerSrc).not.toContain("grok");
-  });
-});
-
-describe("scaffoldNamedWorkerSource", () => {
-  test("binds the generated workers ref; no inline harness, model, effort, or description", () => {
-    const src = scaffoldNamedWorkerSource("review-flow", ["workers.reviewer"]);
-    expect(src).toContain('import { workers } from "prism/refs/workers";');
-    expect(src).toContain("worker: workers.reviewer");
-    expect(src).not.toContain('"amp-code"');
-    expect(src).not.toContain("catalogModel");
-    expect(src).not.toContain("effort:");
-    expect(src).not.toContain("description");
-    expect(src).not.toContain("git add");
-  });
-
-  test("keys the cache on the task id, never the curated worker name", () => {
-    const src = scaffoldNamedWorkerSource("review-flow", ["workers.reviewer"]);
-    expect(src).toContain('cacheKey: "review-flow-a-v1"');
-    expect(src).not.toContain("reviewer-v1");
-  });
-
-  test("quotes bracket refs and fans out two workers with Effect.all", () => {
-    const src = scaffoldNamedWorkerSource("duo", ['workers["cheap-reviewer"]', "workers.deep"]);
-    expect(src).toContain('worker: workers["cheap-reviewer"]');
-    expect(src).toContain("worker: workers.deep");
-    expect(src).toContain("Effect.all");
   });
 });
 

@@ -64,8 +64,7 @@ export const prismBackupDir = (prismHome = resolvePrismHome()): string =>
  * Workflows are ephemeral orchestration instruments that reference their
  * target repos by absolute path, so they belong in the home root, never
  * inside (or `git add`-ed into) the project they operate on — see the
- * "Where workflow files live" section of the prism workflow-authoring skill.
- * `prism workflow scaffold` writes here by default (PQ-176).
+ * "Author from the goal" section of the prism workflow-authoring skill.
  */
 export const prismWorkflowsSourceDir = (prismHome = resolvePrismHome()): string =>
   join(prismHome, "workflows");

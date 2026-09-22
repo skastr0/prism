@@ -10,7 +10,6 @@ import {
   filterWorkerModelCatalog,
   modelFamilyId,
   parseWorkflowWorkerId,
-  pickPluginFreeScaffoldPins,
   projectWorkerModelCatalog,
   sampleWorkerModels,
   renderWorkerModelCatalogHuman,
@@ -121,20 +120,6 @@ describe("renderWorkerModelCatalogHuman", () => {
     );
     expect(out).toContain("gemini-3.8-flash");
     expect(out).toContain("gemini-3.8-flash-low");
-  });
-});
-
-describe("pickPluginFreeScaffoldPins", () => {
-  test("omits invented slugs and orders discoverable workers first", () => {
-    const pins = pickPluginFreeScaffoldPins(snapshot);
-    expect(pins).toEqual([
-      { worker: "cursor" },
-      { worker: "amp-code" },
-    ]);
-  });
-
-  test("falls back to claude-code when no snapshot", () => {
-    expect(pickPluginFreeScaffoldPins(undefined)).toEqual([{ worker: "claude-code" }]);
   });
 });
 

@@ -36,6 +36,12 @@ test("embedded workflow skill teaches the named-worker path", () => {
   expect(markdown).toContain("prism/refs/sops");
   expect(markdown).toContain("catalog --sop");
   expect(markdown).not.toContain("orbit");
+  expect(markdown).toContain("Write the workflow directly");
+  expect(markdown).toContain("Effect.gen");
+  expect(markdown).toContain("--reference <chapter>");
+  for (const file of [markdown, renderWorkflowModelsSkillMarkdown(), ...WORKFLOW_SKILL_REFERENCES.map((ref) => ref.markdown)]) {
+    expect(file).not.toMatch(/scaffold/i);
+  }
 });
 
 test("the printed skill embeds the installed catalog and project refs", () => {

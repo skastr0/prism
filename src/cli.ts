@@ -91,21 +91,18 @@ import {
   renderRefDetailHuman,
   renderRefNotFoundMessage,
   renderRefsStatus,
-  scaffoldNamedWorkerSource,
-  scaffoldWorkflowSource,
   searchCatalog,
   WORKFLOW_WORKERS,
   workflowRefsStatus,
 } from "./workflow-catalog.js";
 import {
   buildWorkflowModelCatalog,
-  loadHarnessTypesSnapshot,
   parseWorkflowWorkerId,
-  pickPluginFreeScaffoldPins,
   renderWorkerModelCatalogHuman,
   renderWorkerModelCountsHuman,
 } from "./workflow-models.js";
 import { renderWorkflowSkillMarkdown, writeWorkflowAuthoringSkill, type WorkflowSkillContext } from "./workflow-cli/skill.js";
+import { WORKFLOW_SKILL_REFERENCES } from "./workflow-cli/skill-references/index.js";
 import { renderWorkflowModelsSkillMarkdown, writeWorkflowModelsSkill } from "./workflow-cli/models-skill.js";
 import { installWorkflowSkills, renderWorkflowSkillInstallHuman } from "./workflow-cli/skill-install.js";
 import {
@@ -115,10 +112,7 @@ import {
   projectNamedWorkerRefs,
 } from "./workflow-cli/workers-cli.js";
 import { buildWorkflowModelOffer, renderWorkflowModelOfferHuman } from "./workflow-cli/model-offer.js";
-import {
-  loadWorkflowWorkerCatalog,
-  namedWorkerRef,
-} from "./workflow-named-workers.js";
+import { loadWorkflowWorkerCatalog } from "./workflow-named-workers.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
 import { runConfigureTui } from "./configure/index.js";
@@ -432,7 +426,7 @@ workflow
               "That catalog flag needs compiled plugin refs (optional).",
               `Missing: ${result.surfaceDir}`,
               "List live slugs: `prism workflow models --worker cursor --query opus`",
-              "Scaffold: `prism workflow scaffold hello`",
+              "Author workflows: `prism workflow skill`",
               "Compile refs only if you want sops.*: `prism refresh <plugin-path>`",
             ].join("\n"),
           );
@@ -528,6 +522,7 @@ workflow
   .option("--write", "Write the skill (SKILL.md + references) under PRISM_HOME/runtime/workflow-authoring/")
   .option("--install", "Install the embedded workflow skills into detected harness skill directories")
   .option("--models", "Print the raw model-pin discovery skill")
+  .option("--reference <chapter>", "Print an authoring reference: topology, cache-and-finish, observability, scheduling, jev")
   .option("--harness <ids>", "Comma-separated harness ids for --install")
   .option("--all", "Install into every supported harness (with --install)")
   .option("--dry-run", "Preview --install without writing")
@@ -536,12 +531,26 @@ workflow
     readonly write?: boolean;
     readonly install?: boolean;
     readonly models?: boolean;
+    readonly reference?: string;
     readonly harness?: string;
     readonly all?: boolean;
     readonly dryRun?: boolean;
     readonly json?: boolean;
   }) => {
     try {
+      if (options.reference !== undefined) {
+        if (options.write || options.install || options.models || options.harness || options.all || options.dryRun) {
+          throw new CliUsageError("--reference cannot be combined with --write, --install, --models, --harness, --all, or --dry-run");
+        }
+        const reference = WORKFLOW_SKILL_REFERENCES.find(
+          (file) => file.relativePath === `references/${options.reference}.md`,
+        );
+        if (reference === undefined) {
+          throw new CliUsageError(`Unknown workflow reference ${JSON.stringify(options.reference)}. Available: ${WORKFLOW_SKILL_REFERENCES.map((file) => basename(file.relativePath, ".md")).join(", ")}`);
+        }
+        await writeStdout(`${options.json ? JSON.stringify(reference, null, 2) : reference.markdown}\n`);
+        return;
+      }
       if (options.install === true) {
         const harnesses = resolveRequestedHarnesses(options, { allowInstalledDefault: true });
         const result = await installWorkflowSkills({ harnesses, dryRun: options.dryRun === true });
@@ -685,68 +694,6 @@ workflow
     } catch (error) {
       printCliError(error, "Workflow refs failed");
       exitWith(EXIT_CODES.domainFailure);
-    }
-  });
-
-workflow
-  .command("scaffold <name>")
-  .description("Write a validating starter workflow (installed named worker when the catalog has one, raw harness worker otherwise)")
-  .option("--print", "Print to stdout instead of writing a file")
-  .option("--worker <name>", "Bind the task to an installed named worker by catalog name")
-  .option(
-    "--out <path>",
-    "Output path (default: ~/.prism/workflows/<name>.workflow.ts — never the project repo; workflows reference their target repo by absolute path and are never git-added)",
-  )
-  .action(async (name: string, options: { readonly print?: boolean; readonly worker?: string; readonly out?: string }) => {
-    try {
-      const prismHome = resolvePrismHome();
-      const catalog = await Effect.runPromise(loadWorkflowWorkerCatalog(prismHome));
-      let source: string;
-      let workersUsed: string[];
-      if (catalog.workers.length > 0) {
-        const chosen = options.worker === undefined
-          ? catalog.workers[0]!
-          : catalog.workers.find((entry) => entry.name === options.worker);
-        if (chosen === undefined) {
-          throw new CliUsageError(
-            [
-              `No installed named worker ${JSON.stringify(options.worker)}.`,
-              `Installed: ${catalog.workers.map((entry) => entry.name).join(", ")}`,
-              "List details: `prism workflow workers`",
-            ].join("\n"),
-          );
-        }
-        source = scaffoldNamedWorkerSource(name, [namedWorkerRef(chosen.name)]);
-        workersUsed = [chosen.name];
-      } else {
-        if (options.worker !== undefined) {
-          throw new CliUsageError(
-            [
-              `--worker ${JSON.stringify(options.worker)} needs an installed named worker, but no catalog is installed.`,
-              "Install one: `prism workflow workers install ./workers.json`",
-              "Raw harness workers remain available: rerun scaffold without --worker.",
-            ].join("\n"),
-          );
-        }
-        const pins = pickPluginFreeScaffoldPins(loadHarnessTypesSnapshot(prismHome));
-        source = scaffoldWorkflowSource(name, pins);
-        workersUsed = pins.map((pin) => pin.worker);
-      }
-      if (options.print === true) {
-        await writeStdout(source);
-        return;
-      }
-      const skill = await writeWorkflowAuthoringSkill(prismHome);
-      await writeWorkflowModelsSkill(prismHome);
-      const outPath = options.out ?? join(prismWorkflowsSourceDir(prismHome), `${name}.workflow.ts`);
-      await ensureDir(dirname(outPath));
-      await writeFile(outPath, source, "utf8");
-      await writeStdout(
-        `Wrote ${outPath} (workers: ${workersUsed.join(", ")}).\nSkill: ${skill.path}\nNext: prism workflow validate ${outPath}\n`,
-      );
-    } catch (error) {
-      printCliError(error, "Workflow scaffold failed");
-      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 

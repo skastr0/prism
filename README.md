@@ -350,14 +350,15 @@ The [named-worker guide](docs/workflows.md#curated-named-workers) includes the J
 prism workflow workers install ./workers.json    # explicitly replace the installed catalog
 prism workflow skill --install                  # install discovery skills into detected harnesses
 prism workflow skill                            # DSL + current workers + project SOP refs
-prism workflow scaffold my-first --worker reviewer
+# Write ~/.prism/workflows/my-first.workflow.ts directly for your goal, then:
+prism workflow typecheck ~/.prism/workflows/my-first.workflow.ts
 prism workflow validate ~/.prism/workflows/my-first.workflow.ts
-prism workflow run ~/.prism/workflows/my-first.workflow.ts
+prism workflow run ~/.prism/workflows/my-first.workflow.ts --mock-output mocks.json
 ```
 
-`prism workflow skill --install` writes the authoring guide and reference chapters plus a raw-model discovery skill into each detected harness. Installed copies direct agents to `prism workflow skill` for fresh catalog and project context. `--write` materializes the static skills under `PRISM_HOME` instead. `prism workflow workers export` prints portable JSON for backup or another machine; installation merges unique names from all supplied files and rejects duplicates.
+`prism workflow skill --install` writes the authoring guide and reference chapters plus a raw-model discovery skill into each detected harness. Installed copies direct agents to `prism workflow skill` for fresh catalog and project context. Read a chapter without installing anything with `prism workflow skill --reference topology` (also `cache-and-finish`, `observability`, `scheduling`, `jev`). `--write` materializes the static skills under `PRISM_HOME` instead. `prism workflow workers export` prints portable JSON for backup or another machine; installation merges unique names from all supplied files and rejects duplicates.
 
-A plugin is optional. Named workers work without compiled SOPs or modelspaces. Without a catalog, `scaffold` retains raw-harness scaffolding. For deliberate raw choices, use `prism workflow skill --models`, `refresh-harness-types`, and `models --offer`; harness model unions remain machine-wide. A live run **dispatches a real harness CLI with your local install and auth—it spends real tokens**. Rehearse with `--mock-output` and `typecheck`/`validate` before running it live.
+A plugin is optional. Named workers work without compiled SOPs or modelspaces. The skill teaches direct DSL authoring: define the goal, typed outputs, and dependencies, then choose workers by description. Without a catalog, raw configurations remain available. For deliberate raw choices, use `prism workflow skill --models`, `refresh-harness-types`, and `models --offer`; harness model unions remain machine-wide. A live run **dispatches a real harness CLI with your local install and auth—it spends real tokens**. Rehearse with `--mock-output` and `typecheck`/`validate` before running it live.
 
 ## Stateless tools — no daemon, no MCP
 

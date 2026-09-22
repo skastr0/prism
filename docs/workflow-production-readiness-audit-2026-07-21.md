@@ -1,5 +1,10 @@
 # Workflow production-readiness audit — 2026-07-21
 
+Historical audit, not current authoring instructions. Workflow scaffolding has
+since been removed, including its source templates and automatic worker selection.
+Use `prism workflow skill` and author directly with the DSL; references below
+to the retired command describe the behavior at audit time.
+
 This document is the release disposition for the workflow failures recovered
 from Quasar across multiple independent Prism dogfood sessions. It is not a list
 of anecdotes. Every row must end in one of four states before release:

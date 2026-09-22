@@ -23,6 +23,8 @@ import type {
 import { expandPath, readFile } from "./fs.js";
 import {
   AmpOrbSkillError,
+  ampOrbRetainedBytes,
+  assertAmpOrbCheckout,
   assertAmpOrbSkillPlan,
   listForeignAmpOrbSkills,
 } from "./amp-orb-skills.js";
@@ -686,11 +688,16 @@ const addSkillsForHarness = async (options: {
     if (ownedSkillDirs.size + foreign.length > 200) {
       throw new AmpOrbSkillError(
         `amp-orb checkout already has ${foreign.length} other skills (${foreign.join(", ")}). ` +
-          `Adding ${ownedSkillDirs.size} would pass Amp's 200-skill load cap. Remove or rename before refresh.`,
+          `Adding ${ownedSkillDirs.size} would exceed Amp's 200-skill load cap. Remove or rename before refresh.`,
       );
     }
+    await assertAmpOrbCheckout(targetDir);
     await assertAmpOrbSkillPlan({
       root: targetDir,
+      existingRepoBytes: await ampOrbRetainedBytes(
+        targetDir,
+        new Set(selectedFiles.map((file) => file.relativePath)),
+      ),
       files: selectedFiles.map((file) => ({
         relativePath: file.relativePath,
         sourcePath: file.sourcePath,

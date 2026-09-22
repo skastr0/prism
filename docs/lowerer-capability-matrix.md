@@ -70,7 +70,7 @@ The `mcpConfig` surface is `unsupported` on every harness.
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` (live dispatch verified, smoke fixture pending) |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | CLI runtime + skill inject | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
-| Amp Orb | unsupported | unsupported | flat text skills in an explicit checkout | unsupported | unsupported | none | `compile-verified` |
+| Amp Orb | unsupported | unsupported | flat text skills in an explicit checkout | unsupported | unsupported | none | `unsupported` (install-only; no compile lowerer) |
 | Cursor | `native-plugin-bundle` for commands, agents, hooks | plugin subagents | direct skills + plugin sop skills | CLI runtime | plugin command hooks | none for tools | `compile-verified` (workflow worker live-dispatchable) |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | CLI runtime | plugin hooks | none for generated bundle | `compile-verified` |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |

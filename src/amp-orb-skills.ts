@@ -9,7 +9,7 @@
  */
 
 import { basename, join, relative, resolve, sep } from "node:path";
-import { listDirRecursive, readFile } from "./fs.js";
+import { exists, listDirRecursive, readFile } from "./fs.js";
 
 export const AMP_ORB_SKILL_LIMITS = {
   maxSkills: 200,
@@ -32,7 +32,7 @@ export interface AmpOrbSkillFile {
   readonly sourcePath: string;
 }
 
-const TEXT_CHARSET = /^[\t\n\r\x20-\x7e]*$/u;
+const DISALLOWED_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/u;
 
 const segmentsIncludeNestedSkill = (files: ReadonlyArray<AmpOrbSkillFile>): boolean =>
   files.some((file) => file.relativePath.split("/").length > 2);
@@ -44,7 +44,7 @@ const skillDirectoryName = (relativePath: string): string | undefined => {
 };
 
 const assertText = (relativePath: string, content: string): void => {
-  if (content.includes("\u0000") || !TEXT_CHARSET.test(content)) {
+  if (DISALLOWED_CONTROL.test(content)) {
     throw new AmpOrbSkillError(
       `amp-orb skill file '${relativePath}' is not text. Hosted Amp skill files must be text.`,
     );
@@ -64,12 +64,21 @@ const assertWithin = (root: string, targetPath: string): void => {
  * Fail closed before any hosted skill write. `root` is the checkout root,
  * which is also the skills root: skill directories sit at the top level.
  */
+export const assertAmpOrbCheckout = async (root: string): Promise<void> => {
+  if (!(await exists(root)) || !(await exists(join(root, ".git")))) {
+    throw new AmpOrbSkillError(
+      `amp-orb --root '${root}' is not a skills checkout. Clone with \`amp clone user-skills\` or \`amp clone workspace-skills\`, then pass that directory. Prism does not create or publish it.`,
+    );
+  }
+};
+
 export const assertAmpOrbSkillPlan = async (options: {
   readonly root: string;
   readonly files: ReadonlyArray<AmpOrbSkillFile>;
+  readonly existingRepoBytes?: number;
 }): Promise<void> => {
   const bySkill = new Map<string, AmpOrbSkillFile[]>();
-  let repoBytes = 0;
+  let repoBytes = options.existingRepoBytes ?? 0;
 
   for (const file of options.files) {
     assertWithin(options.root, join(options.root, file.relativePath));
@@ -159,6 +168,31 @@ const readSkillFrontmatterName = (raw: string): string | undefined => {
     return match[1].replace(/^["']|["']$/gu, "");
   }
   return undefined;
+};
+
+/**
+ * Bytes already in the checkout that this plan will not replace, excluding .git.
+ * `replacedRelativePaths` are checkout-relative paths the plan overwrites.
+ */
+export const ampOrbRetainedBytes = async (
+  root: string,
+  replacedRelativePaths: ReadonlySet<string>,
+): Promise<number> => {
+  const fs = await import("node:fs/promises");
+  let entries: ReadonlyArray<string> = [];
+  try {
+    entries = await listDirRecursive(root);
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const relativePath of entries) {
+    if (relativePath === ".git" || relativePath.startsWith(".git/")) continue;
+    if (replacedRelativePaths.has(relativePath)) continue;
+    const stat = await fs.stat(join(root, relativePath));
+    if (stat.isFile()) total += stat.size;
+  }
+  return total;
 };
 
 /** Existing checkout skills Prism does not own. Counted against the 200 cap. */

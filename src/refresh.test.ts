@@ -98,7 +98,7 @@ test("refresh writes amp-orb skills at the explicit checkout root and rejects a 
       "---\nname: release-notes\ndescription: Write release notes\n---\n# Notes\n\nUse this skill.\n",
     );
     const checkout = join(prismHome, "hosted-skills");
-    await mkdir(checkout, { recursive: true });
+    await mkdir(join(checkout, ".git"), { recursive: true });
     const orbRoots = {
       resolve: (harnessId: Parameters<typeof roots.resolve>[0]) =>
         harnessId === "amp-orb" ? checkout : roots.resolve(harnessId),

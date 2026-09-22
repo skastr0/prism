@@ -26,6 +26,54 @@ const writeSkill = async (
   return path;
 };
 
+test("amp-orb accepts UTF-8 skill text and rejects a NUL byte", async () => {
+  const root = await tempRoot();
+  await mkdir(join(root, ".git"), { recursive: true });
+  const source = join(root, "release-notes", "SKILL.md");
+  await mkdir(join(root, "release-notes"), { recursive: true });
+  await writeFile(
+    source,
+    "---\nname: release-notes\ndescription: Notes — with an em dash\n---\n# Notes\n\nUse → this.\n",
+  );
+  await expect(
+    assertAmpOrbSkillPlan({
+      root,
+      files: [{ relativePath: "release-notes/SKILL.md", sourcePath: source }],
+    }),
+  ).resolves.toBeUndefined();
+
+  await writeFile(source, "---\nname: release-notes\ndescription: bad\n---\nbinary\u0000");
+  await expect(
+    assertAmpOrbSkillPlan({
+      root,
+      files: [{ relativePath: "release-notes/SKILL.md", sourcePath: source }],
+    }),
+  ).rejects.toThrow(/not text/);
+});
+
+test("amp-orb refuses a root that is not a git checkout", async () => {
+  const root = await tempRoot();
+  const { assertAmpOrbCheckout } = await import("./amp-orb-skills.js");
+  await expect(assertAmpOrbCheckout(root)).rejects.toThrow(/not a skills checkout/);
+  await mkdir(join(root, ".git"), { recursive: true });
+  await expect(assertAmpOrbCheckout(root)).resolves.toBeUndefined();
+});
+
+test("amp-orb counts retained checkout bytes against the repo cap", async () => {
+  const root = await tempRoot();
+  await mkdir(join(root, ".git"), { recursive: true });
+  const foreign = await writeSkill(root, "foreign-skill", "x".repeat(1024));
+  const planned = await writeSkill(root, "release-notes");
+  await expect(
+    assertAmpOrbSkillPlan({
+      root,
+      existingRepoBytes: 26 * 1024 * 1024,
+      files: [{ relativePath: "release-notes/SKILL.md", sourcePath: planned }],
+    }),
+  ).rejects.toThrow(/skills repository/);
+  expect(foreign).toContain("foreign-skill");
+});
+
 test("amp-orb accepts a flat text skill whose directory matches frontmatter name", async () => {
   const root = await tempRoot();
   const source = await writeSkill(root, "release-notes");

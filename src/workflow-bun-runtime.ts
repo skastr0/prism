@@ -51,3 +51,18 @@ export const workflowBunRuntime = (capability: string): WorkflowBunRuntime => {
   }
   return bun as WorkflowBunRuntime;
 };
+
+interface WorkflowBunTomlRuntime {
+  readonly TOML?: {
+    readonly parse?: (source: string) => unknown;
+  };
+}
+
+/** Parse harness-owned TOML from the Bun-only workflow runtime boundary. */
+export const parseWorkflowToml = (source: string, capability: string): unknown => {
+  const bun = (globalThis as typeof globalThis & { readonly Bun?: WorkflowBunTomlRuntime }).Bun;
+  if (typeof bun?.TOML?.parse !== "function") {
+    throw new WorkflowBunRuntimeUnavailableError(capability);
+  }
+  return bun.TOML.parse(source);
+};

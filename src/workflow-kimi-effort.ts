@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { LOWERER_CAPABILITIES } from "./lowerer-capabilities.js";
+import { parseWorkflowToml } from "./workflow-bun-runtime.js";
+import { WorkflowBunRuntimeUnavailableError } from "./workflow-errors.js";
 
 const kimiEffortCapability = LOWERER_CAPABILITIES["kimi-code"].workflowEffort;
 const KIMI_EFFORT_VALUES = kimiEffortCapability?.kind === "fixed"
@@ -27,8 +29,9 @@ export const parseKimiModelEffortSupport = (
 ): KimiModelEffortSupport => {
   let parsed: unknown;
   try {
-    parsed = Bun.TOML.parse(source) as unknown;
-  } catch {
+    parsed = parseWorkflowToml(source, "Kimi Code effort config parsing");
+  } catch (cause) {
+    if (cause instanceof WorkflowBunRuntimeUnavailableError) throw cause;
     return {
       error: `Cannot validate Kimi Code effort because ${configPath} is not valid TOML. Fix: correct ${configPath} before setting worker.effort.`,
     };

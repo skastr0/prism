@@ -143,9 +143,15 @@ terminal, or treat process restart as a substitute for platform suspension.
 Do not enable recurrent automation until its chosen wake/await path has passed. A service declaration
 alone is not evidence that scheduled work will run while the orb is idle.
 
-## Model offering is a quiz, not an automatic choice
+## Curate named workers; use the model inventory for raw choices
 
 ```bash
+prism workflow workers install ./workers.json
+prism workflow workers
+prism workflow skill
+prism workflow workers export
+
+# Optional raw harness/model discovery:
 bun run dev -- workflow refresh-harness-types
 bun run dev -- workflow models --offer
 bun run dev -- workflow skill --models
@@ -155,12 +161,14 @@ This orb's discovery returned 4 Amp dials, 27 plugin modes, and 49 catalog entri
 9 aliases: `default`, `opus`, `sonnet`, `haiku`, `fable`, `opusplan`, `opus[1m]`, `sonnet[1m]`,
 `fable[1m]`. Catalog presence and aliases are **not** verified entitlement or successful execution.
 
-The agent asks which workers and pins the operator wants. It saves only that answer with
-`workflow models prefer`. Amp `worker.model` means a dial/plugin mode; `catalogModel` and `effort`
-are separate. No preference means omit the field. Preferences guide authoring; they are not
-automatically substituted into every task at runtime. All live checks above used harness defaults.
+The operator curates portable named workers with descriptions and concrete configurations;
+workflow authors select `workers.<name>` from `prism/refs/workers`. The normal skill embeds the
+installed catalog and project SOP refs. See the [catalog format and installation contract](./workflows.md#curated-named-workers).
+`models prefer` is replaced, not applied behind the catalog. Amp `worker.model` still means a
+dial/plugin mode; `catalogModel` and `effort` remain separate. Curation does not change harness
+capabilities or verify entitlement. All live checks above used harness defaults, not this catalog path.
 
-Jev is a task kind, not a worker in this quiz. Its endpoint/model configuration uses
+Jev is a task kind, not a named harness worker. Its endpoint/model configuration uses
 `TYPESAFE_BASE_URL` / `TYPESAFE_DEFAULT_MODEL`; live calls need `TYPESAFE_API_KEY`. The checked live
 requests returned model `jev-1.13.0`. Bind each question's subject through `instructions`; a question
 ID alone is not a subject binding. High confidence is not proof of semantic correctness.

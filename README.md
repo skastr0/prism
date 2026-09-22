@@ -334,24 +334,30 @@ shows what is happening while it happens.
 
 Transient worker failures retry with bounded attempts and backoff; config errors and cancellations never do. Each task pins one of seven permission modes, from `sandbox-read-only` to `full-access` — enforced per worker.
 
-### Twelve workers
+### Twelve harness adapters
 
 `amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `cursor` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `opencode2` · `omp`
 
-### Start in five moves
+### Curate once, author by role
+
+Give frequently used harness/model configurations names and descriptions in a portable JSON catalog. Keep it in Git, install it on any machine, and select `worker: workers.reviewer` from `prism/refs/workers`. The generated module preserves literal types; unknown names are type errors. Multiple names can use one harness. Descriptions guide selection, not the task prompt.
+
+The [named-worker guide](docs/workflows.md#curated-named-workers) includes the JSON format. Prism ships no default catalog and never installs or authenticates a harness on its behalf. Raw harness options remain available for deliberately authored combinations.
+
+### Start with your catalog
 
 ```bash
-prism workflow refresh-harness-types  # global typed slugs from installed harnesses (no plugin)
-prism workflow models --offer         # quiz: workers, samples, stated prefs
-prism workflow skill --install        # install both embedded skills into detected harnesses
-prism workflow scaffold my-first      # validating starter in ~/.prism/workflows
-prism workflow validate ~/.prism/workflows/my-first.workflow.ts   # resolved (worker, model) per task
+prism workflow workers install ./workers.json    # explicitly replace the installed catalog
+prism workflow skill --install                  # install discovery skills into detected harnesses
+prism workflow skill                            # DSL + current workers + project SOP refs
+prism workflow scaffold my-first --worker reviewer
+prism workflow validate ~/.prism/workflows/my-first.workflow.ts
 prism workflow run ~/.prism/workflows/my-first.workflow.ts
 ```
 
-`prism workflow skill --install` is the step that makes the CLI self-sufficient: it writes the authoring guide (plus its reference chapters) and the model-preference quiz skill into each detected harness's skill directory, so an agent discovers the workflow surface the same way it discovers any other skill — with no plugin and no user prompt. `prism workflow skill` still prints the guide; `--write` materializes it under `PRISM_HOME` instead.
+`prism workflow skill --install` writes the authoring guide and reference chapters plus a raw-model discovery skill into each detected harness. Installed copies direct agents to `prism workflow skill` for fresh catalog and project context. `--write` materializes the static skills under `PRISM_HOME` instead. `prism workflow workers export` prints portable JSON for backup or another machine; installation merges unique names from all supplied files and rejects duplicates.
 
-A plugin is optional. Workflows are the flagship: `catalog`, `models`, `scaffold`, `typecheck`, `validate`, and `run` work with no compiled plugin. `refresh-harness-types` writes machine-wide model unions so `worker.model` typechecks without `prism/refs` or modelspaces. Plugin refs (`sops.*` / modelspaces) are an add-on. A live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
+A plugin is optional. Named workers work without compiled SOPs or modelspaces. Without a catalog, `scaffold` retains raw-harness scaffolding. For deliberate raw choices, use `prism workflow skill --models`, `refresh-harness-types`, and `models --offer`; harness model unions remain machine-wide. A live run **dispatches a real harness CLI with your local install and auth—it spends real tokens**. Rehearse with `--mock-output` and `typecheck`/`validate` before running it live.
 
 ## Stateless tools — no daemon, no MCP
 

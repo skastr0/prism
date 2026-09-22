@@ -152,14 +152,19 @@ prism validate <plugin-path>
 # List supported harness IDs
 prism harnesses
 
+# Install/export portable curated worker configurations; author with prism/refs/workers
+prism workflow workers install ./workers.json
+prism workflow workers
+prism workflow workers export
+
 # Discover installed harness models into a global typed cache
 prism workflow refresh-harness-types
 
-# List live harness slugs (plugin-free)
+# List raw harness slugs when deliberately choosing a configuration (plugin-free)
 prism workflow models --worker cursor --query opus
 prism workflow models --offer
 
-# Embedded workflow authoring skill
+# Authoring guide with current installed workers and compiled project refs
 prism workflow skill
 prism workflow skill --models
 

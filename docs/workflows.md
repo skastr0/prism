@@ -6,6 +6,7 @@ For the product tour, start at the [root README](../README.md#workflows-typed-ta
 
 - [The mental model](#the-mental-model)
 - [The generated environment](#the-generated-environment)
+- [Curated named workers](#curated-named-workers)
 - [defineTask](#definetask)
 - [Workers and permissions](#workers-and-permissions)
 - [Model resolution](#model-resolution)
@@ -28,33 +29,87 @@ The worker is a real harness process — `claude-code`, `codex-cli`, `grok`, `ki
 
 ## The generated environment
 
-Workflows import from `prism` (the DSL). Compiled plugins add `prism/refs` (typed sops and modelspaces). Installed harnesses add `prism/harnesses` (live model slugs):
+Workflows import from `prism` (the DSL). Installed worker catalogs add `prism/refs/workers` (literal-typed configurations). Compiled plugins add `prism/refs` (typed sops and modelspaces). Installed harnesses add `prism/harnesses` (live model slugs):
 
 ```ts
 import { defineTask, defineWorkflow } from "prism";
+import { workers } from "prism/refs/workers";
 import { ampCodeModelSlugs } from "prism/harnesses";
 ```
 
 These imports resolve through a **generated tsconfig**, not your project's own module resolution:
 
+- `prism workflow workers install <files...>` validates portable catalogs and generates the **global** `prism/refs/workers` module. It needs no plugin or modelspace.
 - `prism workflow refresh-harness-types` discovers models from local harness caches/CLIs and writes a **global** cache at `~/.prism/state/harness-types/` (not project-keyed). That file path-maps `prism/harnesses` and augments `worker.model` so plugin-free workflows typecheck against what is actually installed.
 - `prism refresh <plugin-path>` is optional. When you have a plugin it writes the refs surface (`generated/{models,sops}.ts`) and path-maps `prism/refs`.
-- `prism workflow scaffold <name>` writes a validating starter into `~/.prism/workflows/` (never inside the repo it drives): harness workers with a prompt and typed IO.
+- `prism workflow scaffold <name> --worker <catalog-name>` writes a starter using the named worker. Without `--worker`, it uses the first installed entry; without a catalog, it retains raw-harness scaffolding.
 - `prism workflow typecheck <file>` and `prism workflow validate <file>` use that generated environment automatically.
 
-Workflow **store and refs** are project-scoped. Harness model types are not — they follow the machine. From a directory that was never compiled, `prism/refs` will not resolve. That is fine — workflows are the flagship and plugins are optional. Discover what is available with:
+Workflow **store and plugin refs** are project-scoped. Named workers and harness model types follow the machine (`PRISM_HOME`). From a directory that was never compiled, plugin refs will not resolve, but `prism/refs/workers` works independently. Discover what is available with:
 
 ```bash
-prism workflow refresh-harness-types   # global live model unions (no plugin)
-prism workflow models --offer          # workers, samples, stated prefs — quiz the user
-# Save only the user's answer: prism workflow models prefer <worker> --model <slug>
-prism workflow skill                   # embedded authoring guide (also written on scaffold)
-prism workflow skill --models          # quiz skill for model preferences
-prism workflow skill --install         # write both into detected harness skill dirs (no plugin)
+prism workflow workers                # installed names, descriptions, configurations
+prism workflow skill                  # authoring guide + current workers + project SOP refs
+prism workflow skill --install        # install discovery skills into detected harnesses
+prism workflow skill --models         # deliberate raw harness/model selection
+prism workflow refresh-harness-types  # optional: refresh machine-wide model unions
+prism workflow models --offer         # raw harness inventory and samples
 prism workflow catalog                 # workers + live slug counts; plugin refs if compiled
 prism workflow catalog --query opus    # searches harness models when no plugin
 prism workflow refs                    # optional plugin refs location + freshness
 ```
+
+## Curated named workers
+
+Curate harness/model choices once; workflow authors choose a role by its description. A catalog is plain JSON that can live in a Git repository and be installed on another machine. For example, `workers.json`:
+
+```json
+{
+  "version": 1,
+  "workers": [
+    {
+      "name": "scout",
+      "description": "Use for bounded repository inspection and factual extraction.",
+      "config": { "worker": "amp-code", "model": "low" }
+    },
+    {
+      "name": "reviewer",
+      "description": "Use for difficult correctness reviews and counterexamples.",
+      "config": { "worker": "amp-code", "model": "high" }
+    }
+  ]
+}
+```
+
+These are examples, not built-in workers. Multiple names can use the same harness. Names use lowercase letters, digits, `_`, and `-`, starting with a letter; descriptions must be nonblank. `config` uses the existing harness-specific `WorkflowTaskWorkerOptions` with a required `worker`. Unknown fields and unsupported permissions/session settings fail validation rather than being dropped. Effort remains harness-specific: curation does not add effort controls to adapters that lack them. Amp supports `catalogModel` and `effort`; resolved model-profile objects may carry other harnesses' existing provider/variant settings.
+
+```bash
+prism workflow workers install ./workers.json
+prism workflow workers
+prism workflow workers export > ./exported-workers.json
+prism workflow scaffold review --worker reviewer
+```
+
+**Install replaces the entire installed catalog.** To combine files, pass them together: `prism workflow workers install ./base.json ./team.json`. Unique names merge in file order; duplicates fail before changing the previous install. Export emits the same portable JSON shape and adds no machine paths or authentication data. Never put secrets in catalog values. Installing does not install or authenticate harnesses, verify model entitlement, or run inference.
+
+The installed source of truth is `<PRISM_HOME>/state/workflow-workers/catalog.json`; the derived `workers.ts` beside it supplies generated types and runtime values. Workflow loading reads installed state, never the original repository file. Edit your portable file and reinstall to update it; deleting the portable source does not uninstall its workers. Installing `{ "version": 1, "workers": [] }` clears the catalog.
+
+```ts
+import { Schema } from "effect";
+import { defineTask } from "prism";
+import { workers } from "prism/refs/workers";
+
+const review = defineTask({
+  id: "review",
+  prompt: "Find a concrete correctness failure in the diff.",
+  output: Schema.Struct({ finding: Schema.String }),
+  worker: workers.reviewer,
+});
+```
+
+The generated object preserves literal names and configuration types; unknown names are type errors. Use bracket syntax for hyphenated names, such as `workers["deep-review"]`. Descriptions guide selection and are not injected into task prompts. Names/descriptions do not participate in cache identity; execution settings do. Raw `worker: { worker: "claude-code", model: "fable" }` remains available for deliberately authored combinations—curation is not a prohibition mechanism.
+
+`prism workflow skill` embeds the current catalog and this project's compiled SOP refs. Static installed skill copies instruct authors to run that command for fresh context. `skill --json` exposes the worker refs and configurations programmatically. This replaces `models prefer`; old preference files are left untouched but are no longer read or applied.
 
 ## defineTask
 
@@ -134,7 +189,7 @@ Tasks without a `worker` fall back to the CLI: `prism workflow run --worker <id>
 
 1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`. After `prism workflow refresh-harness-types`, that string is checked against the installed harness's discovered slugs. OMP pins are `provider/id` selectors from `omp models --json` (example: `ollama-cloud/glm-5.3-flash`); unpinned OMP tasks prefer `~/.omp/agent/config.yml` `modelRoles.default` with the `:thinking` suffix stripped. `opencode-go/*` is Console Go and 400s in workflow `--print` (`MissingSessionID`). Amp inventories three surfaces: the `--mode` dial (`low | medium | high | ultra`), plugin mode keys (both valid `worker.model` / `--mode` values), and the curated `provider/model` catalog from `amp plugins show-agent-options --json`. Catalog slugs are `worker.catalogModel` (`AmpCodeCatalogSlug`); reasoning effort is `worker.effort` (`AmpCodeEffort`). Amp has no `--model` flag, so Prism pins catalog/effort through a one-shot project plugin mode when no existing plugin mode already binds that slug. Run metadata reports `model` as the catalog slug (or dial), plus `ampMode`, `catalogModel`, and `effort` — never the transport key `prism-pin`. A dial in `worker.model` can `extends` that pin; a plugin mode key cannot combine with `catalogModel` / `effort`. `prism workflow validate` fail-closes when the snapshot lists the catalog row and `worker.effort` is not on that row. Modelspaces stay optional policy, not the inventory.
 2. **Task modelspace profile ref** — `worker.model: { kind: "model-profile-ref", plugin, modelspace, profile }` resolves the profile's target for the task's worker; the first concrete `{ model, provider?, variant? }` entry wins. No entry for that worker → `WorkflowModelResolutionError`.
-3. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`. Spawn omits the harness model flag so the user's harness default stays. Do not invent a Prism default. Stated preferences live in `~/.prism/state/workflow-model-preferences.json` (`prism workflow models --offer` / `prefer`) and are copied into `worker.model` by the authoring agent — they are not applied at run time.
+3. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`. Spawn omits the harness model flag so the user's harness default stays. Do not invent a Prism default. Named workers compile to ordinary task configurations, not an extra runtime preference layer.
 
 Resolution can carry a **provider** (harness-side inference provider, e.g. hermes `--provider xai-oauth`) and a **variant** (harness-bound model variant such as Codex reasoning effort). `prism workflow validate <file>` prints each task's resolved `(worker, model)` before anything dispatches — read it.
 
@@ -344,6 +399,7 @@ Every run persists to a per-project SQLite store (`workflows.sqlite` under `PRIS
 
 - Re-running a workflow replays completed tasks from cache instantly — resume after a crash costs nothing for finished work.
 - Changing a task's semantics changes its address — only that task re-executes.
+- Supported Amp catalog/effort, provider/variant, and effective permission/tool settings participate in the semantic hash. A curated worker's name and description do not; changing its execution settings does.
 - `sessionPersistence` does not change the address: it controls harness-side session retention, while the completed task result remains reusable across persistent and ephemeral runs.
 - The cache is durable across runs. To force a fresh result, bump the `cacheKey` (`"…-v2"`); for full isolation, use a fresh store (`--store <path>`) — there is deliberately no cache-bypass flag.
 

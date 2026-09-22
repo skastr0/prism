@@ -5,6 +5,14 @@
  * untracked build outputs the suite imports when their inputs changed (see
  * scripts/test-build-artifacts.ts).
  *
+ * Gives the run a private TMPDIR under /tmp, removed on exit. Bun 1.3.14's
+ * bundler resolver keeps every long directory-entry name it reads for the life
+ * of the process, and each in-process `Bun.build` re-reads the ancestors of its
+ * entry. With test fixtures under a shared $TMPDIR holding ~100k entries (other
+ * projects' leftovers), each build leaked ~40MB and the suite segfaulted around
+ * its 70th build. A fresh, small parent keeps that cost proportional to this
+ * run's own temp dirs. Bun 1.4.2 no longer leaks.
+ *
  * Guarantees test isolation from the real `~/.prism`:
  *  1. Creates a fresh mkdtemp PRISM_HOME for the whole test process and sets
  *     the env var before any test module is imported. `resolvePrismHome()`
@@ -36,9 +44,12 @@ const { resolvePrismHome } = await import("../src/prism-home.js");
 
 const realPrismHome = resolve(join(homedir(), ".prism"));
 
-const sandboxPrismHome = mkdtempSync(
-  join(realpathSync(tmpdir()), "prism-test-home-"),
+const sandboxTmp = mkdtempSync(
+  join(realpathSync(process.platform === "win32" ? tmpdir() : "/tmp"), "prism-test-run-"),
 );
+process.env.TMPDIR = sandboxTmp;
+
+const sandboxPrismHome = mkdtempSync(join(sandboxTmp, "prism-test-home-"));
 process.env.PRISM_HOME = sandboxPrismHome;
 
 // CLI tools surface is the only tools path. Tests may override
@@ -64,5 +75,5 @@ afterEach(() => {
 });
 
 process.on("exit", () => {
-  rmSync(sandboxPrismHome, { recursive: true, force: true });
+  rmSync(sandboxTmp, { recursive: true, force: true });
 });

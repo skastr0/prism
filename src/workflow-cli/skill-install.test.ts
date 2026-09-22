@@ -128,11 +128,10 @@ test("installs into every requested harness at its own root", async () => {
 });
 
 test("installs into every harness that has a skill surface", async () => {
-  // Every harness declares `skills` in its catalog scanDirs, so the flat
-  // `<root>/skills/<name>/` path is the standard discovery surface for all of
-  // them. No harness is special-cased.
+  // Harnesses with a skillsDir use `<root>/skills/<name>/`. amp-orb writes
+  // hosted skills at the checkout root and is not a workflow-skill install target.
   const root = await makeRoot();
-  const harnesses = getAllHarnessIds();
+  const harnesses = getAllHarnessIds().filter((id) => getHarness(id).skillsDir !== null);
   for (const harnessId of harnesses) {
     await mkdir(join(root, harnessId), { recursive: true });
   }

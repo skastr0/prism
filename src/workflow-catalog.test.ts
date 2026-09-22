@@ -100,7 +100,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
     const unflagged = Object.values(LOWERER_CAPABILITIES)
       .filter((profile) => !profile.workflowWorker)
       .map((profile): string => profile.harness);
-    expect(unflagged.sort()).toEqual(["factory-droid", "openclaw", "pi"].sort());
+    expect(unflagged.sort()).toEqual(["amp-orb", "factory-droid", "openclaw", "pi"].sort());
     for (const harness of unflagged) {
       expect(WORKFLOW_WORKERS as readonly string[]).not.toContain(harness);
     }

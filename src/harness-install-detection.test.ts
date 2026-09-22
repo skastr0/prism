@@ -20,6 +20,7 @@ describe("detectInstalledHarnessIds", () => {
       resolveExecutable: () => undefined,
     });
     expect(detected).not.toContain("opencode2");
+    expect(detected).not.toContain("amp-orb");
   });
 
   test("honors PRISM_WORKFLOW_OPENCODE2_BIN", () => {

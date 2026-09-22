@@ -65,6 +65,7 @@ export const detectInstalledHarnessIds = (
   const detected = getAllHarnessIds().filter((id) => {
     if (id === "opencode2") return openCode2Present;
     if (id === "opencode" && openCode2Present) return false;
+    if (id === "amp-orb") return false;
     const root = resolveHarnessRoot(getHarness(id), "global");
     return root !== null && existsSync(root);
   });

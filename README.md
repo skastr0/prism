@@ -97,9 +97,9 @@ prism doctor
 
 Explore interactively with `prism plugins <dir>` (plugin manager TUI) and validate structure with `prism validate <plugin-path>`.
 
-## One source, fourteen harnesses
+## One source, fifteen harnesses
 
-`prism harnesses` — the compile targets, with where each harness lives on disk:
+`prism harnesses` — supported targets, with where each one lives on disk:
 
 | Harness | ID | Global | Project |
 |---|---|---|---|
@@ -109,6 +109,7 @@ Explore interactively with `prism plugins <dir>` (plugin manager TUI) and valida
 | Grok Build | `grok` | `~/.grok/` | `.grok/` |
 | Kimi Code | `kimi-code` | `~/.kimi-code/` | — |
 | Amp Code | `amp-code` | `~/.config/amp/` | `.agents/` |
+| Amp Orb | `amp-orb` | explicit `--root` skills checkout | — |
 | Antigravity CLI | `antigravity-cli` | `~/.gemini/antigravity-cli/` | `.agents/` |
 | Cursor | `cursor` | `~/.cursor/` | `.cursor/` |
 | Factory Droid | `factory-droid` | `~/.factory/` | `.factory/` |

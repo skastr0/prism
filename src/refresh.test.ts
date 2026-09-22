@@ -88,6 +88,53 @@ test("refresh prunes stale direct files through snapshot membership", async () =
   });
 });
 
+test("refresh writes amp-orb skills at the explicit checkout root and rejects a name mismatch", async () => {
+  await withPrismSandbox(async ({ prismHome, roots }) => {
+    const pluginRoot = await createPlugin(prismHome, "orb-skills", {
+      targets: { skills: ["amp-orb"] },
+    });
+    await writeText(
+      join(pluginRoot, "skills", "release-notes", "SKILL.md"),
+      "---\nname: release-notes\ndescription: Write release notes\n---\n# Notes\n\nUse this skill.\n",
+    );
+    const checkout = join(prismHome, "hosted-skills");
+    await mkdir(checkout, { recursive: true });
+    const orbRoots = {
+      resolve: (harnessId: Parameters<typeof roots.resolve>[0]) =>
+        harnessId === "amp-orb" ? checkout : roots.resolve(harnessId),
+    };
+
+    const written = await refreshPlugin({
+      pluginPath: pluginRoot,
+      harnesses: ["amp-orb"],
+      prismHome,
+      overwrite: false,
+      dryRun: false,
+      roots: orbRoots,
+    });
+    expect(written.success).toBe(true);
+    expect(await readFile(join(checkout, "release-notes", "SKILL.md"), "utf8")).toContain(
+      "name: release-notes",
+    );
+    expect(written.reports.some((report) => report.harness === "amp-code")).toBe(false);
+
+    await writeText(
+      join(pluginRoot, "skills", "release-notes", "SKILL.md"),
+      "---\nname: other-name\ndescription: Write release notes\n---\n# Notes\n\nUse this skill.\n",
+    );
+    await expect(
+      refreshPlugin({
+        pluginPath: pluginRoot,
+        harnesses: ["amp-orb"],
+        prismHome,
+        overwrite: false,
+        dryRun: true,
+        roots: orbRoots,
+      }),
+    ).rejects.toThrow(/must match SKILL.md name/);
+  });
+});
+
 test("refresh skips direct skills when compile owns targeted plugin skills", async () => {
   await withPrismSandbox(async ({ prismHome, roots, rootFor }) => {
     const pluginRoot = await createPlugin(prismHome, "compiled-skills", {

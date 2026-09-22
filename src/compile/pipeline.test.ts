@@ -1020,6 +1020,7 @@ test("coding-harness preset includes admitted coding harnesses", () => {
   expect(resolveManifestTargets(["coding-harness"])).toContain("cursor");
   expect(resolveManifestTargets(["coding-harness"])).toContain("opencode2");
   expect(resolveManifestTargets(["coding-harness"])).not.toContain("opencode");
+  expect(resolveManifestTargets(["coding-harness"])).not.toContain("amp-orb");
 });
 
 test("artifact target resolution filters unsupported preset members", async () => {

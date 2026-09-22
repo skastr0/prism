@@ -13,6 +13,7 @@ export type HarnessId =
   | "antigravity-cli"
   | "kimi-code"
   | "amp-code"
+  | "amp-orb"
   | "cursor"
   | "factory-droid"
   | "pi"
@@ -251,6 +252,7 @@ export interface UnifiedFrontmatter {
   "antigravity-cli"?: Record<string, unknown>;
   "kimi-code"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;
+  "amp-orb"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;
   "factory-droid"?: FactoryDroidFrontmatter;
   pi?: Record<string, unknown>;

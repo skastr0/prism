@@ -22,6 +22,11 @@ import type {
 } from "./types.js";
 import { expandPath, readFile } from "./fs.js";
 import {
+  AmpOrbSkillError,
+  assertAmpOrbSkillPlan,
+  listForeignAmpOrbSkills,
+} from "./amp-orb-skills.js";
+import {
   generatedCursorPluginId,
   renderCursorGeneratedPluginManifest,
 } from "./compile/generated-plugin.js";
@@ -153,9 +158,11 @@ const shouldPlanFileRouterSkills = (
   harness: HarnessConfig,
 ): boolean =>
   harness.supportsSkills &&
-  harness.skillsDir !== null &&
+  (harness.skillsDir !== null || harness.id === "amp-orb") &&
   manifestTargetsArtifact(manifest, "skills", harness.id) &&
   !compileOwnsTargetedPluginSkills(manifest, harness.id);
+
+const ampOrbSkillsRoot = (root: string): string => root;
 
 const stableRegionPart = (value: string): string =>
   value.replace(/[^A-Za-z0-9_.:/-]+/g, "_");
@@ -634,7 +641,8 @@ const addSkillsForHarness = async (options: {
     selectedFiles,
   );
   const root = resolveGlobalHarnessRoot(options.harness, options.roots);
-  const targetDir = join(root, options.harness.skillsDir!);
+  const targetDir =
+    options.harness.id === "amp-orb" ? ampOrbSkillsRoot(root) : join(root, options.harness.skillsDir!);
 
   for (const [skillDirName, validation] of [...validatedSkills.entries()].sort((a, b) =>
     a[0].localeCompare(b[0]),
@@ -650,7 +658,10 @@ const addSkillsForHarness = async (options: {
   for (const file of selectedFiles) {
     const [skillDirName, nestedPath] = file.relativePath.split("/", 2);
     if (skillDirName && nestedPath && validatedSkills.get(skillDirName)?.valid === false) {
-      continue;
+      if (options.harness.id !== "amp-orb") continue;
+      throw new AmpOrbSkillError(
+        `amp-orb skill '${skillDirName}' failed validation: ${validatedSkills.get(skillDirName)?.reason ?? "invalid skill"}`,
+      );
     }
 
     await addManagedFile({
@@ -661,6 +672,29 @@ const addSkillsForHarness = async (options: {
       root,
       targetPath: join(targetDir, file.relativePath),
       artifact: "skill",
+    });
+  }
+
+  if (options.harness.id === "amp-orb") {
+    const ownedSkillDirs = new Set(
+      selectedFiles.flatMap((file) => {
+        const skillDir = file.relativePath.split("/")[0];
+        return skillDir ? [skillDir] : [];
+      }),
+    );
+    const foreign = await listForeignAmpOrbSkills(targetDir, ownedSkillDirs);
+    if (ownedSkillDirs.size + foreign.length > 200) {
+      throw new AmpOrbSkillError(
+        `amp-orb checkout already has ${foreign.length} other skills (${foreign.join(", ")}). ` +
+          `Adding ${ownedSkillDirs.size} would pass Amp's 200-skill load cap. Remove or rename before refresh.`,
+      );
+    }
+    await assertAmpOrbSkillPlan({
+      root: targetDir,
+      files: selectedFiles.map((file) => ({
+        relativePath: file.relativePath,
+        sourcePath: file.sourcePath,
+      })),
     });
   }
 };

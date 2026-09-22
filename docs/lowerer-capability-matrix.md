@@ -70,6 +70,7 @@ The `mcpConfig` surface is `unsupported` on every harness.
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` (live dispatch verified, smoke fixture pending) |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | CLI runtime + skill inject | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
+| Amp Orb | unsupported | unsupported | flat text skills in an explicit checkout | unsupported | unsupported | none | `compile-verified` |
 | Cursor | `native-plugin-bundle` for commands, agents, hooks | plugin subagents | direct skills + plugin sop skills | CLI runtime | plugin command hooks | none for tools | `compile-verified` (workflow worker live-dispatchable) |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | CLI runtime | plugin hooks | none for generated bundle | `compile-verified` |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |
@@ -110,6 +111,8 @@ Prism-hook-DSL lowering: Prism currently maps `tool.before`, `tool.after`,
 `PreInvocation`, and `Stop`, preserves the full native Antigravity stdin payload
 at `event.native`, and intentionally does not model Antigravity-only
 `PostInvocation` outputs such as `injectSteps` or `terminationBehavior`.
+
+Amp Orb is skills-only and is not a second root for Amp Code. It is not a compile lowerer and not a workflow worker. `prism refresh --harness amp-orb --root <checkout>` writes flat text skill directories, including nested text resources, into an explicit hosted skills checkout (`amp clone user-skills` or `amp clone workspace-skills`). It does not infer personal or workspace scope, does not emit plugins, agents, tools, hooks, or commands, and does not commit or push. `--all` and installed-harness auto-detect skip it. Hosted limits fail the plan: 200 skills, 200 files per skill, 10 MiB per file, 25 MiB per skill, 25 MiB per repository, text files only, and a directory name that matches `SKILL.md` `name`.
 
 Amp is product-native for generated commands, tools, and supported hooks through its
 TypeScript plugin API. Prism emits generated plugins under Amp's documented

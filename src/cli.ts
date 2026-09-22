@@ -228,6 +228,10 @@ program
   .option("--overwrite", "Overwrite existing files", false)
   .option("--no-validate", "Skip plugin validation before refresh")
   .option("--dry-run", "Preview the refresh plan without writing", false)
+  .option(
+    "--root <path>",
+    "Explicit output root for amp-orb. Required when refreshing that target. Does not publish.",
+  )
   .option("--compile-only", "Only run compile-phase lowering")
   .option("--clean", "Clear compile cache before compiling", false)
   .option(
@@ -260,6 +264,10 @@ program
   )
   .option("--overwrite", "Overwrite existing files", false)
   .option("--no-validate", "Skip plugin validation before planning")
+  .option(
+    "--root <path>",
+    "Explicit output root for amp-orb. Required when planning that target. Does not publish.",
+  )
   .option("--compile-only", "Only plan compile-phase lowering")
   .option("--clean", "Plan compile cache cleanup")
   .option(
@@ -2766,6 +2774,7 @@ type RefreshCommandOptions = {
   compileOnly?: boolean;
   clean?: boolean;
   compileRoot?: string;
+  root?: string;
 };
 
 type NormalizedRefreshOptions = {
@@ -2782,6 +2791,7 @@ type NormalizedRefreshOptions = {
   compileOnly: boolean;
   clean: boolean;
   compileRoot?: string;
+  root?: string;
 };
 
 type RefreshCommandContext = LoadedPlugin & {
@@ -2830,6 +2840,7 @@ type DirectoryRefreshOptions = {
   compileOnly: boolean;
   clean: boolean;
   json: boolean;
+  root?: string;
 };
 
 type RefreshMode = "refresh" | "plan";
@@ -2931,6 +2942,11 @@ async function loadRefreshCommandContext(
   mode: RefreshMode,
 ): Promise<RefreshCommandContext> {
   const harnesses = resolveRequestedHarnesses(options, { allowInstalledDefault: true });
+  if (harnesses.includes("amp-orb") && !options.root) {
+    throw new CliUsageError(
+      "amp-orb requires --root <checkout>. Clone with `amp clone user-skills` or `amp clone workspace-skills`, then pass that directory. Prism does not infer personal or workspace scope and does not publish.",
+    );
+  }
   const manifest = await readManifest(pluginPath);
 
   if (!options.json) {
@@ -3016,6 +3032,16 @@ async function runDirectRefreshForPlugin(
     prismHome: resolvePrismHome(),
     overwrite: context.options.overwrite,
     dryRun: context.options.dryRun,
+    ...(context.options.root
+      ? {
+          roots: {
+            resolve: (harnessId) =>
+              harnessId === "amp-orb"
+                ? expandPath(context.options.root!)
+                : expandPath(getHarness(harnessId).globalConfigPath),
+          },
+        }
+      : {}),
   });
 
   if (!context.options.json) {
@@ -3223,6 +3249,11 @@ async function runRefreshDirectoryCommand(
   options: NormalizedRefreshOptions,
 ): Promise<void> {
   const harnesses = resolveRequestedHarnesses(options, { allowInstalledDefault: true });
+  if (harnesses.includes("amp-orb") && !options.root) {
+    throw new CliUsageError(
+      "amp-orb requires --root <checkout>. Clone with `amp clone user-skills` or `amp clone workspace-skills`, then pass that directory. Prism does not infer personal or workspace scope and does not publish.",
+    );
+  }
   const expandedDir = expandPath(directory);
 
   await requireRefreshDirectory(expandedDir);
@@ -3256,6 +3287,7 @@ async function runRefreshDirectoryCommand(
     compileOnly: options.compileOnly,
     clean: options.clean,
     json: options.json,
+    root: options.root,
   });
 
   if (options.json) {
@@ -3432,6 +3464,16 @@ async function refreshDiscoveredPlugin(
     prismHome: resolvePrismHome(),
     overwrite: options.overwrite,
     dryRun: options.dryRun,
+    ...(options.root
+      ? {
+          roots: {
+            resolve: (harnessId) =>
+              harnessId === "amp-orb"
+                ? expandPath(options.root!)
+                : expandPath(getHarness(harnessId).globalConfigPath),
+          },
+        }
+      : {}),
   });
   if (!options.json) {
     printRefreshReports(result, "   ");
@@ -3645,7 +3687,7 @@ function resolveRequestedHarnesses(
   config: { allowInstalledDefault: boolean },
 ): HarnessId[] {
   if (options.all) {
-    return getAllHarnessIds();
+    return getAllHarnessIds().filter((id) => id !== "amp-orb");
   }
 
   if (options.harness) {

@@ -26,6 +26,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Antigravity CLI | generated plugin `rules/` | - | generated plugin `agents/` | generated plugin `skills/` |
 | Kimi Code | generated plugin `prism-context` skill | generated plugin command skills | generated plugin role skills | generated plugin skills |
 | Amp Code | `~/.config/amp/AGENTS.md` | generated plugin `registerCommand` | generated role skills | `~/.config/amp/skills/` |
+| Amp Orb | — | — | — | explicit `--root` hosted skills checkout |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | generated local plugin `agents/` | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |

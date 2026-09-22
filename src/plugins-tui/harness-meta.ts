@@ -19,6 +19,7 @@ const MARKS: Record<string, HarnessMark> = {
   "antigravity-cli": { glyph: "▲", color: "#48e4b0", short: "antigrav" },
   "kimi-code": { glyph: "◐", color: "#f48c6c", short: "kimi" },
   "amp-code": { glyph: "★", color: "#f0b040", short: "amp" },
+  "amp-orb": { glyph: "☁", color: "#7eb6ff", short: "orb" },
   cursor: { glyph: "▸", color: "#8080ff", short: "cursor" },
   "factory-droid": { glyph: "⊕", color: "#f0dc9c", short: "factory" },
   pi: { glyph: "π", color: "#ff58a8", short: "pi" },

@@ -427,6 +427,31 @@ export const LOWERER_CAPABILITIES = {
       "Kimi Code subagents are runtime dispatches, so Prism compiled agents lower as role skills rather than native subagent definitions.",
     ],
   },
+  "amp-orb": {
+    harness: "amp-orb",
+    family: "coding-harness",
+    workflowWorker: false,
+    compile: compileUnsupported,
+    surfaces: {
+      pluginBundle: unsupported("Amp Orb lowering is skills only. Plugins stay on amp-code."),
+      rules: unsupported("Hosted Amp guidance is a settings blob, not this skills checkout."),
+      commands: unsupported("Amp Orb does not lower commands."),
+      agents: unsupported("Compiled agents are not hosted skills. Amp modes are plugins, which this target does not emit."),
+      skills: {
+        kind: "direct-file",
+        path: "<amp-orb-checkout>/<skill>/SKILL.md",
+        summary: "Install writes flat text skill directories into an explicit hosted skills checkout.",
+      },
+      generatedTools: unsupported(),
+      hooks: unsupported(),
+      agentConfig: unsupported(),
+    },
+    notes: [
+      "amp-orb is a hosted skills checkout, not a second root for amp-code.",
+      "Family is coding-harness so the type fits. It is not a member of the coding-harness preset and not a workflow worker.",
+      "Publication (clone, commit, push, reload) is outside this target.",
+    ],
+  },
   "amp-code": {
     harness: "amp-code",
     family: "coding-harness",

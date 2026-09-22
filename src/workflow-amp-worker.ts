@@ -126,11 +126,12 @@ export const ampWorkerPins = (
 ): { readonly catalogModel?: string; readonly effort?: string } => {
   const worker = task.worker;
   if (worker === undefined || worker.worker !== "amp-code") return {};
+  const config = worker as { readonly catalogModel?: unknown; readonly effort?: unknown };
   return {
-    ...("catalogModel" in worker && typeof worker.catalogModel === "string"
-      ? { catalogModel: worker.catalogModel }
+    ...(typeof config.catalogModel === "string"
+      ? { catalogModel: config.catalogModel }
       : {}),
-    ...("effort" in worker && typeof worker.effort === "string" ? { effort: worker.effort } : {}),
+    ...(typeof config.effort === "string" ? { effort: config.effort } : {}),
   };
 };
 

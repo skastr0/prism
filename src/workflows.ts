@@ -1,4 +1,11 @@
 import { Effect, Result, Schema, type SchemaAST } from "effect";
+import {
+  LOWERER_CAPABILITIES,
+  type WorkflowEffortCapabilityFor,
+  type WorkflowEffortWorkerHarnessId,
+  type WorkflowWorkerHarnessId,
+} from "./lowerer-capabilities.js";
+import { legacyReasoningVariantError } from "./workflow-effort.js";
 import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
 import { isWorkflowSchedule, parseWorkflowSchedule, type WorkflowSchedule } from "./workflow-scheduler/schedule.js";
 import {
@@ -85,18 +92,7 @@ export type WorkflowOutputSchema = Schema.Codec<unknown, unknown, never, never>;
 
 export type WorkflowFinishCriterionError = Error;
 
-export type WorkflowWorkerId =
-  | "amp-code"
-  | "antigravity-cli"
-  | "claude-code"
-  | "codex-cli"
-  | "cursor"
-  | "devin"
-  | "grok"
-  | "hermes"
-  | "kimi-code"
-  | "opencode"
-  | "omp";
+export type WorkflowWorkerId = WorkflowWorkerHarnessId;
 
 /**
  * Per-harness model identifier map. Empty in core so `worker.model` stays
@@ -113,8 +109,9 @@ export interface WorkflowHarnessModelMap {}
 export interface WorkflowHarnessCatalogModelMap {}
 
 /**
- * Amp reasoning-effort ladders from the catalog. Empty in core; refresh
- * augments `"amp-code"` for `worker.effort`.
+ * Model-specific reasoning-effort ladders from installed CLI catalogs.
+ * Fixed CLI values come from `LOWERER_CAPABILITIES` and are not discovered.
+ * Refresh augments only catalog-backed workers.
  */
 export interface WorkflowHarnessEffortMap {}
 
@@ -125,8 +122,27 @@ export type WorkflowHarnessModel<W extends WorkflowWorkerId> =
 export type WorkflowHarnessCatalogModel<W extends WorkflowWorkerId> =
   W extends keyof WorkflowHarnessCatalogModelMap ? WorkflowHarnessCatalogModelMap[W] : string;
 
+type WorkflowHarnessEffortForCapability<W extends WorkflowWorkerId, Capability> =
+  Capability extends {
+    readonly kind: "fixed";
+    readonly values: readonly (infer Value extends string)[];
+  }
+    ? Value
+    : Capability extends { readonly kind: "catalog" }
+      ? W extends keyof WorkflowHarnessEffortMap ? WorkflowHarnessEffortMap[W] : never
+      : never;
+
+type WorkflowHarnessEffortForOne<W extends WorkflowWorkerId> =
+  WorkflowHarnessEffortForCapability<W, NonNullable<WorkflowEffortCapabilityFor<W>>>;
+
+/** Harness-bound effort values; catalog-backed values require a refreshed type map. */
 export type WorkflowHarnessEffort<W extends WorkflowWorkerId> =
-  W extends keyof WorkflowHarnessEffortMap ? WorkflowHarnessEffortMap[W] : string;
+  W extends WorkflowWorkerId ? WorkflowHarnessEffortForOne<W> : never;
+
+export const workflowWorkerSupportsEffort = (worker: unknown): worker is WorkflowEffortWorkerHarnessId =>
+  typeof worker === "string"
+  && Object.hasOwn(LOWERER_CAPABILITIES, worker)
+  && LOWERER_CAPABILITIES[worker as WorkflowWorkerId].workflowEffort !== null;
 
 export type WorkflowPermissionMode =
   | "legacy"
@@ -222,19 +238,21 @@ type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
     readonly worker: W;
     readonly permission?: WorkflowWorkerPermissionMode<W>;
   } & (W extends "amp-code"
-    ? {
-      readonly sessionPersistence?: never;
-      readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code">;
-      readonly effort?: WorkflowHarnessEffort<"amp-code">;
-    }
-    : W extends WorkflowSessionPersistenceWorkerId
-      ? { readonly sessionPersistence?: WorkflowSessionPersistence }
-      : { readonly sessionPersistence?: never });
+    ? { readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code"> }
+    : { readonly catalogModel?: never })
+  & (W extends WorkflowEffortWorkerHarnessId
+    ? { readonly effort?: WorkflowHarnessEffort<W> }
+    : { readonly effort?: never })
+  & (W extends WorkflowSessionPersistenceWorkerId
+    ? { readonly sessionPersistence?: WorkflowSessionPersistence }
+    : { readonly sessionPersistence?: never });
 
 export type WorkflowTaskWorkerOptions =
   | (WorkflowTaskWorkerOptionsCommon & {
     readonly worker?: undefined;
     readonly permission?: WorkflowPermissionMode;
+    readonly catalogModel?: never;
+    readonly effort?: never;
     readonly sessionPersistence?: never;
   })
   | {
@@ -251,8 +269,10 @@ export interface WorkflowTaskModelResolution {
   readonly model: string;
   /** Harness-side inference provider (e.g. hermes `--provider xai-oauth`), from the modelspace target or harness default. */
   readonly provider?: string;
-  /** Harness-bound model variant, such as Codex reasoning effort. */
+  /** Model-selection variant, such as OpenCode's `provider/model#variant`. */
   readonly variant?: string;
+  /** Harness-bound reasoning effort from a modelspace target. */
+  readonly effort?: string;
   readonly source: WorkflowTaskModelResolutionSource;
 }
 
@@ -276,33 +296,45 @@ const modelTargetForWorker = (
   return ref.targets?.[worker];
 };
 
-/** First concrete {model, provider?} pair in a modelspace target (direct or ordered-list form). */
+/** First concrete model binding in a modelspace target (direct or ordered-list form). */
 const firstModelChoice = (
   target: WorkflowModelTarget | undefined,
-): { readonly model: string; readonly provider?: string; readonly variant?: string } | undefined => {
+  worker: string,
+): { readonly model: string; readonly provider?: string; readonly variant?: string; readonly effort?: string } | undefined => {
   if (target === undefined) return undefined;
+  const legacyVariantError = legacyReasoningVariantError(worker, target, `targets.${worker}`);
+  if (legacyVariantError !== undefined) throw new WorkflowModelResolutionError(legacyVariantError);
   const direct = target.model;
   if (typeof direct === "string" && direct.length > 0) {
     return {
       model: direct,
       ...(typeof target.provider === "string" ? { provider: target.provider } : {}),
       ...(typeof target.variant === "string" ? { variant: target.variant } : {}),
+      ...(typeof target.effort === "string" ? { effort: target.effort } : {}),
     };
   }
   const models = target.models;
   if (Array.isArray(models)) {
-    for (const candidate of models) {
+    for (const [index, candidate] of models.entries()) {
       if (typeof candidate === "object" && candidate !== null) {
         const entry = candidate as {
           readonly model?: unknown;
           readonly provider?: unknown;
           readonly variant?: unknown;
+          readonly effort?: unknown;
         };
+        const legacyEntryVariantError = legacyReasoningVariantError(
+          worker,
+          entry,
+          `targets.${worker}`,
+        );
+        if (legacyEntryVariantError !== undefined) throw new WorkflowModelResolutionError(legacyEntryVariantError);
         if (typeof entry.model === "string" && entry.model.length > 0) {
           return {
             model: entry.model,
             ...(typeof entry.provider === "string" ? { provider: entry.provider } : {}),
             ...(typeof entry.variant === "string" ? { variant: entry.variant } : {}),
+            ...(typeof entry.effort === "string" ? { effort: entry.effort } : {}),
           };
         }
       }
@@ -333,7 +365,7 @@ export const resolveWorkflowTaskModelResolution = (
   const worker = task.worker?.worker ?? options.worker;
   if (isWorkflowModelProfileRef(explicit)) {
     const target = modelTargetForWorker(explicit, worker);
-    const choice = firstModelChoice(target);
+    const choice = firstModelChoice(target, worker ?? "");
     if (choice !== undefined) return { ...choice, source: "task" };
     throw new WorkflowModelResolutionError(
       `modelspace profile ${describeModelRef(explicit)} has no concrete model for workflow worker '${worker ?? "<missing>"}'`,
@@ -349,6 +381,19 @@ export const resolveWorkflowTaskModel = (
   task: AnyWorkflowWorkerTask,
   options: { readonly worker?: string; readonly fallbackModel?: string } = {},
 ): string | undefined => resolveWorkflowTaskModelResolution(task, options)?.model;
+
+/** Task-level effort is the explicit override; modelspace effort is the fallback. */
+export const resolveWorkflowTaskEffort = (
+  task: AnyWorkflowWorkerTask,
+  options: { readonly worker?: string; readonly fallbackModel?: string } = {},
+): string | undefined => {
+  const worker = task.worker?.worker ?? options.worker;
+  const configured = task.worker?.worker === worker && task.worker !== undefined && "effort" in task.worker
+    ? task.worker.effort
+    : undefined;
+  if (typeof configured === "string") return configured;
+  return resolveWorkflowTaskModelResolution(task, options)?.effort;
+};
 
 export interface WorkflowFinishCriterionContext<Output> {
   readonly output: Output;

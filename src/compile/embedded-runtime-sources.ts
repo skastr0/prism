@@ -26,6 +26,8 @@ declare const WORKFLOW_DSL_RUNTIME_SOURCES: string | undefined;
 /** The vendored workflow DSL modules, keyed by their path under `prism-runtime/`. */
 export type WorkflowDslRuntimeSources = Readonly<Record<
   | "jev.ts"
+  | "lowerer-capabilities.ts"
+  | "workflow-effort.ts"
   | "workflows.ts"
   | "workflow-errors.ts"
   | "workflow-scheduler/cron.ts"
@@ -47,6 +49,11 @@ export const getWorkflowDslRuntimeSources = (): WorkflowDslRuntimeSources => {
   const runtimeSourceDir = dirname(fileURLToPath(import.meta.url));
   return {
     "jev.ts": readFileSync(join(runtimeSourceDir, "../jev.ts"), "utf8"),
+    "lowerer-capabilities.ts": readFileSync(
+      join(runtimeSourceDir, "../lowerer-capabilities.ts"),
+      "utf8",
+    ),
+    "workflow-effort.ts": readFileSync(join(runtimeSourceDir, "../workflow-effort.ts"), "utf8"),
     "workflows.ts": readFileSync(join(runtimeSourceDir, "../workflows.ts"), "utf8"),
     "workflow-errors.ts": readFileSync(join(runtimeSourceDir, "../workflow-errors.ts"), "utf8"),
     "workflow-scheduler/cron.ts": readFileSync(

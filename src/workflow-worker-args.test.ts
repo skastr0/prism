@@ -39,6 +39,27 @@ const invalidUnsupportedRepairOptions: UnsupportedRepairOptions = {
 void invalidUnsupportedRepairOptions;
 
 describe("workflow worker argument builders", () => {
+  test("maps fixed CLI effort values to each harness control", () => {
+    const claude = buildClaudeArgs({ prompt: "p", effort: "xhigh" });
+    expect(claude).toContain("--effort");
+    expect(claude).toContain("xhigh");
+    const antigravity: readonly string[] = buildAgyArgs({ cwd: "/repo", prompt: "p", effort: "high", printTimeout: "5m" });
+    expect(antigravity).toContain("--effort");
+    expect(antigravity).toContain("high");
+    const hermes = buildHermesArgs({ prompt: "p", effort: "ultra" });
+    expect(hermes).toContain("--reasoning");
+    expect(hermes).toContain("ultra");
+    const omp = buildOmpArgs({ cwd: "/repo", prompt: "p", effort: "max" });
+    expect(omp).toContain("--thinking");
+    expect(omp).toContain("max");
+  });
+
+  test("maps catalog-backed Grok effort to its CLI option", () => {
+    const args = buildGrokArgs({ cwd: "/repo", prompt: "p", effort: "high" });
+    expect(args.slice(args.indexOf("--reasoning-effort"), args.indexOf("--reasoning-effort") + 2))
+      .toEqual(["--reasoning-effort", "high"]);
+  });
+
   test("grok uses explicit single-turn mode", () => {
     const args = buildGrokArgs({
       cwd: "/repo",
@@ -504,11 +525,11 @@ describe("codex-cli permission arg mapping", () => {
     expect(args).not.toContain("--sandbox");
   });
 
-  test("passes the resolved Codex model reasoning variant explicitly", () => {
+  test("passes the resolved Codex reasoning effort explicitly", () => {
     const args = buildCodexArgs({
       cwd: "/r",
       model: "gpt-5.6-luna",
-      variant: "high",
+      effort: "high",
       outputPath: "/tmp/o",
       prompt: "p",
       permission: "permissive",

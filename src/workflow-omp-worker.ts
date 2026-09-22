@@ -35,7 +35,7 @@ export type OmpWorkflowWorkerOptions = {
   readonly model?: string;
   readonly provider?: string;
   readonly profile?: string;
-  readonly thinking?: string;
+  readonly effort?: string;
   readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
@@ -108,7 +108,7 @@ export const buildOmpArgs = (input: {
   readonly model?: string;
   readonly provider?: string;
   readonly profile?: string;
-  readonly thinking?: string;
+  readonly effort?: string;
   readonly prompt: string;
   readonly permission?: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
@@ -135,7 +135,7 @@ export const buildOmpArgs = (input: {
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
     ...(input.provider !== undefined ? ["--provider", input.provider] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
-    ...(input.thinking !== undefined ? ["--thinking", input.thinking] : []),
+    ...(input.effort !== undefined ? ["--thinking", input.effort] : []),
     ...(input.sessionId !== undefined ? ["--resume", input.sessionId] : []),
     ...permissionArgs,
     "--",
@@ -249,7 +249,7 @@ export const runOmpWorkflowTask = async (
       model: options.model,
       provider: options.provider,
       profile: options.profile,
-      thinking: options.thinking,
+      effort: options.effort,
       prompt,
       ...(sessionPersistence === "ephemeral"
         ? { sessionPersistence }

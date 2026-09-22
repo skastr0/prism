@@ -55,7 +55,7 @@ test("OMP lowerer emits native agents, skills, and extension without Pi surfaces
     description: "OMP builder",
     body: "# Builder\n",
     color: undefined,
-    model: { model: "gpt-5.6-luna", variant: "high" },
+    model: { model: "gpt-5.6-luna", effort: "high" },
     targetOverride: {
       omp: {
         model: ["gpt-5.6-luna", "synthetic/hf:moonshotai/Kimi-K2.6"],
@@ -127,4 +127,29 @@ test("OMP lowerer emits native agents, skills, and extension without Pi surfaces
   expect(extension?.content).toContain("omp-schema-bridge");
   expect(lowered.files.some((file) => file.targetPath.includes(".pi"))).toBe(false);
   expect(lowered.files.some((file) => file.targetPath.endsWith("server.mjs"))).toBe(false);
+});
+
+test("OMP lowerer rejects legacy agent model variants with an exact effort fix", async () => {
+  const root = await createTempRoot();
+  const agent: ComposedAgent = {
+    name: "builder",
+    description: "OMP builder",
+    body: "# Builder\n",
+    color: undefined,
+    model: { model: "gpt-5.6-luna", variant: "high" },
+    targetOverride: { omp: {} },
+    skills: [],
+  };
+
+  await expect(planLowering({
+    agents: [agent],
+    sops: [],
+    target: {
+      scope: "project",
+      root: join(root, ".omp"),
+      sourcePluginName: "omp-plugin",
+    },
+  })).rejects.toThrow(
+    "OMP reasoning uses 'effort', not 'variant', on agent 'builder' from model. Fix: replace `variant: \"high\"` with `effort: \"high\"` in model.",
+  );
 });

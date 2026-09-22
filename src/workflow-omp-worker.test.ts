@@ -48,7 +48,7 @@ describe("OMP workflow argv", () => {
       model: "gpt-5.6-luna",
       provider: "openai",
       profile: "isolated",
-      thinking: "high",
+      effort: "high",
       prompt: "return json",
       sessionId: "019f-session",
       permission: "restricted",
@@ -239,7 +239,7 @@ describe("OMP workflow execution", () => {
               omp: {
                 provider: "openai",
                 model: "gpt-5.6-luna",
-                variant: "minimal",
+                effort: "minimal",
               },
             },
           },
@@ -257,6 +257,10 @@ describe("OMP workflow execution", () => {
       expect(argv.slice(argv.indexOf("--provider"), argv.indexOf("--provider") + 2)).toEqual([
         "--provider",
         "openai",
+      ]);
+      expect(argv.slice(argv.indexOf("--thinking"), argv.indexOf("--thinking") + 2)).toEqual([
+        "--thinking",
+        "minimal",
       ]);
       expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual([
         "--model",

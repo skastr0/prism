@@ -24,6 +24,8 @@ test("getWorkflowDslRuntimeSources returns the canonical vendored DSL module tex
 
   expect(Object.keys(sources).sort()).toEqual([
     "jev.ts",
+    "lowerer-capabilities.ts",
+    "workflow-effort.ts",
     "workflow-errors.ts",
     "workflow-scheduler/cron.ts",
     "workflow-scheduler/errors.ts",
@@ -38,6 +40,8 @@ test("getWorkflowDslRuntimeSources returns the canonical vendored DSL module tex
   expect(sources["workflows.ts"]).toContain("export const decodeTaskOutput");
   expect(sources["jev.ts"]).toContain("export function choice");
   expect(sources["jev.ts"]).toContain("export const jevResultSchema");
+  expect(sources["lowerer-capabilities.ts"]).toContain("workflowEffort");
+  expect(sources["workflow-effort.ts"]).toContain("legacyReasoningVariantError");
   expect(sources["workflow-errors.ts"]).toContain("WorkflowTaskInputError");
   expect(sources["workflow-scheduler/schedule.ts"]).toContain("parseWorkflowSchedule");
 });

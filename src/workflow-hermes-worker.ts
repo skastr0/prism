@@ -11,6 +11,7 @@ export type HermesWorkflowWorkerOptions = {
   readonly model?: string;
   readonly provider?: string;
   readonly profile?: string;
+  readonly effort?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
@@ -69,6 +70,7 @@ export const buildHermesArgs = (input: {
   readonly profile?: string;
   readonly model?: string;
   readonly provider?: string;
+  readonly effort?: string;
   readonly prompt: string;
   readonly resumeSessionId?: string;
   readonly permission?: WorkflowPermissionMode;
@@ -79,6 +81,7 @@ export const buildHermesArgs = (input: {
   return [
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
     "chat",
+    ...(input.effort !== undefined ? ["--reasoning", input.effort] : []),
     ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : []),
     "--query",
     input.prompt,
@@ -105,6 +108,7 @@ export const runHermesWorkflowTask = async (
     profile: options.profile,
     model: options.model,
     provider: options.provider,
+    effort: options.effort,
     prompt,
     resumeSessionId,
     permission: options.resolvedPermission,

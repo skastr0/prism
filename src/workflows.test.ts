@@ -20,6 +20,7 @@ import {
   type WorkflowRuntime,
   type WorkflowOutputSchema,
   type WorkflowTaskOutput,
+  resolveWorkflowTaskEffort,
 } from "./workflows.js";
 import { workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { WORKFLOW_HARNESS_IDS, workflowHarnessDefaultModel } from "./workflow-harness-detection.js";
@@ -42,7 +43,7 @@ const modelProfile = {
   targets: {
     opencode: { strategy: "any-of", models: [{ model: "crof/kimi-k2.6" }, { model: "fallback/kimi" }] },
     "claude-code": { model: "claude-opus-4-8", effort: "max" },
-    "codex-cli": { model: "gpt-5.1-codex", variant: "high" },
+    "codex-cli": { model: "gpt-5.1-codex", effort: "high" },
     grok: { model: "grok-build-fast" },
     hermes: { model: "openai/gpt-5.1-mini" },
     "kimi-code": { model: "moonshot/kimi-k2" },
@@ -62,6 +63,21 @@ const PatchReport = Schema.Struct({
   summary: Schema.String,
   filesChanged: Schema.Array(Schema.String),
 });
+
+const fixedEffortWorkerTypes = [
+  defineTask({ id: "claude-effort-type", prompt: "p", output: PatchReport, worker: { worker: "claude-code", effort: "max" } }),
+  defineTask({ id: "agy-effort-type", prompt: "p", output: PatchReport, worker: { worker: "antigravity-cli", effort: "high" } }),
+  defineTask({ id: "hermes-effort-type", prompt: "p", output: PatchReport, worker: { worker: "hermes", effort: "ultra" } }),
+  defineTask({ id: "omp-effort-type", prompt: "p", output: PatchReport, worker: { worker: "omp", effort: "auto" } }),
+];
+void fixedEffortWorkerTypes;
+
+// @ts-expect-error fixed CLI values come from the capability registry.
+defineTask({ id: "invalid-claude-effort", prompt: "p", output: PatchReport, worker: { worker: "claude-code", effort: "ultra" } });
+// @ts-expect-error Devin encodes effort in model slugs and has no worker.effort control.
+defineTask({ id: "unsupported-devin-effort", prompt: "p", output: PatchReport, worker: { worker: "devin", effort: "high" } });
+// @ts-expect-error OpenCode has model variants, not a per-task effort control.
+defineTask({ id: "unsupported-opencode-effort", prompt: "p", output: PatchReport, worker: { worker: "opencode", effort: "high" } });
 
 const Exploration = Schema.Struct({
   assumption: Schema.String,
@@ -340,7 +356,7 @@ describe("workflow authoring primitives", () => {
     expect(() => resolveWorkflowTaskModel(build)).toThrow(WorkflowModelResolutionError);
   });
 
-  test("preserves harness model variants from model profiles", () => {
+  test("preserves harness reasoning effort from model profiles", () => {
     const profiled = defineTask({
       id: "profiled",
       prompt: "Use the profile variant.",
@@ -349,9 +365,26 @@ describe("workflow authoring primitives", () => {
     });
     expect(resolveWorkflowTaskModelResolution(profiled)).toEqual({
       model: "gpt-5.1-codex",
-      variant: "high",
+      effort: "high",
       source: "task",
     });
+  });
+
+  test("task worker effort overrides modelspace effort", () => {
+    const profiled = defineTask({
+      id: "profiled",
+      prompt: "Use the profile effort unless overridden.",
+      output: PatchReport,
+      worker: {
+        worker: "claude-code",
+        effort: "low",
+        model: {
+          ...modelProfile,
+          targets: { "claude-code": { model: "claude-opus-4-8", effort: "max" } },
+        },
+      },
+    });
+    expect(resolveWorkflowTaskEffort(profiled)).toBe("low");
   });
 
   test("an explicit CLI --model fallback resolves a task with no worker model", () => {

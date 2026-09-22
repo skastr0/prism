@@ -6,7 +6,7 @@
  * installed on the machine, not per repo.
  */
 
-import { workflowWorkerHarnessIds } from "./lowerer-capabilities.js";
+import { LOWERER_CAPABILITIES, workflowWorkerHarnessIds } from "./lowerer-capabilities.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prismStateDir } from "./prism-home.js";
@@ -107,7 +107,10 @@ const emitHarnessBlock = (
 } | undefined => {
   const slugs = uniqueSorted(workerFacingModels(harness, models).map((model) => model.id));
   const catalogSlugs = uniqueSorted(catalogModels(harness, models).map((model) => model.id));
-  const efforts = uniqueSorted(models.flatMap((model) => [...(model.efforts ?? [])]));
+  const effortCapability = LOWERER_CAPABILITIES[harness].workflowEffort;
+  const efforts = effortCapability?.kind === "catalog"
+    ? uniqueSorted(models.flatMap((model) => [...(model.efforts ?? [])]))
+    : [];
   if (slugs.length === 0 && catalogSlugs.length === 0) return undefined;
   const camel = CAMEL_BY_HARNESS[harness];
   const constName = `${camel}ModelSlugs`;
@@ -183,8 +186,9 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
  *
  * Import as \`prism/harnesses\`. Also augments \`WorkflowHarnessModelMap\`
  * on \`prism\` so \`defineTask({ worker: { worker, model } })\` is typed
- * per harness without a compiled plugin. Amp catalog slugs and efforts
- * narrow \`worker.catalogModel\` and \`worker.effort\`.
+ * per harness without a compiled plugin. Catalog-backed effort values
+ * narrow \`worker.effort\`; fixed CLI effort sets come from Prism's capability
+ * registry. Amp catalog slugs narrow \`worker.catalogModel\`.
  * Omit \`worker.model\` to keep the harness default. Pin only from
  * \`prism workflow models --offer\` / stated preferences.
  */

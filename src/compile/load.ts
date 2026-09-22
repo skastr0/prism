@@ -58,6 +58,7 @@ import { computeContentHash } from "../content-hash.js";
 import { readFile } from "../fs.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "../project-key.js";
+import { legacyReasoningVariantError } from "../workflow-effort.js";
 import { rewriteGeneratedRefsForRuntime } from "../workflow-generated-surface.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
@@ -1285,6 +1286,21 @@ const parseModelspace = (
 ): Effect.Effect<Modelspace, CompileError> =>
   Effect.gen(function* () {
     const raw = yield* importTsModule<unknown>(sourcePath, "modelspace");
+    if (isRecord(raw) && isRecord(raw.profiles)) {
+      for (const [profileName, profile] of Object.entries(raw.profiles)) {
+        if (!isRecord(profile) || !isRecord(profile.targets)) continue;
+        for (const worker of ["codex-cli", "omp"] as const) {
+          const message = legacyReasoningVariantError(
+            worker,
+            profile.targets[worker],
+            `profiles[${JSON.stringify(profileName)}].targets.${worker}`,
+          );
+          if (message !== undefined) {
+            return yield* Effect.fail(new SourceParseError({ sourcePath, kind: "modelspace", message }));
+          }
+        }
+      }
+    }
     const result = Schema.decodeUnknownResult(ModelspaceSchema)(raw);
     if (result._tag === "Failure") {
       return yield* Effect.fail(

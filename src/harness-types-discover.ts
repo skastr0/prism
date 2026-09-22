@@ -178,11 +178,19 @@ export const parseCodexDebugModels = (
                 ? rec.name
                 : undefined;
         if (!id) continue;
-        const effortsRaw = rec.efforts ?? rec.reasoning_efforts ?? rec.effort;
-        const efforts = Array.isArray(effortsRaw)
-          ? effortsRaw.filter((value): value is string => typeof value === "string")
-          : undefined;
-        models.push({ id, ...(efforts && efforts.length > 0 ? { efforts } : {}) });
+        const effortValues = rec.efforts ?? rec.reasoning_efforts ?? rec.effort;
+        const efforts = Array.isArray(effortValues)
+          ? effortValues.filter((value): value is string => typeof value === "string")
+          : typeof effortValues === "string" ? [effortValues] : [];
+        const supportedLevels = Array.isArray(rec.supported_reasoning_levels)
+          ? rec.supported_reasoning_levels.flatMap((level) => {
+            if (!level || typeof level !== "object") return [];
+            const effort = (level as Record<string, unknown>).effort;
+            return typeof effort === "string" ? [effort] : [];
+          })
+          : [];
+        const allEfforts = [...new Set([...efforts, ...supportedLevels])];
+        models.push({ id, ...(allEfforts.length > 0 ? { efforts: allEfforts } : {}) });
       }
       return { models };
     } catch (err) {
@@ -217,6 +225,15 @@ export const parseGrokModelsCache = (
         entry && typeof entry === "object" && "info" in entry
           ? (entry as { info?: Record<string, unknown> }).info
           : undefined;
+      const reasoningEfforts = info?.reasoning_efforts;
+      const efforts = Array.isArray(reasoningEfforts)
+        ? reasoningEfforts.flatMap((effort) => {
+          if (typeof effort === "string") return [effort];
+          if (!effort || typeof effort !== "object") return [];
+          const value = (effort as Record<string, unknown>).value;
+          return typeof value === "string" ? [value] : [];
+        })
+        : [];
       models.push({
         id,
         label:
@@ -225,6 +242,7 @@ export const parseGrokModelsCache = (
             : info && typeof info.model === "string"
               ? info.model
               : id,
+        ...(efforts.length > 0 ? { efforts: [...new Set(efforts)] } : {}),
       });
     }
     models.sort((left, right) => left.id.localeCompare(right.id));

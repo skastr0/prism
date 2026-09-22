@@ -21,7 +21,7 @@ export type CodexWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
-  readonly variant?: string;
+  readonly effort?: string;
   readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly abortSignal?: AbortSignal;
@@ -98,7 +98,7 @@ type CodexWorkflowSessionArgs =
 export const buildCodexArgs = (input: {
   readonly cwd: string;
   readonly model?: string;
-  readonly variant?: string;
+  readonly effort?: string;
   readonly outputSchemaPath?: string;
   readonly outputPath: string;
   readonly prompt: string;
@@ -110,8 +110,8 @@ export const buildCodexArgs = (input: {
     "exec",
     ...(input.sessionPersistence === "ephemeral" ? ["--ephemeral"] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
-    ...(input.variant !== undefined
-      ? ["--config", `model_reasoning_effort=${JSON.stringify(input.variant)}`]
+    ...(input.effort !== undefined
+      ? ["--config", `model_reasoning_effort=${JSON.stringify(input.effort)}`]
       : []),
     "--cd",
     input.cwd,
@@ -174,7 +174,7 @@ export const runCodexWorkflowTask = async (
   const args = buildCodexArgs({
     cwd: options.cwd,
     model: options.model,
-    variant: options.variant,
+    effort: options.effort,
     outputSchemaPath,
     outputPath,
     prompt,
@@ -225,7 +225,7 @@ export const runCodexWorkflowTask = async (
     const metadata: Record<string, unknown> = {
       adapter: "codex-cli",
       model: options.model,
-      modelVariant: options.variant,
+      reasoningEffort: options.effort,
       durationMs,
       sessionPersistence,
       ...(sessionId !== undefined ? { sessionId } : {}),

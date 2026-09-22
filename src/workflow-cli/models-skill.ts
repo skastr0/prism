@@ -44,7 +44,10 @@ prism workflow models --worker cursor --query opus
 
 - \`worker.model\` is harness-bound. There is no shared model type.
 - Cursor slugs are effort-suffixed. \`gemini-3.8-flash\` is not a slug; use \`gemini-3.8-flash-low|medium|high\`.
+- Fixed effort controls: Claude Code \`low|medium|high|xhigh|max\`; Antigravity CLI \`low|medium|high\`; Hermes \`none|minimal|low|medium|high|xhigh|max|ultra\`; OMP \`off|minimal|low|medium|high|xhigh|max|auto\`. These literal values come from Prism's capability registry and are checked by the workflow DSL.
+- Amp, Codex CLI, and Grok: \`worker.effort\` uses discovered per-model values. Refresh with \`prism workflow refresh-harness-types\`; validation checks the selected model's row as well as the discovered union.
 - Amp: \`worker.model\` is a \`--mode\` dial (\`low|medium|high|ultra\`) or plugin key. Catalog slugs go in \`worker.catalogModel\`. Reasoning goes in \`worker.effort\`. A dial in \`worker.model\` does not combine with \`catalogModel\` / \`effort\`.
+- Codex and OMP modelspace targets use \`effort\`, not \`variant\`; direct task effort overrides the modelspace value. Devin and Cursor encode effort in model slugs, so they have no \`worker.effort\` field. OpenCode's \`variant\` selects a model variant.
 - OMP pins are \`provider/id\` selectors from \`omp models --json\`. Bare ids are not selectors. \`opencode-go/*\` is Console Go and 400s in workflow \`--print\`.
 - \`worker.permission\` is per-worker. Do not copy one harness's mode onto another.
 

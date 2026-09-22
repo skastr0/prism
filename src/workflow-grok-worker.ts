@@ -108,7 +108,7 @@ export const buildGrokArgs = (input: {
     "--output-format",
     "json",
     "--no-wait-for-background",
-    ...(input.effort ? ["--effort", input.effort] : []),
+    ...(input.effort ? ["--reasoning-effort", input.effort] : []),
     ...permissionArgs,
     "--single",
     input.prompt,

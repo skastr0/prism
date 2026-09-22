@@ -15,6 +15,7 @@ export type ClaudeWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly effort?: string;
   readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
@@ -164,6 +165,7 @@ type ClaudeWorkflowSessionArgs =
 
 export const buildClaudeArgs = (input: {
   readonly model?: string;
+  readonly effort?: string;
   readonly prompt: string;
   readonly outputSchema?: WorkflowJsonSchema;
   readonly permission?: WorkflowPermissionMode;
@@ -189,6 +191,7 @@ export const buildClaudeArgs = (input: {
     "--verbose",
     ...(input.sessionPersistence === "ephemeral" ? ["--no-session-persistence"] : []),
     ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : []),
+    ...(input.effort !== undefined ? ["--effort", input.effort] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.outputSchema !== undefined ? ["--json-schema", JSON.stringify(input.outputSchema)] : []),
     ...permissionArgs,
@@ -217,6 +220,7 @@ export const runClaudeWorkflowTask = async (
   const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
   const args = buildClaudeArgs({
     model: options.model,
+    effort: options.effort,
     outputSchema,
     prompt,
     ...(sessionPersistence === "ephemeral"

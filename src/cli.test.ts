@@ -294,7 +294,7 @@ test("named workers: install, list, export, and reject duplicate names", async (
       {
         name: "bulk",
         description: "Cheap bulk iteration; verify with typecheck.",
-        config: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
+        config: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001" },
       },
     ],
   };

@@ -115,6 +115,17 @@ export type SopSource = SopDefinition;
 export interface ModelTargetDefinition {
   readonly model: string;
   readonly variant?: string;
+  readonly effort?: string;
+  readonly provider?: string;
+  readonly temperature?: number;
+  readonly top_p?: number;
+}
+
+export interface ReasoningEffortModelTargetDefinition {
+  readonly model: string;
+  readonly effort?: string;
+  readonly variant?: never;
+  readonly provider?: string;
   readonly temperature?: number;
   readonly top_p?: number;
 }
@@ -129,9 +140,21 @@ export type ModelTargetBlockDefinition =
   | ModelPoolTargetDefinition
   | Readonly<Record<string, unknown>>;
 
+export type ReasoningEffortModelTargetBlockDefinition =
+  | ReasoningEffortModelTargetDefinition
+  | {
+    readonly strategy: "any-of" | "round-robin" | "ordered";
+    readonly models: readonly ReasoningEffortModelTargetDefinition[];
+  };
+
+export type ModelProfileTargets = Readonly<Record<string, ModelTargetBlockDefinition>> & {
+  readonly "codex-cli"?: ReasoningEffortModelTargetBlockDefinition;
+  readonly omp?: ReasoningEffortModelTargetBlockDefinition;
+};
+
 export interface ModelProfileDefinition {
   readonly description?: string;
-  readonly targets: Readonly<Record<string, ModelTargetBlockDefinition>>;
+  readonly targets: ModelProfileTargets;
 }
 
 export interface ModelspaceDefinition {

@@ -1,6 +1,7 @@
 import {
   resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
+  resolveWorkflowTaskEffort,
   resolveWorkflowTaskSessionPersistence,
   type AnyWorkflowWorkerTask,
   type WorkflowPermissionMode,
@@ -83,7 +84,7 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "amp-code", fallbackModel: options.model }),
       catalogModel: task.worker?.worker === "amp-code" ? task.worker.catalogModel : undefined,
-      effort: task.worker?.worker === "amp-code" ? task.worker.effort : undefined,
+      effort: resolveWorkflowTaskEffort(task, { worker: "amp-code", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
@@ -95,6 +96,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runAntigravityWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "antigravity-cli", fallbackModel: options.model }),
+      effort: resolveWorkflowTaskEffort(task, { worker: "antigravity-cli", fallbackModel: options.model }),
       resolvedPermission: resolveAntigravityPermission(options.resolvedPermission),
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
@@ -106,6 +108,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runClaudeWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "claude-code", fallbackModel: options.model }),
+      effort: resolveWorkflowTaskEffort(task, { worker: "claude-code", fallbackModel: options.model }),
       sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "claude-code"),
       resolvedPermission: options.resolvedPermission,
       restrictedTools: options.restrictedTools,
@@ -124,7 +127,7 @@ const workflowWorkerAdapters = {
       return runCodexWorkflowTask(task, {
         cwd: options.cwd,
         model: resolution?.model,
-        variant: resolution?.variant,
+        effort: resolveWorkflowTaskEffort(task, { worker: "codex-cli", fallbackModel: options.model }),
         sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "codex-cli"),
         resolvedPermission: options.resolvedPermission,
         abortSignal: options.abortSignal,
@@ -149,6 +152,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runGrokWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "grok", fallbackModel: options.model }),
+      effort: resolveWorkflowTaskEffort(task, { worker: "grok", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
@@ -164,6 +168,7 @@ const workflowWorkerAdapters = {
         model: resolution?.model,
         provider: resolution?.provider,
         profile: task.worker?.profile ?? options.profile,
+        effort: resolveWorkflowTaskEffort(task, { worker: "hermes", fallbackModel: options.model }),
         resolvedPermission: options.resolvedPermission,
         abortSignal: options.abortSignal,
         reportProgress: options.context?.reportProgress,
@@ -216,7 +221,7 @@ const workflowWorkerAdapters = {
         model: resolution?.model,
         provider: resolution?.provider,
         profile: task.worker?.profile ?? options.profile,
-        thinking: resolution?.variant,
+        effort: resolveWorkflowTaskEffort(task, { worker: "omp", fallbackModel: options.model }),
         sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "omp"),
         resolvedPermission: options.resolvedPermission,
         restrictedTools: options.restrictedTools,

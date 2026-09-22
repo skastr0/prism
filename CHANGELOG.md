@@ -11,6 +11,14 @@ line. `0.4.0` was committed but never tagged or published.
 
 ## Unreleased
 
+### Added
+
+- **Workflow reasoning effort controls** — capability-backed CLI unions for
+  Claude Code, Antigravity CLI, Hermes, and OMP; discovered per-model effort
+  sets for Amp, Codex CLI, and Grok; modelspace effort resolution, validation,
+  task identity, adapter flags, and `validate --table` output. Codex/OMP
+  modelspace `variant` values now fail with an exact `effort` migration fix.
+
 ### Changed
 
 - The `opencode` harness and workflow worker now target OpenCode v2, using `opencode run --format json [--auto]` from the task directory.

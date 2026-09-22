@@ -32,7 +32,7 @@ const portableCatalog = {
     {
       name: "fast-iteration",
       description: "Cheap bulk iteration; verify with typecheck.",
-      config: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
+      config: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001" },
     },
   ],
 };

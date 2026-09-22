@@ -6,6 +6,7 @@ import { Cause, Effect, Exit, Option, Schema } from "effect";
 import { buildClaudeArgs } from "./workflow-claude-worker.js";
 import { buildOmpArgs } from "./workflow-omp-worker.js";
 import { defineTask, type WorkflowTaskWorkerOptions } from "./workflows.js";
+import type { HarnessTypesSnapshot } from "./harness-types.js";
 import { workflowTaskIdentity } from "./workflow-identity.js";
 import {
   WorkflowWorkerCatalogError,
@@ -66,6 +67,18 @@ const taskFor = (worker: WorkflowTaskWorkerOptions) => defineTask({
   output: PatchReport,
   worker,
 });
+
+const effortSnapshot: HarnessTypesSnapshot = {
+  generatedAt: "2026-09-22T00:00:00.000Z",
+  harnesses: [
+    { harness: "amp-code", source: "command", models: [
+      { id: "provider/model-a", kind: "model", efforts: ["low", "high"] },
+      { id: "provider/model-b", kind: "model", efforts: ["low"] },
+    ] },
+    { harness: "codex-cli", source: "command", models: [{ id: "gpt-5", efforts: ["low", "high"] }] },
+    { harness: "omp", source: "command", models: [{ id: "openai/m1", efforts: ["low", "high"] }] },
+  ],
+};
 
 describe("named workflow worker catalogs", () => {
   test("keeps two names on the same harness and round-trips without machine paths", async () => {
@@ -140,8 +153,16 @@ describe("named workflow worker catalogs", () => {
     })).toThrow(/secret|excess|unexpected/iu);
     expect(() => decodeWorkflowWorkerCatalog({
       version: 1,
+      workers: [worker("reviewer", { worker: "devin", effort: "high" })],
+    })).toThrow(/effort|excess|unexpected|no per-task effort/iu);
+    expect(decodeWorkflowWorkerCatalog({
+      version: 1,
       workers: [worker("reviewer", { worker: "claude-code", effort: "high" })],
-    })).toThrow(/effort|excess|unexpected/iu);
+    }).workers[0]?.config).toEqual({ worker: "claude-code", effort: "high" });
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("reviewer", { worker: "claude-code", effort: "bogus" })],
+    })).toThrow(/Supported: low, medium, high, xhigh, max/);
   });
 
   test("rejects invalid permission, session persistence, blank name, and missing worker", () => {
@@ -175,8 +196,8 @@ describe("named workflow worker catalogs", () => {
     });
   });
 
-  test("accepts a modelspace profile ref and preserves target variant and provider", () => {
-    const catalog = decodeWorkflowWorkerCatalog({
+  test("rejects legacy Codex modelspace variant with the exact effort fix", () => {
+    expect(() => decodeWorkflowWorkerCatalog({
       version: 1,
       workers: [worker("reviewer", {
         worker: "codex-cli",
@@ -188,13 +209,49 @@ describe("named workflow worker catalogs", () => {
           targets: { "codex-cli": { model: "gpt-5", variant: "low", provider: "openai" } },
         },
       })],
+    })).toThrow("Fix: replace `variant: \"low\"` with `effort: \"low\"` at model.targets.codex-cli.");
+  });
+
+  test("validates named-worker catalog effort against discovered model sets", () => {
+    const valid = decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("reviewer", { worker: "amp-code", catalogModel: "provider/model-a", effort: "high" })],
+    }, { effortSnapshot });
+    expect(valid.workers[0]?.config as unknown).toEqual({
+      worker: "amp-code",
+      catalogModel: "provider/model-a",
+      effort: "high",
     });
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("reviewer", { worker: "amp-code", catalogModel: "provider/model-b", effort: "high" })],
+    }, { effortSnapshot })).toThrow(/does not list effort "high"/);
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("reviewer", { worker: "amp-code", catalogModel: "provider/model-a", effort: "xhigh" })],
+    }, { effortSnapshot })).toThrow(/Fix: set worker.effort/);
+  });
+
+  test("accepts a modelspace profile ref and preserves target effort and provider", () => {
+    const catalog = decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("reviewer", {
+        worker: "codex-cli",
+        model: {
+          kind: "model-profile-ref",
+          plugin: "local",
+          modelspace: "defaults",
+          profile: "fast",
+          targets: { "codex-cli": { model: "gpt-5", effort: "low", provider: "openai" } },
+        },
+      })],
+    }, { effortSnapshot });
     expect(catalog.workers[0]?.config.model).toEqual({
       kind: "model-profile-ref",
       plugin: "local",
       modelspace: "defaults",
       profile: "fast",
-      targets: { "codex-cli": { model: "gpt-5", variant: "low", provider: "openai" } },
+      targets: { "codex-cli": { model: "gpt-5", effort: "low", provider: "openai" } },
     });
   });
 
@@ -282,14 +339,14 @@ describe("named workflow worker catalogs", () => {
 describe("workflow task identity configuration axes", () => {
   const hash = (worker: WorkflowTaskWorkerOptions) => workflowTaskIdentity("named", taskFor(worker)).promptHash;
 
-  test("separates variant, provider, permission, and restricted tool lists", () => {
+  test("separates effort, provider, permission, and restricted tool lists", () => {
     const codex = {
       worker: "codex-cli",
-      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "fast", targets: { "codex-cli": { model: "gpt-5", variant: "low" } } },
+      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "fast", targets: { "codex-cli": { model: "gpt-5", effort: "low" } } },
     } as const satisfies WorkflowTaskWorkerOptions;
     const codexHigh = {
       worker: "codex-cli",
-      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "fast", targets: { "codex-cli": { model: "gpt-5", variant: "high" } } },
+      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "fast", targets: { "codex-cli": { model: "gpt-5", effort: "high" } } },
     } as const satisfies WorkflowTaskWorkerOptions;
     expect(hash(codex)).not.toBe(hash(codexHigh));
 
@@ -305,15 +362,15 @@ describe("workflow task identity configuration axes", () => {
 
     const omp = {
       worker: "omp",
-      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "x", targets: { omp: { model: "m1", provider: "a", variant: "low" } } },
+      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "x", targets: { omp: { model: "m1", provider: "a", effort: "low" } } },
     } as const satisfies WorkflowTaskWorkerOptions;
     const ompProvider = {
       worker: "omp",
-      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "x", targets: { omp: { model: "m1", provider: "b", variant: "low" } } },
+      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "x", targets: { omp: { model: "m1", provider: "b", effort: "low" } } },
     } as const satisfies WorkflowTaskWorkerOptions;
     const ompVariant = {
       worker: "omp",
-      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "x", targets: { omp: { model: "m1", provider: "a", variant: "high" } } },
+      model: { kind: "model-profile-ref", plugin: "p", modelspace: "m", profile: "x", targets: { omp: { model: "m1", provider: "a", effort: "high" } } },
     } as const satisfies WorkflowTaskWorkerOptions;
     expect(new Set([hash(omp), hash(ompProvider), hash(ompVariant)]).size).toBe(3);
 
@@ -329,20 +386,20 @@ describe("workflow task identity configuration axes", () => {
   });
 
   test("hashes compiled raw options, not the curated name", () => {
-    const raw = { worker: "amp-code", catalogModel: "anthropic/claude", effort: "high" } as const satisfies WorkflowTaskWorkerOptions;
-    const otherEffort = { worker: "amp-code", catalogModel: "anthropic/claude", effort: "low" } as const satisfies WorkflowTaskWorkerOptions;
+    const raw = { worker: "amp-code", catalogModel: "provider/model-a", effort: "high" } as unknown as WorkflowTaskWorkerOptions;
+    const otherEffort = { worker: "amp-code", catalogModel: "provider/model-a", effort: "low" } as unknown as WorkflowTaskWorkerOptions;
     const unconfigured = { worker: "amp-code", model: "high" } as const satisfies WorkflowTaskWorkerOptions;
     const named = decodeWorkflowWorkerCatalog({
       version: 1,
       workers: [
-        worker("reviewer", raw, "reviews with a catalog pin"),
-        worker("editor", raw, "same pin, different role */ export const stolen"),
+        worker("reviewer", raw as unknown as Record<string, unknown>, "reviews with a catalog pin"),
+        worker("editor", raw as unknown as Record<string, unknown>, "same pin, different role */ export const stolen"),
       ],
-    });
+    }, { effortSnapshot });
     const renamed = decodeWorkflowWorkerCatalog({
       version: 1,
-      workers: [worker("other-reviewer", raw, "a different description")],
-    });
+      workers: [worker("other-reviewer", raw as unknown as Record<string, unknown>, "a different description")],
+    }, { effortSnapshot });
 
     expect(hash(named.workers[0]!.config)).toBe(hash(raw));
     expect(hash(named.workers[1]!.config)).toBe(hash(raw));

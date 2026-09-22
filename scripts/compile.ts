@@ -21,6 +21,11 @@ const astToJsonSchemaSource = readFileSync(
 );
 const workflowDslRuntimeSources = JSON.stringify({
   "jev.ts": readFileSync(join(repoRoot, "src", "jev.ts"), "utf8"),
+  "lowerer-capabilities.ts": readFileSync(
+    join(repoRoot, "src", "lowerer-capabilities.ts"),
+    "utf8",
+  ),
+  "workflow-effort.ts": readFileSync(join(repoRoot, "src", "workflow-effort.ts"), "utf8"),
   "workflows.ts": readFileSync(join(repoRoot, "src", "workflows.ts"), "utf8"),
   "workflow-errors.ts": readFileSync(join(repoRoot, "src", "workflow-errors.ts"), "utf8"),
   "workflow-scheduler/cron.ts": readFileSync(

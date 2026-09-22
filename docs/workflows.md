@@ -82,7 +82,7 @@ Curate harness/model choices once; workflow authors choose a role by its descrip
 }
 ```
 
-These are examples, not built-in workers. Multiple names can use the same harness. Names use lowercase letters, digits, `_`, and `-`, starting with a letter; descriptions must be nonblank. `config` uses the existing harness-specific `WorkflowTaskWorkerOptions` with a required `worker`. Unknown fields and unsupported permissions/session settings fail validation rather than being dropped. Effort remains harness-specific: curation does not add effort controls to adapters that lack them. Amp supports `catalogModel` and `effort`; resolved model-profile objects may carry other harnesses' existing provider/variant settings.
+These are examples, not built-in workers. Multiple names can use the same harness. Names use lowercase letters, digits, `_`, and `-`, starting with a letter; descriptions must be nonblank. `config` uses the existing harness-specific `WorkflowTaskWorkerOptions` with a required `worker`. Unknown fields and unsupported permissions/session settings fail validation rather than being dropped. Effort remains harness-specific: fixed CLI values come from the capability registry; Amp, Codex, and Grok values come from discovered model catalogs and are checked against the selected model row. Devin and Cursor encode effort in their model slugs, and OpenCode workers have no per-task effort field.
 
 ```bash
 prism workflow workers install ./workers.json
@@ -160,6 +160,7 @@ type WorkflowWorkerId =
 worker: {
   worker?: WorkflowWorkerId;         // which harness CLI executes this task
   model?: string | live harness slug | WorkflowModelProfileRef;
+  effort?: harness-specific effort value; // only where the worker has a direct effort control
   profile?: string;
   permission?: WorkflowPermissionMode;
   sessionPersistence?: "persistent" | "ephemeral"; // claude-code | codex-cli | omp
@@ -169,6 +170,8 @@ worker: {
 ```
 
 **Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own flags. The type is per-worker: Codex may use `sandbox-read-only`; Claude, Grok, Amp, and OMP may not. `prism workflow validate` fails closed with the same remediation as run. Do not copy a Codex sandbox pin onto another harness.
+
+**Reasoning effort.** `worker.effort` is supported only where the capability registry declares a direct per-task control. Fixed values are Claude Code `low | medium | high | xhigh | max`, Antigravity CLI `low | medium | high`, Hermes `none | minimal | low | medium | high | xhigh | max | ultra`, and OMP `off | minimal | low | medium | high | xhigh | max | auto`. Amp, Codex CLI, and Grok use discovered per-model values from `prism workflow refresh-harness-types`; validation checks both the discovered union and the selected model's supported set. A task-level `worker.effort` overrides effort from its modelspace target. Codex and OMP modelspace targets use `effort`; `variant` is not an alias and fails with a one-line migration fix. `variant` remains a model-selection setting where the harness uses it. Cursor and Devin carry effort in model slugs, while Devin, Cursor, and OpenCode do not accept `worker.effort`.
 
 **Retry** (executor-level, WFE-009): only *classified-transient* executor failures retry — an unclassified non-zero worker exit. Config/load errors and cancellation-barrier outcomes never retry. `maxAttempts` counts total attempts (default 2, i.e. one retry); `backoffMs` spaces them.
 
@@ -189,10 +192,10 @@ Tasks without a `worker` fall back to the CLI: `prism workflow run --worker <id>
 `model` resolves through an exact precedence chain (`resolveWorkflowTaskModelResolution`):
 
 1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`. After `prism workflow refresh-harness-types`, that string is checked against the installed harness's discovered slugs. OMP pins are `provider/id` selectors from `omp models --json` (example: `ollama-cloud/glm-5.3-flash`); unpinned OMP tasks prefer `~/.omp/agent/config.yml` `modelRoles.default` with the `:thinking` suffix stripped. `opencode-go/*` is Console Go and 400s in workflow `--print` (`MissingSessionID`). Amp inventories three surfaces: the `--mode` dial (`low | medium | high | ultra`), plugin mode keys (both valid `worker.model` / `--mode` values), and the curated `provider/model` catalog from `amp plugins show-agent-options --json`. Catalog slugs are `worker.catalogModel` (`AmpCodeCatalogSlug`); reasoning effort is `worker.effort` (`AmpCodeEffort`). Amp has no `--model` flag, so Prism pins catalog/effort through a one-shot project plugin mode when no existing plugin mode already binds that slug. Run metadata reports `model` as the catalog slug (or dial), plus `ampMode`, `catalogModel`, and `effort` — never the transport key `prism-pin`. A dial in `worker.model` can `extends` that pin; a plugin mode key cannot combine with `catalogModel` / `effort`. `prism workflow validate` fail-closes when the snapshot lists the catalog row and `worker.effort` is not on that row. Modelspaces stay optional policy, not the inventory.
-2. **Task modelspace profile ref** — `worker.model: { kind: "model-profile-ref", plugin, modelspace, profile }` resolves the profile's target for the task's worker; the first concrete `{ model, provider?, variant? }` entry wins. No entry for that worker → `WorkflowModelResolutionError`.
+2. **Task modelspace profile ref** — `worker.model: { kind: "model-profile-ref", plugin, modelspace, profile }` resolves the profile's target for the task's worker; the first concrete model binding wins. Use harness-bound fields: `provider` where supported, OpenCode's `variant`, and Codex/OMP's `effort`. No entry for that worker → `WorkflowModelResolutionError`.
 3. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`. Spawn omits the harness model flag so the user's harness default stays. Do not invent a Prism default. Named workers compile to ordinary task configurations, not an extra runtime preference layer.
 
-Resolution can carry a **provider** (harness-side inference provider, e.g. hermes `--provider xai-oauth`) and a **variant** (harness-bound model variant such as Codex reasoning effort). `prism workflow validate <file>` prints each task's resolved `(worker, model)` before anything dispatches — read it.
+Resolution can carry a **provider** (harness-side inference provider, e.g. Hermes `--provider xai-oauth`), a **variant** (a model-selection setting such as OpenCode's), or an **effort** (a reasoning control). A direct `worker.effort` overrides modelspace effort. `prism workflow validate <file>` prints each task's resolved model and effective effort before anything dispatches — read it.
 
 ## Output schemas and decode repairs
 
@@ -400,7 +403,7 @@ Every run persists to a per-project SQLite store (`workflows.sqlite` under `PRIS
 
 - Re-running a workflow replays completed tasks from cache instantly — resume after a crash costs nothing for finished work.
 - Changing a task's semantics changes its address — only that task re-executes.
-- Supported Amp catalog/effort, provider/variant, and effective permission/tool settings participate in the semantic hash. A curated worker's name and description do not; changing its execution settings does.
+- Supported effort, provider/variant, and effective permission/tool settings participate in the semantic hash. A curated worker's name and description do not; changing its execution settings does.
 - `sessionPersistence` does not change the address: it controls harness-side session retention, while the completed task result remains reusable across persistent and ephemeral runs.
 - The cache is durable across runs. To force a fresh result, bump the `cacheKey` (`"…-v2"`); for full isolation, use a fresh store (`--store <path>`) — there is deliberately no cache-bypass flag.
 

@@ -5,6 +5,8 @@ import {
   resolveWorkflowTaskSessionPersistence,
   resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
+  resolveWorkflowTaskEffort,
+  workflowWorkerSupportsEffort,
   type AnyJevTask,
   type AnyWorkflowTask,
   type AnyWorkflowWorkerTask,
@@ -60,6 +62,7 @@ export interface WorkflowWorkerRunTaskSnapshot extends WorkflowRunTaskSnapshotBa
     readonly worker?: string;
     readonly model?: string;
     readonly profile?: string;
+    readonly effort?: string;
     readonly sessionPersistence?: WorkflowSessionPersistence;
   };
   readonly finishCriteria: ReadonlyArray<string>;
@@ -93,7 +96,7 @@ export type WorkflowRunTaskSnapshotInput =
   | Omit<WorkflowWorkerRunTaskSnapshot, "createdAt">
   | Omit<JevRunTaskSnapshot, "createdAt">;
 
-const WORKFLOW_TASK_IDENTITY_VERSION = 4;
+const WORKFLOW_TASK_IDENTITY_VERSION = 5;
 
 const workflowWorkerSemanticsVersion = (worker: string | null): string => {
   switch (worker) {
@@ -155,11 +158,13 @@ export const workflowTaskIdentity = (
     worker: worker ?? undefined,
     fallbackModel: runtimeOptions.fallbackModel,
   });
+  const effort = worker !== null && workflowWorkerSupportsEffort(worker)
+    ? resolveWorkflowTaskEffort(task, { worker: worker ?? undefined, fallbackModel: runtimeOptions.fallbackModel })
+    : undefined;
   const permission = task.worker?.permission ?? runtimeOptions.fallbackPermission ?? "permissive";
   const configuration = {
     ...(task.worker?.worker === "amp-code" && task.worker.catalogModel !== undefined ? { catalogModel: task.worker.catalogModel } : {}),
-    ...(task.worker?.worker === "amp-code" && task.worker.effort !== undefined ? { effort: task.worker.effort } : {}),
-    ...((worker === "codex-cli" || worker === "omp") && resolution?.variant !== undefined ? { variant: resolution.variant } : {}),
+    ...(effort !== undefined ? { effort } : {}),
     ...((worker === "hermes" || worker === "omp") && resolution?.provider !== undefined ? { provider: resolution.provider } : {}),
     ...(permission !== "permissive" ? { permission } : {}),
     ...(permission === "restricted" && task.worker?.restrictedTools !== undefined ? { restrictedTools: task.worker.restrictedTools } : {}),
@@ -226,12 +231,16 @@ const taskWorkerSnapshot = (
   const worker = task.worker?.worker ?? runtimeOptions.fallbackWorker;
   const model = resolveWorkflowTaskModel(task, { worker, fallbackModel: runtimeOptions.fallbackModel });
   const profile = task.worker?.profile;
+  const effort = worker !== undefined && workflowWorkerSupportsEffort(worker)
+    ? resolveWorkflowTaskEffort(task, { worker, fallbackModel: runtimeOptions.fallbackModel })
+    : undefined;
   const sessionPersistence = resolveWorkflowTaskSessionPersistence(task, worker);
-  if (worker === undefined && model === undefined && profile === undefined && sessionPersistence === undefined) return undefined;
+  if (worker === undefined && model === undefined && profile === undefined && effort === undefined && sessionPersistence === undefined) return undefined;
   return {
     ...(worker !== undefined ? { worker } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(profile !== undefined ? { profile } : {}),
+    ...(effort !== undefined ? { effort } : {}),
     ...(sessionPersistence !== undefined ? { sessionPersistence } : {}),
   };
 };

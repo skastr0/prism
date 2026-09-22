@@ -14,6 +14,7 @@ import {
   parseCodexDebugModels,
   parseCursorModelsList,
   parseGrokModelsCli,
+  parseGrokModelsCache,
   parseKimiProviderList,
   parseOmpConfigDefaultModel,
   parseOmpModelsJson,
@@ -100,9 +101,15 @@ describe("harness model parsers", () => {
 
   test("parses Codex JSON and line-oriented output", () => {
     const json = parseCodexDebugModels(JSON.stringify({
-      models: [{ slug: "gpt-5.6-terra", efforts: ["low", "high"] }],
+      models: [
+        { slug: "gpt-5.6-terra", efforts: ["low", "high"] },
+        { slug: "gpt-5.6-codex", supported_reasoning_levels: [{ effort: "medium" }, { effort: "xhigh" }] },
+      ],
     }));
-    expect(json.models).toEqual([{ id: "gpt-5.6-terra", efforts: ["low", "high"] }]);
+    expect(json.models).toEqual([
+      { id: "gpt-5.6-terra", efforts: ["low", "high"] },
+      { id: "gpt-5.6-codex", efforts: ["medium", "xhigh"] },
+    ]);
     const lines = parseCodexDebugModels("gpt-5.4-mini low medium\n");
     expect(lines.models[0]).toEqual({ id: "gpt-5.4-mini", efforts: ["low", "medium"] });
   });
@@ -174,9 +181,36 @@ describe("harness model parsers", () => {
       efforts: ["low", "high", "max"],
     }]);
   });
+
+  test("parses Grok per-model reasoning efforts from its model cache", () => {
+    expect(parseGrokModelsCache(JSON.stringify({
+      models: {
+        "xai/grok-4": { info: { name: "Grok 4", reasoning_efforts: [{ value: "low" }, { value: "high" }] } },
+      },
+    })).models).toEqual([{
+      id: "xai/grok-4",
+      label: "Grok 4",
+      efforts: ["low", "high"],
+    }]);
+  });
 });
 
 describe("renderHarnessModelsModule", () => {
+  test("discovers effort unions only for catalog-backed capabilities", () => {
+    const source = renderHarnessModelsModule({
+      generatedAt: "2026-09-22T00:00:00.000Z",
+      harnesses: [
+        { harness: "claude-code", models: [{ id: "opus", efforts: ["low", "high"] }], source: "cache" },
+        { harness: "codex-cli", models: [{ id: "gpt-5", efforts: ["low", "high"] }], source: "command" },
+        { harness: "grok", models: [{ id: "grok-4", efforts: ["minimal", "high"] }], source: "command" },
+      ],
+    });
+    expect(source).toContain("codexEfforts");
+    expect(source).toContain('"codex-cli": "high" | "low"');
+    expect(source).toContain('"grok": "high" | "minimal"');
+    expect(source).not.toContain("claudeCodeEfforts");
+  });
+
   test("emits discovered Amp modes and skips empty workers", () => {
     const snapshot: HarnessTypesSnapshot = {
       generatedAt: "2026-09-09T00:00:00.000Z",

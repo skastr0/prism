@@ -18,6 +18,7 @@ import {
   validateAmpCatalogPins,
 } from "./workflow-amp-worker.js";
 import type { HarnessTypesSnapshot } from "./harness-types.js";
+import type { WorkflowTaskWorkerOptions } from "./workflows.js";
 
 const task = {
   kind: "workflow-task" as const,
@@ -102,7 +103,7 @@ describe("Amp catalog pin validation", () => {
   test("rejects effort the catalog row does not list", () => {
     const error = validateAmpCatalogPins({
       ...task,
-      worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "low" },
+      worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "low" } as unknown as WorkflowTaskWorkerOptions,
     }, snapshot);
     expect(error).toMatch(/does not support effort "low"/);
     expect(error).toContain("none");
@@ -111,7 +112,7 @@ describe("Amp catalog pin validation", () => {
   test("accepts a listed effort", () => {
     expect(validateAmpCatalogPins({
       ...task,
-      worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" },
+      worker: { worker: "amp-code", catalogModel: "anthropic/claude-haiku-4-5-20251001", effort: "none" } as unknown as WorkflowTaskWorkerOptions,
     }, snapshot)).toBeUndefined();
   });
 });

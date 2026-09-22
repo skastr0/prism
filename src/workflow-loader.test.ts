@@ -314,7 +314,7 @@ const profileRef = {
   modelspace: "empirical-modelspaces",
   profile: "deep-explorer",
   targets: {
-    "claude-code": { model: "claude-opus-4-8" },
+    "claude-code": { model: "claude-opus-4-8", effort: "high" },
   },
 };
 
@@ -597,7 +597,7 @@ export default defineWorkflow({
     expect(summary.modelResolution).toHaveLength(4);
     expect(summary.modelResolution).toEqual([
       { id: "explicit", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
-      { id: "profile", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
+      { id: "profile", worker: "claude-code", model: "claude-opus-4-8", source: "task", effort: "high" },
       { id: "default", worker: "grok" },
       { id: "deferred" },
     ]);

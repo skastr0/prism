@@ -27,6 +27,7 @@ import {
 import {
   isJevTask,
   isWorkflowDefinition,
+  resolveWorkflowTaskEffort,
   resolveWorkflowTaskModelResolution,
   workflowSummary,
   type AnyWorkflowDefinition,
@@ -35,6 +36,7 @@ import {
   type WorkflowTaskModelResolutionSource,
   type WorkflowValidationSummary,
 } from "./workflows.js";
+import { validateWorkflowEffort } from "./workflow-effort.js";
 import {
   assertWorkflowWorkerPermission,
   resolveWorkflowTaskPermission,
@@ -115,7 +117,6 @@ const resolveTaskModelRow = (
   const pins = ampWorkerPins(task);
   const pinFields = {
     ...(pins.catalogModel !== undefined ? { catalogModel: pins.catalogModel } : {}),
-    ...(pins.effort !== undefined ? { effort: pins.effort } : {}),
   };
   const worker = task.worker?.worker;
   if (worker === undefined) return { id: task.id, ...pinFields };
@@ -152,9 +153,21 @@ const resolveTaskModelRow = (
 
   try {
     const resolution = resolveWorkflowTaskModelResolution(task, { worker });
+    const effort = resolveWorkflowTaskEffort(task, { worker });
+    const effortError = validateWorkflowEffort({
+      worker,
+      effort,
+      model: resolution?.model,
+      catalogModel: pins.catalogModel,
+      snapshot,
+    });
+    const finalEffortError = effortError;
+    if (finalEffortError !== undefined) {
+      return { id: task.id, worker, ...pinFields, ...(effort !== undefined ? { effort } : {}), error: finalEffortError };
+    }
     const row = resolution === undefined
-      ? { id: task.id, worker, ...pinFields }
-      : { id: task.id, worker, model: resolution.model, source: resolution.source, ...pinFields };
+      ? { id: task.id, worker, ...pinFields, ...(effort !== undefined ? { effort } : {}) }
+      : { id: task.id, worker, model: resolution.model, source: resolution.source, ...pinFields, ...(effort !== undefined ? { effort } : {}) };
     if (worker === "omp" && "model" in row) assertOmpWorkflowModel(row.model);
     return row;
   } catch (error) {

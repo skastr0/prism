@@ -9,7 +9,7 @@ import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { isWorkflowRunOutcomeSuccessful, WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore, workflowRunLiveness, workflowTaskIdentity } from "./workflow-store.js";
 import type { WorkflowWorkerRunTaskSnapshot } from "./workflow-identity.js";
-import type { AnyWorkflowWorkerTask } from "./workflows.js";
+import type { AnyWorkflowWorkerTask, WorkflowTaskWorkerOptions } from "./workflows.js";
 
 /** A run's first persisted worker-task snapshot (these suites never snapshot jev tasks). */
 const firstWorkerSnapshot = (store: WorkflowStore, runId: string): WorkflowWorkerRunTaskSnapshot | undefined => {
@@ -3329,14 +3329,14 @@ describe("workflow store", () => {
       for (const [index, config] of configs.entries()) {
         const result = await runWorkflow(defineWorkflow({
           name: "curated-pins",
-          tasks: [defineTask({ id: "review", prompt: "Review the same input.", output: Schema.Struct({ summary: Schema.String }), worker: config })],
+          tasks: [defineTask({ id: "review", prompt: "Review the same input.", output: Schema.Struct({ summary: Schema.String }), worker: config as unknown as WorkflowTaskWorkerOptions })],
         }), { store, executeTask: async () => ({ summary: `execution-${++calls}` }) });
         expect(result.tasks[0]?.cached).toBe(false);
         expect(result.tasks[0]?.output).toEqual({ summary: `execution-${index + 1}` });
       }
       const replay = await runWorkflow(defineWorkflow({
         name: "curated-pins",
-        tasks: [defineTask({ id: "review", prompt: "Review the same input.", output: Schema.Struct({ summary: Schema.String }), worker: { ...configs[0] } })],
+        tasks: [defineTask({ id: "review", prompt: "Review the same input.", output: Schema.Struct({ summary: Schema.String }), worker: { ...configs[0] } as unknown as WorkflowTaskWorkerOptions })],
       }), { store, executeTask: async () => { throw new Error("exact replay must not dispatch"); } });
       expect(calls).toBe(3);
       expect(replay.tasks[0]?.cached).toBe(true);

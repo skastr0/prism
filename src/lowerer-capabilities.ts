@@ -5,6 +5,17 @@ export type SkillPermissionSupport = "supported" | "unsupported";
 export type CompileSurfaceSupport = "supported" | "unsupported";
 export type AgentModelBindingSupport = "consumed" | "ignored";
 
+export type WorkflowEffortCapability =
+  | {
+    readonly kind: "fixed";
+    readonly control: string;
+    readonly values: readonly string[];
+  }
+  | {
+    readonly kind: "catalog";
+    readonly control: string;
+  };
+
 export interface CompileTargetCapabilities {
   readonly agents: CompileSurfaceSupport;
   readonly agentModelBindings: AgentModelBindingSupport;
@@ -56,6 +67,8 @@ export interface LowererCapabilityProfile {
    * ids elsewhere.
    */
   readonly workflowWorker: boolean;
+  /** Per-task reasoning control; null means the worker has no direct effort input. */
+  readonly workflowEffort: WorkflowEffortCapability | null;
   readonly compile: CompileTargetCapabilities;
   readonly surfaces: Record<LowererSurfaceId, LowererSurfaceCapability>;
   readonly notes?: readonly string[];
@@ -90,6 +103,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "claude-code",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "fixed", control: "--effort", values: ["low", "medium", "high", "xhigh", "max"] },
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -134,6 +148,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "opencode",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: null,
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -178,10 +193,12 @@ export const LOWERER_CAPABILITIES = {
       },
     },
   },
+
   hermes: {
     harness: "hermes",
     family: "claw-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "fixed", control: "--reasoning", values: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] },
     compile: compileSupported({
       agents: "unsupported",
       agentModelBindings: "ignored",
@@ -214,6 +231,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "codex-cli",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "catalog", control: "--config model_reasoning_effort" },
     compile: compileSupported(),
     surfaces: {
       pluginBundle: unsupported("Codex CLI currently uses file and config surfaces, not plugin bundles."),
@@ -258,6 +276,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "antigravity-cli",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "fixed", control: "--effort", values: ["low", "medium", "high"] },
     compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
@@ -356,6 +375,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "amp-orb",
     family: "coding-harness",
     workflowWorker: false,
+    workflowEffort: null,
     compile: compileUnsupported,
     surfaces: {
       pluginBundle: unsupported("Amp Orb lowering is skills only. Plugins stay on amp-code."),
@@ -381,6 +401,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "amp-code",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "catalog", control: "plugin-mode.reasoningEffort" },
     compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
@@ -429,6 +450,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "cursor",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: null,
     compile: compileSupported({
       agentModelBindings: "ignored",
       skillPermissions: "unsupported",
@@ -480,10 +502,12 @@ export const LOWERER_CAPABILITIES = {
       "Per-agent skill permission visibility remains unsupported. Canonical tools stay CLI-only (`prism tools invoke`); no mcp.json patch is emitted.",
     ],
   },
+
   pi: {
     harness: "pi",
     family: "coding-harness",
     workflowWorker: false,
+    workflowEffort: null,
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -536,6 +560,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "omp",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "fixed", control: "--thinking", values: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"] },
     compile: compileSupported({ skillPermissions: "unsupported" }),
     surfaces: {
       pluginBundle: {
@@ -588,6 +613,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "grok",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: { kind: "catalog", control: "--reasoning-effort" },
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -632,6 +658,7 @@ export const LOWERER_CAPABILITIES = {
     harness: "devin",
     family: "coding-harness",
     workflowWorker: true,
+    workflowEffort: null,
     compile: {
       agents: "unsupported",
       agentModelBindings: "ignored",
@@ -695,6 +722,14 @@ export type WorkflowWorkerHarnessId = {
   [K in HarnessId]: (typeof LOWERER_CAPABILITIES)[K]["workflowWorker"] extends true ? K : never;
 }[HarnessId];
 
+/** Workflow effort capability ids, derived from the same harness registry. */
+export type WorkflowEffortWorkerHarnessId = {
+  [K in WorkflowWorkerHarnessId]: NonNullable<(typeof LOWERER_CAPABILITIES)[K]["workflowEffort"]> extends never ? never : K;
+}[WorkflowWorkerHarnessId];
+
+export type WorkflowEffortCapabilityFor<Harness extends HarnessId> =
+  (typeof LOWERER_CAPABILITIES)[Harness]["workflowEffort"];
+
 const isWorkflowWorkerEntry = (
   entry: readonly [HarnessId, LowererCapabilityProfile],
 ): entry is readonly [WorkflowWorkerHarnessId, LowererCapabilityProfile] => entry[1].workflowWorker;
@@ -703,4 +738,15 @@ const isWorkflowWorkerEntry = (
 export const workflowWorkerHarnessIds = (): readonly WorkflowWorkerHarnessId[] =>
   (Object.entries(LOWERER_CAPABILITIES) as ReadonlyArray<readonly [HarnessId, LowererCapabilityProfile]>)
     .filter(isWorkflowWorkerEntry)
+    .map(([harness]) => harness);
+
+const isWorkflowEffortWorkerEntry = (
+  entry: readonly [HarnessId, LowererCapabilityProfile],
+): entry is readonly [WorkflowEffortWorkerHarnessId, LowererCapabilityProfile] =>
+  entry[1].workflowWorker && entry[1].workflowEffort !== null;
+
+/** Harness ids with a verified per-task effort control, derived from the registry. */
+export const workflowEffortWorkerHarnessIds = (): readonly WorkflowEffortWorkerHarnessId[] =>
+  (Object.entries(LOWERER_CAPABILITIES) as ReadonlyArray<readonly [HarnessId, LowererCapabilityProfile]>)
+    .filter(isWorkflowEffortWorkerEntry)
     .map(([harness]) => harness);

@@ -26,6 +26,7 @@ export type AntigravityWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly effort?: string;
   readonly resolvedPermission: AntigravityWorkflowPermissionMode;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
@@ -64,14 +65,17 @@ type AgyPermissionArgs = readonly ["--dangerously-skip-permissions", "--sandbox"
 type AgyTimeoutArgs = readonly ["--print-timeout", AgyPrintTimeout];
 type AgyWorkspaceArgs = readonly ["--add-dir", AgyWorkspaceDir];
 type AgyModelArgs = readonly ["--model", AgyModel];
+type AgyEffortArgs = readonly ["--effort", AgyValue<"effort">];
 type AgyOptionalLogFileArgs = readonly [] | AgyLogFileArgs;
 type AgyOptionalConversationArgs = readonly [] | AgyConversationArgs;
 type AgyOptionalModelArgs = readonly [] | AgyModelArgs;
+type AgyOptionalEffortArgs = readonly [] | AgyEffortArgs;
 type AgyRequiredPrintArgs = readonly [
   ...AgyPermissionArgs,
   ...AgyTimeoutArgs,
   ...AgyWorkspaceArgs,
   ...AgyOptionalModelArgs,
+  ...AgyOptionalEffortArgs,
   "--print",
   AgyPrompt,
 ];
@@ -272,6 +276,7 @@ export const resolveAntigravityPermission = (mode: WorkflowPermissionMode): Anti
 export const buildAgyArgs = (input: {
   readonly cwd: string;
   readonly model?: string;
+  readonly effort?: string;
   readonly permission?: AntigravityWorkflowPermissionMode;
   readonly printTimeout: string;
   readonly prompt: string;
@@ -296,6 +301,7 @@ export const buildAgyArgs = (input: {
     "--add-dir",
     agyValue<"workspace-dir">(input.cwd),
     ...(input.model !== undefined ? (["--model", agyValue<"model">(input.model)] as const) : ([] as const)),
+    ...(input.effort !== undefined ? (["--effort", agyValue<"effort">(input.effort)] as const) : ([] as const)),
     "--print",
     agyValue<"prompt">(input.prompt),
   ];
@@ -444,6 +450,7 @@ const runAgyWithRetry = (input: {
   readonly reportProgress?: WorkflowTaskProgressReporter;
   readonly printTimeout: string;
   readonly model?: string;
+  readonly effort?: string;
   readonly permission: AntigravityWorkflowPermissionMode;
   readonly prompt: string;
   readonly initialConversationId?: AgyConversationId;
@@ -474,6 +481,7 @@ const runAgyWithRetry = (input: {
         const args = buildAgyArgs({
           cwd: input.cwd,
           model: input.model,
+          effort: input.effort,
           permission: input.permission,
           printTimeout: input.printTimeout,
           prompt: input.prompt,
@@ -568,6 +576,7 @@ export const runAntigravityWorkflowTask = async (
       reportProgress: options.reportProgress,
       printTimeout,
       model,
+      effort: options.effort,
       permission: options.resolvedPermission,
       prompt,
       initialConversationId: resumeConversationId,

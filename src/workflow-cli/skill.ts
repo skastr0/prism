@@ -107,7 +107,7 @@ export const workflow = defineWorkflow({
 });
 \`\`\`
 
-\`workers.reviewer\` is a typed ref to one installed named worker: its harness, model, effort, and permission were curated once in the catalog. The generated ref is literal raw config, so the existing DSL is unchanged — no new agent type.
+\`workers.reviewer\` is a typed ref to one installed named worker: its harness, model, supported effort, and permission were curated once in the catalog. The generated ref is literal raw config, so the existing DSL is unchanged — no new agent type.
 
 Raw configurations remain available as the escape hatch:
 
@@ -134,7 +134,7 @@ Pick a named worker by its description — what it is for, its strengths, its li
 
 ## Raw configurations (escape hatch)
 
-Named workers are the primary path. When none fits, compose a raw \`worker: { worker, model, permission, ... }\` instead — the DSL takes it unchanged. Discover live slugs and the per-harness combination rules (model dials, Amp catalog slugs and effort, permission modes) with \`prism workflow skill --models\`; never invent a slug and never write \`model: ""\` — omit the field so the harness default stays.
+Named workers are the primary path. When none fits, compose a raw \`worker: { worker, model, effort, permission, ... }\` instead. Discover live slugs and per-model effort sets with \`prism workflow skill --models\`; fixed values come from Prism's capability registry: Claude Code \`low|medium|high|xhigh|max\`, Antigravity CLI \`low|medium|high\`, Hermes \`none|minimal|low|medium|high|xhigh|max|ultra\`, OMP \`off|minimal|low|medium|high|xhigh|max|auto\`. A task's \`worker.effort\` overrides effort on its modelspace target. Codex and OMP modelspace targets use \`effort\`; \`variant\` is a model-selection field only and produces a one-line migration fix there. Devin, Cursor, and OpenCode do not accept \`worker.effort\`; their model slugs or model-selection settings carry their own meaning. Never invent a slug and never write \`model: ""\` — omit the field so the harness default stays.
 
 ## SOP phases (optional plugin)
 
@@ -200,7 +200,7 @@ Workflow files live in \`~/.prism/workflows/\`, never inside the repo they drive
 
 ## Validate before you spend
 
-\`prism workflow validate <file> --table\` reports the tasks and pins its probe can discover, including Amp catalog/effort. Data-dependent branches still need mock runs with inputs that reach them; validation is not proof of every path. Illegal Amp efforts and illegal \`worker.permission\` values fail closed with the same remediation as run.
+\`prism workflow validate <file> --table\` reports the tasks and pins its probe can discover, including each worker's effective effort. Data-dependent branches still need mock runs with inputs that reach them; validation is not proof of every path. Unsupported or invalid effort values and illegal \`worker.permission\` values fail closed with a one-line fix before dispatch.
 
 ## Full DSL
 

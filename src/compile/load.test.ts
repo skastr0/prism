@@ -219,6 +219,26 @@ export default {
   expect(registry.hooks.get("session-start")?.event).toBe("session.start");
 });
 
+test("loadPlugin rejects Codex modelspace variant with an exact effort migration", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeText(join(pluginRoot, "plugin.json"), JSON.stringify({ name: "legacy-modelspace", version: "0.1.0" }));
+  await writeText(join(pluginRoot, "modelspaces", "models.modelspace.ts"), `export default {
+  name: "models",
+  profiles: {
+    builder: {
+      targets: { "codex-cli": { model: "gpt-5", variant: "high" } },
+    },
+  },
+};\n`);
+
+  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("SourceParseError");
+  expect(failure.message).toContain(
+    'Fix: replace `variant: "high"` with `effort: "high"` at profiles["builder"].targets.codex-cli.',
+  );
+});
+
 test("hook match.tool is accepted on tool.failure and rejected on non-tool events", async () => {
   const okRoot = await createTempRoot();
   await writeManifest(okRoot);

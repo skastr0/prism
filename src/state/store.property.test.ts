@@ -40,14 +40,13 @@ const entrySpecArbitrary = (): fc.Arbitrary<EntrySpec> =>
     live: fc.boolean(),
   });
 
+// Unique case-insensitively: on macOS/Windows "t.md" and "T.md" are one file,
+// so one spec cannot be live while the other is missing.
 const uniqueEntrySpecsArbitrary = (): fc.Arbitrary<EntrySpec[]> =>
-  fc.array(entrySpecArbitrary(), { minLength: 0, maxLength: 12 }).filter((specs) => {
-    const seen = new Set<string>();
-    for (const spec of specs) {
-      if (seen.has(spec.fileName)) return false;
-      seen.add(spec.fileName);
-    }
-    return true;
+  fc.uniqueArray(entrySpecArbitrary(), {
+    minLength: 0,
+    maxLength: 12,
+    selector: (spec) => spec.fileName.toLowerCase(),
   });
 
 const buildEntry = (root: string, spec: EntrySpec): SnapshotEntry => {

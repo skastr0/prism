@@ -147,6 +147,27 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     alternativeRulesFiles: ["AGENT.md", "CLAUDE.md"],
   },
 
+  // Hosted Amp skills checkout (personal or workspace). Not a local Amp home
+  // and not an orb filesystem. Pass the clone as --root; do not infer scope.
+  "amp-orb": {
+    id: "amp-orb",
+    name: "Amp Orb",
+    globalConfigPath: "~/.prism/amp-orb/",
+    projectConfigPath: null,
+    rulesFile: null,
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: null,
+    toolsDir: null,
+    skillsDir: null,
+    configFile: null,
+    configFormat: "markdown",
+    supportsTools: false,
+    supportsCommands: false,
+    supportsAgents: false,
+    supportsSkills: true,
+  },
+
   cursor: {
     id: "cursor",
     name: "Cursor",

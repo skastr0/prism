@@ -9,7 +9,7 @@ import * as EffectModule from "effect";
 import { Effect, Schema } from "effect";
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, relative, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type * as TypeScript from "typescript";
@@ -53,13 +53,18 @@ import { existsSync } from "node:fs";
 import { PluginManifestError } from "../errors.js";
 import { validateSkillName } from "../manifest.js";
 import { harnessModelsModulePath } from "../harness-types.js";
+import { ensureWorkflowWorkersModule } from "../workflow-named-workers.js";
+import { computeContentHash } from "../content-hash.js";
+import { readFile } from "../fs.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "../project-key.js";
+import { legacyReasoningVariantError } from "../workflow-effort.js";
 import { rewriteGeneratedRefsForRuntime } from "../workflow-generated-surface.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { effectBundleImportPath, typescriptBundleImportPath } from "./runtime-deps.js";
 import { AUTHORING_RUNTIME_JS, getAuthoringRuntimePath } from "./authoring-runtime.js";
+import { getWorkflowDslRuntimeSources } from "./embedded-runtime-sources.js";
 import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
 import {
   isPluginTargetId,
@@ -152,47 +157,16 @@ export default effect;
 };
 
 /**
- * The workflow DSL runtime. Off-repo workflow files import { defineTask,
- * defineWorkflow } from "prism"; this module supplies those builders with
- * behavior identical to src/workflows.ts. Schema is read
- * from the binary's embedded Effect (globalThis.__prism_effect) so
- * Schema.isSchema and decodeTaskOutput operate on the binary's Effect instance.
+ * The workflow DSL runtime module. Off-repo workflow files import { defineTask,
+ * defineWorkflow, jev, choice, ... } from "prism"; this generated module re-exports
+ * the canonical vendored DSL sources (src/workflows.ts + src/jev.ts, written as
+ * siblings under ./prism-runtime/) so off-repo authoring behavior is identical to
+ * in-repo behavior by construction. `from "effect"` imports inside the vendored
+ * sources are rewritten to the effect-runtime.mjs bridge so runtime Schema identity
+ * matches globalThis.__prism_effect.
  */
-const WORKFLOW_DSL_RUNTIME_JS = `
-const effect = globalThis.__prism_effect;
-if (!effect) {
-  throw new Error("prism Effect runtime bridge was not initialized");
-}
-const Schema = effect.Schema;
-
-export const defineTask = (definition) => ({
-  kind: "workflow-task",
-  ...definition,
-});
-
-export function defineWorkflow(definition) {
-  // The dynamic branch builds its value explicitly, so every field added to the
-  // definition must be carried here too. \`schedule\` is inert: recording it
-  // registers nothing, and only \`prism workflow schedule install\` activates it.
-  // The host re-validates it on load, so this bundle only has to preserve it.
-  if ("run" in definition) {
-    return {
-      kind: "workflow",
-      name: definition.name,
-      tasks: [],
-      run: definition.run,
-      ...(definition.schedule === undefined ? {} : { schedule: definition.schedule }),
-    };
-  }
-  return {
-    kind: "workflow",
-    ...definition,
-  };
-}
-
-export const decodeTaskOutput = (task, value) =>
-  Schema.decodeUnknownResult(task.output)(value);
-`;
+const makeWorkflowDslRuntimeJs = (): string =>
+  `export * from "./prism-runtime/workflows.ts";\nexport * from "./prism-runtime/jev.ts";\n`;
 
 let importRuntimePaths: Promise<{
   readonly authoring: string;
@@ -211,8 +185,22 @@ export const getImportRuntimePaths = async (): Promise<{
     const dir = await fs.mkdtemp(join(tmpdir(), "prism-authoring-"));
     const effectPath = join(dir, "effect-runtime.mjs");
     const workflowDslPath = join(dir, "workflow-dsl-runtime.mjs");
+    const vendoredDir = join(dir, "prism-runtime");
+    await fs.mkdir(vendoredDir, { recursive: true });
     await fs.writeFile(effectPath, makeEffectRuntimeJs(), "utf8");
-    await fs.writeFile(workflowDslPath, WORKFLOW_DSL_RUNTIME_JS, "utf8");
+    // Rewrite bare `from "effect"` to the bridge so the vendored DSL modules
+    // share the binary's Effect instance (runtime Schema identity).
+    const effectSpecifier = JSON.stringify(toFileSpecifier(effectPath));
+    for (const [name, source] of Object.entries(getWorkflowDslRuntimeSources())) {
+      const vendoredPath = join(vendoredDir, name);
+      await fs.mkdir(dirname(vendoredPath), { recursive: true });
+      await fs.writeFile(
+        vendoredPath,
+        source.replace(/(\bfrom\s*)["']effect["']/g, `$1${effectSpecifier}`),
+        "utf8",
+      );
+    }
+    await fs.writeFile(workflowDslPath, makeWorkflowDslRuntimeJs(), "utf8");
     return { authoring: authoringPath, effect: effectPath, workflowDsl: workflowDslPath };
   })();
 
@@ -584,23 +572,32 @@ const copyTransformedPluginTree = async (options: {
 export const resolveEffectRuntimePath = async (): Promise<string> =>
   (await getImportRuntimePaths()).effect;
 
-const workflowRefsDirForImport = async (): Promise<string> => {
-  const prismHome = resolvePrismHome();
+const workflowRefsDirForImport = async (prismHome: string): Promise<string> => {
   const { key } = deriveProjectKey();
   const refsDir = projectGeneratedRefsDir(prismHome, key);
   if (!existsSync(join(refsDir, "sops.ts"))) return refsDir;
   return rewriteGeneratedRefsForRuntime(refsDir, await resolveEffectRuntimePath());
 };
 
-const workflowRefsTargetPath = async (): Promise<string> =>
-  join(await workflowRefsDirForImport(), "sops.ts");
+const workflowRefsTargetPath = async (prismHome: string): Promise<string> =>
+  join(await workflowRefsDirForImport(prismHome), "sops.ts");
 
-const workflowRefsModuleTargets = async (cacheBust: string): Promise<Record<string, string>> => {
-  const refsDir = await workflowRefsDirForImport();
+const workflowRefsModuleTargets = async (cacheBust: string, prismHome: string): Promise<Record<string, string>> => {
+  const refsDir = await workflowRefsDirForImport(prismHome);
   const modules = ["sops", "models"] as const;
-  return Object.fromEntries(
-    modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
-  );
+  const workersPath = await Effect.runPromise(ensureWorkflowWorkersModule(prismHome));
+  // Bun keys its import cache for a `file://` URL on the URL path and ignores
+  // a query, but honors the query on a plain absolute path — so the workers
+  // target is the plain path plus the generated module's content hash. New or
+  // changed installed refs get a fresh module identity in the same process;
+  // unchanged content keeps reusing the cached module.
+  const workersContentHash = computeContentHash(await readFile(workersPath));
+  return {
+    ...Object.fromEntries(
+      modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
+    ),
+    "prism/refs/workers": `${workersPath}?hash=${workersContentHash}`,
+  };
 };
 
 /**
@@ -609,15 +606,16 @@ const workflowRefsModuleTargets = async (cacheBust: string): Promise<Record<stri
  * to the generated project refs file (cache-busted so refreshed refs are
  * re-read across runs in the same process).
  */
-const workflowSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
+const workflowSpecifierOverrides = async (prismHome?: string): Promise<LoadSpecifierOverrides> => {
+  const home = prismHome ?? resolvePrismHome();
   const runtimePaths = await getImportRuntimePaths();
   const cacheBust = `?t=${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const harnessTypesPath = harnessModelsModulePath(resolvePrismHome());
+  const harnessTypesPath = harnessModelsModulePath(home);
   return {
     prism: toFileSpecifier(runtimePaths.workflowDsl),
     effect: toFileSpecifier(runtimePaths.effect),
-    prismRefs: `${toFileSpecifier(await workflowRefsTargetPath())}${cacheBust}`,
-    prismRefsModules: await workflowRefsModuleTargets(cacheBust),
+    prismRefs: `${toFileSpecifier(await workflowRefsTargetPath(home))}${cacheBust}`,
+    prismRefsModules: await workflowRefsModuleTargets(cacheBust, home),
     ...(existsSync(harnessTypesPath)
       ? { prismHarnesses: `${toFileSpecifier(harnessTypesPath)}${cacheBust}` }
       : {}),
@@ -636,6 +634,13 @@ const pluginSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
 export interface PrepareImportWrapperOptions {
   /** When true, resolve `prism`/`prism/refs` for workflow execution rather than plugin compilation. */
   readonly workflow?: boolean;
+  /**
+   * Explicit Prism home for workflow-mode resolution (generated refs, harness
+   * types, and the named-workers module). Defaults to `resolvePrismHome()`.
+   * Callers that pass an explicit home to the loader must thread it here too so
+   * runtime imports cannot resolve against a different home than the typecheck.
+   */
+  readonly prismHome?: string;
 }
 
 export const prepareImportWrapper = async (
@@ -649,7 +654,7 @@ export const prepareImportWrapper = async (
   const pluginRoot = await findPluginRoot(sourcePath);
   const mode = options.workflow ? "workflow" : "plugin";
   const overrides = options.workflow
-    ? await workflowSpecifierOverrides()
+    ? await workflowSpecifierOverrides(options.prismHome)
     : await pluginSpecifierOverrides();
   const cacheKey = `${mode}:${pluginRoot}`;
   // A workflow transform embeds a cache-busted `prism/refs` URL. Reusing the
@@ -1281,6 +1286,21 @@ const parseModelspace = (
 ): Effect.Effect<Modelspace, CompileError> =>
   Effect.gen(function* () {
     const raw = yield* importTsModule<unknown>(sourcePath, "modelspace");
+    if (isRecord(raw) && isRecord(raw.profiles)) {
+      for (const [profileName, profile] of Object.entries(raw.profiles)) {
+        if (!isRecord(profile) || !isRecord(profile.targets)) continue;
+        for (const worker of ["codex-cli", "omp"] as const) {
+          const message = legacyReasoningVariantError(
+            worker,
+            profile.targets[worker],
+            `profiles[${JSON.stringify(profileName)}].targets.${worker}`,
+          );
+          if (message !== undefined) {
+            return yield* Effect.fail(new SourceParseError({ sourcePath, kind: "modelspace", message }));
+          }
+        }
+      }
+    }
     const result = Schema.decodeUnknownResult(ModelspaceSchema)(raw);
     if (result._tag === "Failure") {
       return yield* Effect.fail(

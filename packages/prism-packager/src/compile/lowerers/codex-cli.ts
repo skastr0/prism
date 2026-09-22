@@ -85,7 +85,6 @@ const CODEX_MODEL_KEYS = new Set([
 
 const CODEX_MODEL_ALIASES: Record<string, string> = {
   effort: "model_reasoning_effort",
-  variant: "model_reasoning_effort",
 };
 
 const setCodexModelValue = (
@@ -97,10 +96,17 @@ const setCodexModelValue = (
 ): void => {
   if (value === undefined) return;
 
+  if (key === "variant") {
+    const encoded = JSON.stringify(value);
+    throw new Error(
+      `Codex reasoning uses 'effort', not 'variant', on agent '${agentName}' from ${source}. Fix: replace \`variant: ${encoded}\` with \`effort: ${encoded}\` in ${source}.`,
+    );
+  }
+
   const translated = CODEX_MODEL_ALIASES[key] ?? key;
   if (!CODEX_MODEL_KEYS.has(translated)) {
     throw new Error(
-      `unsupported Codex model config key '${key}' on agent '${agentName}' from ${source}; supported keys: model, effort, variant, model_provider, profile, model_reasoning_effort, model_verbosity`,
+      `unsupported Codex model config key '${key}' on agent '${agentName}' from ${source}; supported keys: model, effort, model_provider, profile, model_reasoning_effort, model_verbosity`,
     );
   }
 

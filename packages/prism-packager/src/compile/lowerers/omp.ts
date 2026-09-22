@@ -111,12 +111,26 @@ const thinkingLevel = (...values: unknown[]): string | undefined =>
       value !== undefined && OMP_THINKING_LEVELS.has(value),
     );
 
+const rejectOmpModelVariant = (
+  source: string,
+  value: unknown,
+  agentName: string,
+): void => {
+  if (value === undefined) return;
+  const encoded = JSON.stringify(value);
+  throw new Error(
+    `OMP reasoning uses 'effort', not 'variant', on agent '${agentName}' from ${source}. Fix: replace \`variant: ${encoded}\` with \`effort: ${encoded}\` in ${source}.`,
+  );
+};
+
 const composeAgentFrontmatter = (
   agent: ComposedAgent,
   target: OmpLowerTarget,
 ): Record<string, unknown> => {
   const override = agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
   const model = agent.model ?? {};
+  rejectOmpModelVariant("model", model.variant, agent.name);
+  rejectOmpModelVariant("omp target override", override?.variant, agent.name);
   const tools = composeAgentTools(override);
   const spawns = override?.spawns === "*" ? "*" : stringArray(override?.spawns);
   const overrideModels = stringArray(override?.model);
@@ -141,7 +155,6 @@ const composeAgentFrontmatter = (
       model.reasoningEffort,
       model.reasoning_effort,
       model.effort,
-      model.variant,
     ),
     tools: tools.length > 0 ? tools : undefined,
     spawns: spawns === "*" || spawns.length > 0 ? spawns : undefined,

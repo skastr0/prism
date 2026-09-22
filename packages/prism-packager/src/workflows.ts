@@ -1,6 +1,22 @@
-import { Effect, Result, Schema } from "effect";
+import { Effect, Result, Schema, type SchemaAST } from "effect";
+import {
+  LOWERER_CAPABILITIES,
+  type WorkflowEffortCapabilityFor,
+  type WorkflowEffortWorkerHarnessId,
+  type WorkflowWorkerHarnessId,
+} from "./lowerer-capabilities.js";
+import { legacyReasoningVariantError } from "./workflow-effort.js";
 import { WorkflowTaskInputError, type WorkflowRuntimeError } from "./workflow-errors.js";
 import { isWorkflowSchedule, parseWorkflowSchedule, type WorkflowSchedule } from "./workflow-scheduler/schedule.js";
+import {
+  jevResultSchema,
+  normalizeJevRequest,
+  type JevEntry,
+  type JevQuestions,
+  type JevRequest,
+  type JevResult,
+  type JevResultCodec,
+} from "./jev.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
 export {
@@ -76,18 +92,7 @@ export type WorkflowOutputSchema = Schema.Codec<unknown, unknown, never, never>;
 
 export type WorkflowFinishCriterionError = Error;
 
-export type WorkflowWorkerId =
-  | "amp-code"
-  | "antigravity-cli"
-  | "claude-code"
-  | "codex-cli"
-  | "cursor"
-  | "devin"
-  | "grok"
-  | "hermes"
-  | "kimi-code"
-  | "opencode"
-  | "omp";
+export type WorkflowWorkerId = WorkflowWorkerHarnessId;
 
 /**
  * Per-harness model identifier map. Empty in core so `worker.model` stays
@@ -104,8 +109,9 @@ export interface WorkflowHarnessModelMap {}
 export interface WorkflowHarnessCatalogModelMap {}
 
 /**
- * Amp reasoning-effort ladders from the catalog. Empty in core; refresh
- * augments `"amp-code"` for `worker.effort`.
+ * Model-specific reasoning-effort ladders from installed CLI catalogs.
+ * Fixed CLI values come from `LOWERER_CAPABILITIES` and are not discovered.
+ * Refresh augments only catalog-backed workers.
  */
 export interface WorkflowHarnessEffortMap {}
 
@@ -116,8 +122,27 @@ export type WorkflowHarnessModel<W extends WorkflowWorkerId> =
 export type WorkflowHarnessCatalogModel<W extends WorkflowWorkerId> =
   W extends keyof WorkflowHarnessCatalogModelMap ? WorkflowHarnessCatalogModelMap[W] : string;
 
+type WorkflowHarnessEffortForCapability<W extends WorkflowWorkerId, Capability> =
+  Capability extends {
+    readonly kind: "fixed";
+    readonly values: readonly (infer Value extends string)[];
+  }
+    ? Value
+    : Capability extends { readonly kind: "catalog" }
+      ? W extends keyof WorkflowHarnessEffortMap ? WorkflowHarnessEffortMap[W] : never
+      : never;
+
+type WorkflowHarnessEffortForOne<W extends WorkflowWorkerId> =
+  WorkflowHarnessEffortForCapability<W, NonNullable<WorkflowEffortCapabilityFor<W>>>;
+
+/** Harness-bound effort values; catalog-backed values require a refreshed type map. */
 export type WorkflowHarnessEffort<W extends WorkflowWorkerId> =
-  W extends keyof WorkflowHarnessEffortMap ? WorkflowHarnessEffortMap[W] : string;
+  W extends WorkflowWorkerId ? WorkflowHarnessEffortForOne<W> : never;
+
+export const workflowWorkerSupportsEffort = (worker: unknown): worker is WorkflowEffortWorkerHarnessId =>
+  typeof worker === "string"
+  && Object.hasOwn(LOWERER_CAPABILITIES, worker)
+  && LOWERER_CAPABILITIES[worker as WorkflowWorkerId].workflowEffort !== null;
 
 export type WorkflowPermissionMode =
   | "legacy"
@@ -213,19 +238,21 @@ type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
     readonly worker: W;
     readonly permission?: WorkflowWorkerPermissionMode<W>;
   } & (W extends "amp-code"
-    ? {
-      readonly sessionPersistence?: never;
-      readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code">;
-      readonly effort?: WorkflowHarnessEffort<"amp-code">;
-    }
-    : W extends WorkflowSessionPersistenceWorkerId
-      ? { readonly sessionPersistence?: WorkflowSessionPersistence }
-      : { readonly sessionPersistence?: never });
+    ? { readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code"> }
+    : { readonly catalogModel?: never })
+  & (W extends WorkflowEffortWorkerHarnessId
+    ? { readonly effort?: WorkflowHarnessEffort<W> }
+    : { readonly effort?: never })
+  & (W extends WorkflowSessionPersistenceWorkerId
+    ? { readonly sessionPersistence?: WorkflowSessionPersistence }
+    : { readonly sessionPersistence?: never });
 
 export type WorkflowTaskWorkerOptions =
   | (WorkflowTaskWorkerOptionsCommon & {
     readonly worker?: undefined;
     readonly permission?: WorkflowPermissionMode;
+    readonly catalogModel?: never;
+    readonly effort?: never;
     readonly sessionPersistence?: never;
   })
   | {
@@ -242,8 +269,10 @@ export interface WorkflowTaskModelResolution {
   readonly model: string;
   /** Harness-side inference provider (e.g. hermes `--provider xai-oauth`), from the modelspace target or harness default. */
   readonly provider?: string;
-  /** Harness-bound model variant, such as Codex reasoning effort. */
+  /** Model-selection variant, such as OpenCode's `provider/model#variant`. */
   readonly variant?: string;
+  /** Harness-bound reasoning effort from a modelspace target. */
+  readonly effort?: string;
   readonly source: WorkflowTaskModelResolutionSource;
 }
 
@@ -267,33 +296,45 @@ const modelTargetForWorker = (
   return ref.targets?.[worker];
 };
 
-/** First concrete {model, provider?} pair in a modelspace target (direct or ordered-list form). */
+/** First concrete model binding in a modelspace target (direct or ordered-list form). */
 const firstModelChoice = (
   target: WorkflowModelTarget | undefined,
-): { readonly model: string; readonly provider?: string; readonly variant?: string } | undefined => {
+  worker: string,
+): { readonly model: string; readonly provider?: string; readonly variant?: string; readonly effort?: string } | undefined => {
   if (target === undefined) return undefined;
+  const legacyVariantError = legacyReasoningVariantError(worker, target, `targets.${worker}`);
+  if (legacyVariantError !== undefined) throw new WorkflowModelResolutionError(legacyVariantError);
   const direct = target.model;
   if (typeof direct === "string" && direct.length > 0) {
     return {
       model: direct,
       ...(typeof target.provider === "string" ? { provider: target.provider } : {}),
       ...(typeof target.variant === "string" ? { variant: target.variant } : {}),
+      ...(typeof target.effort === "string" ? { effort: target.effort } : {}),
     };
   }
   const models = target.models;
   if (Array.isArray(models)) {
-    for (const candidate of models) {
+    for (const [index, candidate] of models.entries()) {
       if (typeof candidate === "object" && candidate !== null) {
         const entry = candidate as {
           readonly model?: unknown;
           readonly provider?: unknown;
           readonly variant?: unknown;
+          readonly effort?: unknown;
         };
+        const legacyEntryVariantError = legacyReasoningVariantError(
+          worker,
+          entry,
+          `targets.${worker}`,
+        );
+        if (legacyEntryVariantError !== undefined) throw new WorkflowModelResolutionError(legacyEntryVariantError);
         if (typeof entry.model === "string" && entry.model.length > 0) {
           return {
             model: entry.model,
             ...(typeof entry.provider === "string" ? { provider: entry.provider } : {}),
             ...(typeof entry.variant === "string" ? { variant: entry.variant } : {}),
+            ...(typeof entry.effort === "string" ? { effort: entry.effort } : {}),
           };
         }
       }
@@ -315,7 +356,7 @@ const describeModelRef = (ref: WorkflowModelProfileRef | WorkflowModelRef): stri
  * (e.g. opencode) keep doing so.
  */
 export const resolveWorkflowTaskModelResolution = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: { readonly worker?: string; readonly fallbackModel?: string } = {},
 ): WorkflowTaskModelResolution | undefined => {
   const explicit = task.worker?.model;
@@ -324,7 +365,7 @@ export const resolveWorkflowTaskModelResolution = (
   const worker = task.worker?.worker ?? options.worker;
   if (isWorkflowModelProfileRef(explicit)) {
     const target = modelTargetForWorker(explicit, worker);
-    const choice = firstModelChoice(target);
+    const choice = firstModelChoice(target, worker ?? "");
     if (choice !== undefined) return { ...choice, source: "task" };
     throw new WorkflowModelResolutionError(
       `modelspace profile ${describeModelRef(explicit)} has no concrete model for workflow worker '${worker ?? "<missing>"}'`,
@@ -337,9 +378,22 @@ export const resolveWorkflowTaskModelResolution = (
 };
 
 export const resolveWorkflowTaskModel = (
-  task: AnyWorkflowTask,
+  task: AnyWorkflowWorkerTask,
   options: { readonly worker?: string; readonly fallbackModel?: string } = {},
 ): string | undefined => resolveWorkflowTaskModelResolution(task, options)?.model;
+
+/** Task-level effort is the explicit override; modelspace effort is the fallback. */
+export const resolveWorkflowTaskEffort = (
+  task: AnyWorkflowWorkerTask,
+  options: { readonly worker?: string; readonly fallbackModel?: string } = {},
+): string | undefined => {
+  const worker = task.worker?.worker ?? options.worker;
+  const configured = task.worker?.worker === worker && task.worker !== undefined && "effort" in task.worker
+    ? task.worker.effort
+    : undefined;
+  if (typeof configured === "string") return configured;
+  return resolveWorkflowTaskModelResolution(task, options)?.effort;
+};
 
 export interface WorkflowFinishCriterionContext<Output> {
   readonly output: Output;
@@ -436,12 +490,107 @@ export type WorkflowTask<
  * erased. This is a deliberate loss of proof at the task-collection boundary,
  * not sound existential quantification.
  */
-export type AnyWorkflowTask = WorkflowTask<string, Schema.Codec<any, unknown, never, never>>;
+export type AnyWorkflowWorkerTask = WorkflowTask<string, Schema.Codec<any, unknown, never, never>>;
+
+/**
+ * A Jev task whose question types are erased. Like the worker erasure above,
+ * this keeps heterogeneous `tasks: [...] tuples writable while concrete
+ * `jev(...)` calls keep their precise inferred output.
+ */
+export type AnyJevTask = JevTask<string, any>;
+
+export type AnyWorkflowTask =
+  | AnyWorkflowWorkerTask
+  | AnyJevTask;
 
 export type WorkflowTaskOutput<Task extends AnyWorkflowTask> = Task["output"]["Type"];
 
+// ---------------------------------------------------------------------------
+// Jev decision tasks (kind: "jev")
+//
+// A Jev task is a native first-class decision step: it calls the TypeSafe
+// System One API in-process through the JevClient service (src/services/jev.ts)
+// instead of spawning a harness worker. Its output schema is derived from the
+// questions map — authors cannot supply or override it, so the decoded output
+// type always matches the request contract. Jev tasks have no prompt, worker
+// options, finish criteria, or repair semantics: a low-confidence answer is a
+// successful decision, and routing is workflow code, not a retry loop.
+// ---------------------------------------------------------------------------
+
+export interface JevTaskDefinition<
+  Id extends string,
+  Q extends JevQuestions,
+> extends JevRequest<Q> {
+  readonly id: Id;
+  /** Per-HTTP-attempt timeout override passed to the JevClient call. */
+  readonly timeoutMs?: number;
+  readonly phase?: string;
+  readonly cacheKey?: string;
+}
+
+export type JevTask<
+  Id extends string = string,
+  Q extends JevQuestions = JevQuestions,
+> = JevTaskDefinition<Id, Q> & {
+  readonly kind: "jev";
+  readonly output: JevResultCodec<Q>;
+};
+
+const JEV_TASK_DEFINITION_KEYS = new Set([
+  "id",
+  "state",
+  "questions",
+  "model",
+  "timeoutMs",
+  "phase",
+  "cacheKey",
+]);
+
+/**
+ * Construct a native Jev decision task. The state/questions are validated,
+ * deep-copied, and frozen immediately so identity hashing and execution can
+ * never disagree, and the output codec is derived from the questions.
+ */
+export const jev = <const Id extends string, const Q extends JevQuestions>(
+  definition: JevTaskDefinition<Id, Q>,
+): JevTask<Id, Q> => {
+  for (const key of Object.keys(definition)) {
+    if (!JEV_TASK_DEFINITION_KEYS.has(key)) {
+      throw new WorkflowTaskInputError(
+        "jev",
+        `unsupported jev task field '${key}' (a jev task has no prompt, worker options, or finish criteria)`,
+      );
+    }
+  }
+  if (typeof definition.id !== "string" || definition.id.length === 0) {
+    throw new WorkflowTaskInputError("jev", "jev task id must be a non-empty string");
+  }
+  if (
+    definition.timeoutMs !== undefined
+    && (!Number.isFinite(definition.timeoutMs) || definition.timeoutMs <= 0)
+  ) {
+    throw new WorkflowTaskInputError("jev", "jev task timeoutMs must be a positive finite number");
+  }
+  const request = normalizeJevRequest({
+    state: definition.state,
+    questions: definition.questions,
+    ...(definition.model !== undefined ? { model: definition.model } : {}),
+  });
+  return Object.freeze({
+    kind: "jev",
+    id: definition.id,
+    state: request.state,
+    questions: request.questions,
+    ...(request.model !== undefined ? { model: request.model } : {}),
+    ...(definition.timeoutMs !== undefined ? { timeoutMs: definition.timeoutMs } : {}),
+    ...(definition.phase !== undefined ? { phase: definition.phase } : {}),
+    ...(definition.cacheKey !== undefined ? { cacheKey: definition.cacheKey } : {}),
+    output: jevResultSchema(request.questions),
+  }) as JevTask<Id, Q>;
+};
+
 export const resolveWorkflowTaskSessionPersistence = (
-  task: Pick<AnyWorkflowTask, "worker">,
+  task: Pick<AnyWorkflowWorkerTask, "worker">,
   effectiveWorker: string | undefined = task.worker?.worker,
 ): WorkflowSessionPersistence | undefined => {
   if (!workflowWorkerSupportsSessionPersistence(effectiveWorker)) return undefined;
@@ -461,7 +610,7 @@ const hasValidWorkflowTaskSessionPersistence = (value: unknown): boolean => {
     && (sessionPersistence === "persistent" || sessionPersistence === "ephemeral");
 };
 
-export const assertWorkflowTaskSessionPersistence = (task: AnyWorkflowTask): void => {
+export const assertWorkflowTaskSessionPersistence = (task: AnyWorkflowWorkerTask): void => {
   const worker = task.worker as unknown;
   if (hasValidWorkflowTaskSessionPersistence(worker)) return;
   if (
@@ -477,7 +626,7 @@ export const assertWorkflowTaskSessionPersistence = (task: AnyWorkflowTask): voi
   );
 };
 
-export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
+export const isWorkflowWorkerTask = (value: unknown): value is AnyWorkflowWorkerTask =>
   isRecord(value) &&
   value.kind === "workflow-task" &&
   typeof value.id === "string" &&
@@ -485,6 +634,16 @@ export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
   Schema.isSchema(value.output) &&
   (value.cacheKey === undefined || typeof value.cacheKey === "string") &&
   hasValidWorkflowTaskSessionPersistence(value.worker);
+
+export const isJevTask = (value: unknown): value is AnyJevTask =>
+  isRecord(value) &&
+  value.kind === "jev" &&
+  typeof value.id === "string" &&
+  Schema.isSchema(value.output) &&
+  (value.cacheKey === undefined || typeof value.cacheKey === "string");
+
+export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
+  isWorkflowWorkerTask(value) || isJevTask(value);
 
 export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyArray<AnyWorkflowTask>> {
   readonly kind: "workflow";
@@ -554,6 +713,31 @@ export type PhaseCtxTask<
   def: PhaseTaskDefinition<Id, Input, TaskOutput>,
 ) => Effect.Effect<WorkflowTaskOutput<WorkflowTask<Id, TaskOutput>>, WorkflowRuntimeError>;
 
+/**
+ * A `ctx.jev(...)` definition. When the phase binds an input contract, the
+ * Jev state is that contract's decoded value (it must still be a valid System
+ * One entry — schemas describing functions or class instances do not belong
+ * in state and will fail entry validation at run time).
+ */
+export type PhaseJevTaskDefinition<
+  Id extends string,
+  Input extends WorkflowOutputSchema | undefined,
+  Q extends JevQuestions,
+> = Omit<JevTaskDefinition<Id, Q>, "state"> & {
+  readonly state: Input extends WorkflowOutputSchema
+    ? Input["Type"] & JevEntry
+    : JevEntry;
+};
+
+export type PhaseCtxJev<
+  Input extends WorkflowOutputSchema | undefined,
+> = <
+  const Id extends string,
+  const Q extends JevQuestions,
+>(
+  definition: PhaseJevTaskDefinition<Id, Input, Q>,
+) => Effect.Effect<JevResult<Q>, WorkflowRuntimeError>;
+
 export interface PhaseCtx<
   Name extends string,
   Input extends WorkflowOutputSchema | undefined,
@@ -564,6 +748,12 @@ export interface PhaseCtx<
   readonly plugin: string;
   readonly phase: string;
   readonly task: PhaseCtxTask<Input, DefaultOutput>;
+  /**
+   * Run a native Jev decision inside this phase. Unlike `ctx.task`, no prompt
+   * framing, serialized-input block, finish criteria, or phase output schema
+   * is applied — a decision is defined by its state and questions alone.
+   */
+  readonly jev: PhaseCtxJev<Input>;
 }
 
 type AnyPhaseContract = PhaseContract<
@@ -691,12 +881,39 @@ const createPhaseCtx = <
     return runtime.runTask(workflowTask) as Effect.Effect<WorkflowTaskOutput<AnyWorkflowTask>, WorkflowRuntimeError>;
   };
 
+  const jevTask: PhaseCtxJev<Input> = <const Id extends string, const Q extends JevQuestions>(
+    def: PhaseJevTaskDefinition<Id, Input, Q>,
+  ): Effect.Effect<JevResult<Q>, WorkflowRuntimeError> => {
+    const { phase: phaseOverride, state: rawState, ...rest } = def as Omit<typeof def, "state"> & {
+      readonly phase?: string;
+      readonly state: unknown;
+    };
+    let state = rawState;
+    if (contract.input !== undefined) {
+      const decoded = Schema.decodeUnknownResult(contract.input)(rawState);
+      if (Result.isFailure(decoded)) {
+        return Effect.fail(new WorkflowTaskInputError(phaseKey, decoded.failure));
+      }
+      state = decoded.success;
+    }
+    const task = jev({
+      ...rest,
+      state: state as JevEntry,
+      phase: phaseOverride ?? phaseKey,
+    } as JevTaskDefinition<string, JevQuestions>);
+    // Contained assertion: the compile surface (PhaseJevTaskDefinition)
+    // proves Q's shape; the runtime re-validates state/questions in jev() and
+    // the runner decodes the result against the same question-derived codec.
+    return runtime.runTask(task) as unknown as Effect.Effect<JevResult<Q>, WorkflowRuntimeError>;
+  };
+
   return {
     name: contract.name,
     sop: contract.sop,
     plugin: contract.plugin,
     phase: phaseKey,
     task,
+    jev: jevTask,
   };
 };
 
@@ -835,8 +1052,9 @@ export function defineWorkflow<const Name extends string, Result, Err = Workflow
   };
 }
 
-export const decodeTaskOutput = <Task extends AnyWorkflowTask>(
+export const decodeTaskOutput = <Task extends AnyWorkflowTask | AnyJevTask>(
   task: Task,
   value: unknown,
+  options?: SchemaAST.ParseOptions,
 ): Result.Result<Task["output"]["Type"], Schema.SchemaError> =>
-  Schema.decodeUnknownResult(task.output)(value);
+  Schema.decodeUnknownResult(task.output)(value, options);

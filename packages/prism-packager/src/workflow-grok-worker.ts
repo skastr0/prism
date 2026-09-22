@@ -1,0 +1,287 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { AnyWorkflowWorkerTask, WorkflowPermissionMode } from "./workflows.js";
+import { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
+import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import { stableSessionIdFromRecordKeys } from "./workflow-session.js";
+
+export type GrokWorkflowWorkerOptions = {
+  readonly cwd: string;
+  readonly bin?: string;
+  readonly model?: string;
+  readonly effort?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
+  readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
+} & WorkflowTaskRepairLoopOption<"grok">;
+
+export class WorkflowWorkerError extends Error {
+  override readonly name = "WorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
+}
+
+
+
+const GROK_AUTH_OUTPUT_PATTERN = /(^|\n)\s*(?:To sign in, open this URL in your browser:|Waiting for authorization\.{3}|You are not authenticated\.?|(?:error:\s*)?[^{}\n]*requires login[^{}\n]*)/iu;
+const GROK_AUTH_PROMPT_PATTERNS = [
+  {
+    name: "xai-oauth-device-login",
+    pattern: GROK_AUTH_OUTPUT_PATTERN,
+  },
+] as const;
+
+export const isGrokAuthOutput = (output: string): boolean =>
+  GROK_AUTH_OUTPUT_PATTERN.test(output);
+
+// Grok keeps config, installed plugins, and the resumable session store under one home.
+// Hardcode it to ~/.grok: the home grok itself defaults to and where `prism sync` installs
+// the generated plugin, so the session written on the first attempt still exists when a
+// repair resumes it with `grok -r <sessionId>`. (Tests redirect by setting HOME.)
+const grokHome = (): string => join(process.env.HOME ?? homedir(), ".grok");
+
+const assertGrokPermission = (mode: WorkflowPermissionMode): void => {
+  switch (mode) {
+    case "legacy":
+    case "permissive":
+    case "full-access":
+      return;
+    case "restricted":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok has no CLI flag to restrict permissions per invocation. Choose 'legacy' or 'permissive' instead.",
+      );
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok interactive mode is incompatible with Prism workflow execution. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-read-only":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok has no read-only sandbox CLI flag. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-workspace-write":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok has no workspace-write sandbox mode. Choose 'permissive' or 'legacy' instead.",
+      );
+  }
+  return assertNeverWorkflowPermissionMode("grok", mode);
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+export const buildGrokArgs = (input: {
+  readonly cwd: string;
+  readonly model?: string;
+  readonly effort?: string;
+  readonly prompt: string;
+  readonly sessionId?: string;
+  readonly permission?: WorkflowPermissionMode;
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertGrokPermission(mode);
+  const permissionArgs: string[] = mode === "permissive" || mode === "full-access"
+    ? ["--always-approve", "--permission-mode", "bypassPermissions"]
+    : [];
+  return [
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    "--cwd",
+    input.cwd,
+    ...(input.sessionId !== undefined ? ["-r", input.sessionId] : []),
+    "--no-alt-screen",
+    "--allow",
+    "MCPTool",
+    "--output-format",
+    "json",
+    "--no-wait-for-background",
+    ...(input.effort ? ["--reasoning-effort", input.effort] : []),
+    ...permissionArgs,
+    "--single",
+    input.prompt,
+  ];
+};
+
+interface GrokJsonRunOutput {
+  readonly sessionId?: string;
+  readonly text: string;
+}
+
+const parseJsonCandidate = (candidate: string): unknown | undefined => {
+  try {
+    return JSON.parse(candidate) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const parseGrokJsonEnvelope = (stdout: string): unknown => {
+  const trimmed = stdout.trim();
+  const parsed = parseJsonCandidate(trimmed);
+  if (parsed !== undefined) return parsed;
+
+  for (const line of trimmed.split(/\r?\n/u).reverse()) {
+    const candidate = line.trim();
+    if (candidate.length === 0 || (!candidate.startsWith("{") && !candidate.startsWith("["))) continue;
+    const lineParsed = parseJsonCandidate(candidate);
+    if (lineParsed !== undefined) return lineParsed;
+  }
+
+  throw new WorkflowWorkerError("grok JSON output did not contain a parseable JSON envelope");
+};
+
+const stringField = (
+  record: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+};
+
+const grokAssistantText = (envelope: unknown): string => {
+  if (typeof envelope === "string") return envelope;
+  if (isRecord(envelope)) {
+    const direct = stringField(envelope, ["text", "result", "output", "content", "message", "response"]);
+    if (direct !== undefined) return direct;
+
+    for (const key of ["result", "output", "content", "message", "response"] as const) {
+      const nested: unknown = envelope[key];
+      if (nested !== undefined && nested !== null && nested !== envelope) {
+        return grokAssistantText(nested);
+      }
+    }
+  }
+  return JSON.stringify(envelope);
+};
+
+export const parseGrokJsonRunOutput = (stdout: string): GrokJsonRunOutput => {
+  const envelope = parseGrokJsonEnvelope(stdout);
+  const sessionId = stableSessionIdFromRecordKeys(envelope, ["sessionId", "sessionID", "session_id"]);
+  return sessionId !== undefined
+    ? { sessionId, text: grokAssistantText(envelope) }
+    : { text: grokAssistantText(envelope) };
+};
+
+export const runGrokWorkflowTask = async (
+  task: AnyWorkflowWorkerTask,
+  options: GrokWorkflowWorkerOptions,
+): Promise<WorkflowTaskExecution> => {
+  const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
+  const prompt = options.repair !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const command = options.bin ?? process.env.PRISM_WORKFLOW_GROK_BIN ?? "grok";
+  const startedAt = Date.now();
+  const env: Record<string, string> = {
+    GROK_HOME: grokHome(),
+    GROK_CURSOR_MCPS_ENABLED: "false",
+    GROK_CLAUDE_MCPS_ENABLED: "false",
+  };
+  try {
+  const args = buildGrokArgs({
+    cwd: options.cwd,
+    model: options.model,
+    effort: options.effort,
+    prompt,
+    sessionId,
+    permission: options.resolvedPermission,
+  });
+
+  const { exitCode, stdout, stderr, durationMs, aborted, earlyExit } = await runWorkflowWorkerProcess({
+    command,
+    args,
+    cwd: options.cwd,
+    abortSignal: options.abortSignal,
+    onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
+    env,
+    earlyExitPatterns: GROK_AUTH_PROMPT_PATTERNS,
+  });
+  const processMetadata = {
+    adapter: "grok-cli",
+    model: options.model,
+    durationMs,
+    sessionId,
+    exitCode,
+    aborted,
+    ...(earlyExit !== undefined ? { earlyExit } : {}),
+    ...summarizeWorkflowWorkerStderr(stderr),
+  };
+  const processFailure = (message: string): WorkflowWorkerError =>
+    new WorkflowWorkerError(message, {
+      ...processMetadata,
+      stage: "process",
+      ...(stdout.trim().length > 0 ? { outputExcerpt: stdout.trim().slice(-512) } : {}),
+    });
+  if (aborted) {
+    throw processFailure("grok was aborted by Prism workflow stop");
+  }
+  if (earlyExit === "xai-oauth-device-login") {
+    throw processFailure("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
+  }
+  if (exitCode !== 0 && isGrokAuthOutput(`${stdout}\n${stderr}`)) {
+    throw processFailure("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
+  }
+  if (exitCode !== 0) {
+    throw processFailure(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+  }
+  let runOutput: GrokJsonRunOutput;
+  try {
+    runOutput = parseGrokJsonRunOutput(stdout);
+  } catch (error) {
+    if (error instanceof WorkflowWorkerError) {
+      throw new WorkflowWorkerError(error.message, {
+        ...processMetadata,
+        stage: "output-envelope",
+        ...(stdout.trim().length > 0 ? { outputExcerpt: stdout.trim().slice(-512) } : {}),
+      });
+    }
+    throw error;
+  }
+  const metadata = {
+    ...processMetadata,
+    sessionId: sessionId ?? runOutput.sessionId,
+  };
+  let output: unknown;
+  try {
+    output = parseWorkflowWorkerJsonOutput(runOutput.text);
+  } catch (error) {
+    if (error instanceof WorkflowOutputParseError) {
+      throw new WorkflowOutputParseError(error.message, error.rawText, metadata);
+    }
+    throw error;
+  }
+  return {
+    output,
+    metadata,
+  };
+  } catch (error) {
+    if (error instanceof WorkflowOutputParseError) throw error;
+    if (error instanceof WorkflowWorkerError && error.metadata !== undefined) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new WorkflowWorkerError(message, {
+      adapter: "grok-cli",
+      model: options.model,
+      durationMs: Date.now() - startedAt,
+      sessionId,
+      stage: "process-setup",
+    });
+  }
+};
+
+export { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError } from "./workflow-worker-contract.js";

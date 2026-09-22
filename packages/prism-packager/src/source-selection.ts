@@ -105,7 +105,7 @@ const harnessSupportsDirectPluginArtifact = (
     case "agents":
       return false;
     case "skills":
-      return harness.supportsSkills && harness.skillsDir !== null;
+      return harness.supportsSkills && (harness.skillsDir !== null || harnessId === "amp-orb");
   }
 };
 

@@ -11,8 +11,24 @@ line. `0.4.0` was committed but never tagged or published.
 
 ## Unreleased
 
+## 0.7.1 - 2026-09-22
+
 ### Added
 
+- **Curated named workflow workers** — portable JSON catalogs with descriptions,
+  explicit install/export, and generated literal `prism/refs/workers` types.
+  The workflow skill includes installed workers and the current project's SOP
+  refs. Raw harness configuration remains available; curation does not add
+  unsupported effort controls or verify model entitlement.
+- **Hosted Amp skills** — the explicit `amp-orb` target writes skills into an
+  existing hosted Git checkout selected with `--root`, enforcing UTF-8 text and
+  hosted size/count limits. It does not publish, install plugins, or become a
+  workflow worker.
+- **Orb workflow regression coverage** — mixed agent/Jev routing, cache replay,
+  scheduler overlap, and local Amp execution checks, with recorded live smoke
+  evidence and remaining limits in `docs/workflow-orbs.md`.
+- **`prism workflow skill --reference <chapter>`** — read the embedded reference
+  chapters directly, without installation or a source checkout.
 - **`prism workflow skill --install`** — the plugin-free delivery path. A skill
   is markdown in a folder, so this writes the embedded workflow skills into each
   detected harness's skill directory (`<globalConfigPath>/<skillsDir>/<skill>/`)
@@ -30,6 +46,8 @@ line. `0.4.0` was committed but never tagged or published.
 
 ### Fixed
 
+- Workflow cache identity separates effective worker configurations; renaming
+  a curated worker or editing its description does not invalidate task results.
 - The embedded workflow skill no longer silently omits shipped surfaces.
   Scheduling (0.7.0) had no agent-facing documentation anywhere; Jev was a
   paragraph; finish criteria, cache/`promptHash` discipline, run observability,
@@ -39,6 +57,12 @@ line. `0.4.0` was committed but never tagged or published.
 
 ### Removed
 
+- **`prism workflow scaffold`** and workflow source templates. Author directly
+  from `prism workflow skill`; its printed DSL example is typechecked and
+  exercised through both conditional branches by tests.
+- **`prism workflow models prefer`** and preference-based selection. Install a
+  named worker catalog instead. Existing preference files are left untouched
+  but are no longer read or applied.
 - `prism-plugins` no longer carries a hand-maintained `workflow-authoring.md`
   (860 lines, last touched 2026-09-11). It duplicated the CLI's skill and had
   drifted: it documented no model quiz, no Jev, and no scheduling. The `prism`

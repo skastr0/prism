@@ -249,7 +249,7 @@ const isExcludedMemoryPath = (norm: string): boolean => {
 };
 
 /**
- * Generated memory markdown (Hermes memories/, Claude/Grok/OpenClaw memory/,
+ * Generated memory markdown (Hermes memories/, Claude/Grok memory/,
  * bare MEMORY.md / USER.md). Not repo-root CLAUDE.md / AGENTS.md.
  */
 export const isMemoryRelativePath = (relativePath: string): boolean => {
@@ -789,7 +789,6 @@ const loadOneHarnessInventory = async (options: {
         const isAgentOrCommand =
           /(^|\/)agents\/[^/]+\.md$/u.test(relativePath) ||
           /(^|\/)commands\/[^/]+\.md$/u.test(relativePath) ||
-          /(^|\/)droids\/[^/]+\.md$/u.test(relativePath) ||
           /(^|\/)prompts\/[^/]+\.md$/u.test(relativePath);
         const isTopPluginDir =
           !rel.includes("/") && isPrismNs(relativePath);
@@ -1238,18 +1237,6 @@ const attachHarnessMemories = async (options: {
     const memoriesRoot = join(globalRoot, "memories");
     for (const rel of await listMemoryMarkdown(memoriesRoot)) {
       await pushMemory(`memories/${rel}`, join(memoriesRoot, rel), "codex memories");
-    }
-  }
-
-  if (harnessId === "openclaw") {
-    const workspace = join(globalRoot, "workspace");
-    if (await dirExists(workspace)) {
-      await pushMemory("MEMORY.md", join(workspace, "MEMORY.md"), "openclaw workspace memory");
-      await pushMemory("USER.md", join(workspace, "USER.md"), "openclaw workspace memory");
-      const memDir = join(workspace, "memory");
-      for (const rel of await listMemoryMarkdown(memDir)) {
-        await pushMemory(`memory/${rel}`, join(memDir, rel), "openclaw workspace memory");
-      }
     }
   }
 

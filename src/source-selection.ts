@@ -29,13 +29,12 @@ const TARGET_PRESETS = {
     "kimi-code",
     "amp-code",
     "cursor",
-    "factory-droid",
     "pi",
     "omp",
     "grok",
     "devin",
   ],
-  "claw-harness": ["openclaw", "hermes"],
+  "claw-harness": ["hermes"],
 } as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
 
 const COMPILE_SOURCE_HARNESSES = [
@@ -47,7 +46,6 @@ const COMPILE_SOURCE_HARNESSES = [
   "amp-code",
   "hermes",
   "grok",
-  "factory-droid",
   "pi",
   "omp",
   "kimi-code",

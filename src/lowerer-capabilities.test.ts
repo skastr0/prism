@@ -46,7 +46,6 @@ test("compile target capabilities are derived from lowerer capability profiles",
       "amp-code",
       "hermes",
       "grok",
-      "factory-droid",
       "pi",
       "omp",
       "kimi-code",
@@ -86,7 +85,6 @@ test("agent model-binding demand follows lowerer surfaces", () => {
     sorted([
       "claude-code",
       "codex-cli",
-      "factory-droid",
       "grok",
       "opencode",
       "opencode2",
@@ -102,9 +100,6 @@ test("agent model-binding demand follows lowerer surfaces", () => {
 
 test("capability profiles distinguish product-native plugin surfaces from CLI tools and direct files", () => {
   expect(LOWERER_CAPABILITIES["antigravity-cli"].surfaces.pluginBundle.kind).toBe(
-    "native-plugin-bundle",
-  );
-  expect(LOWERER_CAPABILITIES["factory-droid"].surfaces.pluginBundle.kind).toBe(
     "native-plugin-bundle",
   );
   expect(LOWERER_CAPABILITIES["amp-code"].surfaces.pluginBundle.kind).toBe(
@@ -191,7 +186,6 @@ test("capability profiles distinguish product-native plugin surfaces from CLI to
     kind: "direct-file",
     path: "<codex-root>/agents/<name>.toml",
   });
-  expect(LOWERER_CAPABILITIES.openclaw.surfaces.skills.kind).toBe("direct-file");
   expect(LOWERER_CAPABILITIES.cursor.compile).toEqual({
     agents: "supported",
     agentModelBindings: "ignored",

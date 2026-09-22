@@ -105,14 +105,11 @@ describe("hook-planning 9-cell policy matrix", () => {
     });
   });
 
-  // Cell 7, 8, 9: Unsupported. Anchored on openclaw + prompt.submit — openclaw
-  // has no hook lowerer and is not in the program sequence, so it stays
-  // unsupported across every stage (claude-code has no unsupported events
-  // after S1, so it can no longer serve as the unsupported fixture).
+  // Cell 7, 8, 9: Unsupported. Hermes cannot decide permission requests.
   describe("unsupported", () => {
     test("onDegraded: fail", () => {
-      const hook = makeHook({ name: "unsupported-fail", event: "prompt.submit", onDegraded: "fail" });
-      const exit = Effect.runSyncExit(planHooksForTarget([hook], "openclaw"));
+      const hook = makeHook({ name: "unsupported-fail", event: "permission.request", onDegraded: "fail" });
+      const exit = Effect.runSyncExit(planHooksForTarget([hook], "hermes"));
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
         const error = Cause.findErrorOption(exit.cause);
@@ -127,30 +124,30 @@ describe("hook-planning 9-cell policy matrix", () => {
     });
 
     test("onDegraded: degrade", () => {
-      const hook = makeHook({ name: "unsupported-degrade", event: "prompt.submit", onDegraded: "degrade" });
-      const result = Effect.runSync(planHooksForTarget([hook], "openclaw"));
+      const hook = makeHook({ name: "unsupported-degrade", event: "permission.request", onDegraded: "degrade" });
+      const result = Effect.runSync(planHooksForTarget([hook], "hermes"));
       expect(result.accepted).toEqual([]);
       expect(result.fidelity).toHaveLength(1);
       expect(result.fidelity[0]).toEqual({
         hook: "unsupported-degrade",
-        event: "prompt.submit",
-        target: "openclaw",
+        event: "permission.request",
+        target: "hermes",
         outcome: "skipped",
-        notes: ["no hook lowerer yet"],
+        notes: ["observer-only, cannot decide"],
       });
     });
 
     test("onDegraded: skip", () => {
-      const hook = makeHook({ name: "unsupported-skip", event: "prompt.submit", onDegraded: "skip" });
-      const result = Effect.runSync(planHooksForTarget([hook], "openclaw"));
+      const hook = makeHook({ name: "unsupported-skip", event: "permission.request", onDegraded: "skip" });
+      const result = Effect.runSync(planHooksForTarget([hook], "hermes"));
       expect(result.accepted).toEqual([]);
       expect(result.fidelity).toHaveLength(1);
       expect(result.fidelity[0]).toEqual({
         hook: "unsupported-skip",
-        event: "prompt.submit",
-        target: "openclaw",
+        event: "permission.request",
+        target: "hermes",
         outcome: "skipped",
-        notes: ["no hook lowerer yet"],
+        notes: ["observer-only, cannot decide"],
       });
     });
   });

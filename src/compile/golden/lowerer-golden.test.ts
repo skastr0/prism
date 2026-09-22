@@ -17,7 +17,6 @@ const HARNESSES = [
   "hermes",
   "antigravity-cli",
   "grok",
-  "factory-droid",
   "pi",
   "kimi-code",
 ] as const;

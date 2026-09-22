@@ -3,8 +3,6 @@
  *
  * Covers install-phase direct-file surfaces for harnesses that do not require
  * compile-phase MCP lifecycle:
- *   - factory-droid: commands + AGENTS.md region
- *   - openclaw: skills-only
  *   - cursor: generated local plugin commands + skills + .cursorrules region
  */
 
@@ -28,11 +26,9 @@ const PLUGIN_PATH = resolve(REPO_ROOT, "examples", "prism-harness-qa");
 const FIXTURE: MatrixFixtureSpec = {
   pluginPath: PLUGIN_PATH,
   pluginName: "prism-harness-qa",
-  harnesses: ["factory-droid", "openclaw", "cursor"],
+  harnesses: ["cursor"],
   scope: "global",
   surfaces: [
-    HARNESS_SURFACE_MATRIX["factory-droid"],
-    HARNESS_SURFACE_MATRIX.openclaw,
     HARNESS_SURFACE_MATRIX.cursor,
   ],
 };

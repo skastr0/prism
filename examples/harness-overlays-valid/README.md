@@ -25,10 +25,6 @@ harness-overlays-valid/
     ├── opencode/
     │   └── commands/
     │       └── test.md
-    └── openclaw/
-        └── skills/
-            └── example-skill/
-                └── SKILL.md
 ```
 
 ## Overlay behavior
@@ -36,15 +32,13 @@ harness-overlays-valid/
 - `commands/test.md` is the shared default command for targeted command-capable harnesses.
 - `harness/opencode/commands/test.md` replaces that command only for OpenCode.
 - `skills/example-skill/SKILL.md` is the shared default skill entry point.
-- `harness/openclaw/skills/example-skill/SKILL.md` replaces only the `SKILL.md` file for OpenClaw.
-- `skills/example-skill/checklist.md` stays shared, including for OpenClaw, because there is no matching overlay file.
+- `skills/example-skill/checklist.md` stays shared because no harness overlay replaces it.
 
 ## Validation
 
 ```bash
 prism validate ./examples/harness-overlays-valid
 prism plan --plugin ./examples/harness-overlays-valid --harness opencode
-prism plan --plugin ./examples/harness-overlays-valid --harness openclaw
 ```
 
 There are no file-level `targets:` blocks in this fixture. The shared/overlay layout plus `plugin.json` targets define the plan.

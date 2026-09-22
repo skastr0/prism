@@ -104,21 +104,6 @@ export const HARNESS_SURFACE_MATRIX: Readonly<Record<string, HarnessSurfaceSpec>
       "plugins/prism-generated-prism-harness-qa/dist/server.mjs",
     ],
   },
-  "factory-droid": {
-    harnessId: "factory-droid",
-    kind: "direct-file",
-    configFile: "settings.json",
-    expectedPaths: [
-      "AGENTS.md",
-      "commands/qa-report.md",
-      "commands/factory-droid-only.md",
-    ],
-  },
-  openclaw: {
-    harnessId: "openclaw",
-    kind: "direct-file",
-    expectedPaths: ["skills/qa-helper/SKILL.md", "skills/openclaw-helper/SKILL.md"],
-  },
   hermes: {
     harnessId: "hermes",
     kind: "generated-mcp",

@@ -232,27 +232,6 @@ export const LOWERER_CAPABILITIES = {
       "Workflow worker is `opencode2` only (PRISM_WORKFLOW_OPENCODE2_BIN). Never falls back to `opencode`.",
     ],
   },
-  openclaw: {
-    harness: "openclaw",
-    family: "claw-harness",
-    workflowWorker: false,
-    compile: compileUnsupported,
-    surfaces: {
-      pluginBundle: unsupported("Prism does not manage OpenClaw plugin bundles yet."),
-      rules: unsupported(),
-      commands: unsupported(),
-      agents: unsupported(),
-      skills: {
-        kind: "direct-file",
-        path: "<openclaw-root>/skills/",
-        summary: "Install writes Agent Skill folders only.",
-      },
-      generatedTools: unsupported(),
-      hooks: unsupported(),
-      agentConfig: unsupported(),
-    },
-    notes: ["OpenClaw remains Prism skills-only for now."],
-  },
   hermes: {
     harness: "hermes",
     family: "claw-harness",
@@ -529,54 +508,6 @@ export const LOWERER_CAPABILITIES = {
       "Cursor Agent Skills stay install-phase direct under .cursor/skills and ~/.cursor/skills. Concrete sop skills bundle into the generated plugin.",
       "Per-agent skill permission visibility remains unsupported. Canonical tools stay CLI-only (`prism tools invoke`); no mcp.json patch is emitted.",
     ],
-  },
-  "factory-droid": {
-    harness: "factory-droid",
-    family: "coding-harness",
-    workflowWorker: false,
-    compile: compileSupported({ skillPermissions: "unsupported" }),
-    surfaces: {
-      pluginBundle: {
-        kind: "native-plugin-bundle",
-        path: "<factory-root>/plugins/prism-generated-<plugin>/",
-        summary: "Compile emits Factory plugin bundles with .factory-plugin/plugin.json.",
-      },
-      rules: {
-        kind: "direct-file",
-        path: "<factory-root>/AGENTS.md or rules/",
-        summary: "Install writes Factory instruction/rule files.",
-      },
-      commands: {
-        kind: "direct-file",
-        path: "<factory-root>/commands/",
-        summary: "Install writes Factory command markdown files.",
-      },
-      agents: {
-        kind: "native-plugin-bundle",
-        path: "<generated-plugin>/droids/",
-        summary: "Compile writes generated droids inside the Factory plugin bundle.",
-      },
-      skills: {
-        kind: "native-plugin-bundle",
-        path: "<generated-plugin>/skills/",
-        summary: "Compiled bundles own targeted skills; skills-only plugins still install direct skills.",
-      },
-      generatedTools: {
-        kind: "direct-file",
-        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
-      },
-      hooks: {
-        kind: "native-plugin-bundle",
-        path: "<generated-plugin>/hooks/hooks.json",
-        summary: "Hooks are bundled in Factory plugin format.",
-      },
-      agentConfig: {
-        kind: "native-plugin-bundle",
-        path: "<generated-plugin>/droids/",
-        summary: "Droid settings live in generated frontmatter.",
-      },
-    },
   },
   pi: {
     harness: "pi",

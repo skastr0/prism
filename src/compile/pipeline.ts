@@ -31,7 +31,6 @@ import { planLowering as planCodexCliLowering } from "./lowerers/codex-cli.js";
 import { planLowering as planAmpCodeLowering } from "./lowerers/amp-code.js";
 import { planLowering as planHermesLowering } from "./lowerers/hermes.js";
 import { planLowering as planGrokLowering } from "./lowerers/grok.js";
-import { planLowering as planFactoryDroidLowering } from "./lowerers/factory-droid.js";
 import { planLowering as planPiLowering } from "./lowerers/pi.js";
 import { planLowering as planOmpLowering } from "./lowerers/omp.js";
 import { planLowering as planKimiCodeLowering } from "./lowerers/kimi-code.js";
@@ -231,7 +230,6 @@ const SUPPORTED_TARGETS = [
   "amp-code",
   "hermes",
   "grok",
-  "factory-droid",
   "pi",
   "omp",
   "kimi-code",
@@ -256,8 +254,6 @@ const getLowerer = (target: string): LowererModule => {
       return { planLowering: planHermesLowering };
     case "grok":
       return { planLowering: planGrokLowering };
-    case "factory-droid":
-      return { planLowering: planFactoryDroidLowering };
     case "pi":
       return { planLowering: planPiLowering };
     case "omp":
@@ -278,9 +274,7 @@ const pathSegments = (path: string): ReadonlyArray<string> =>
 
 const isAgentMarkdownTarget = (target: string, agentName: string): boolean =>
   basename(target) === `${agentName}.md` &&
-  ["agents", "droids"].some((segment) =>
-    pathSegments(dirname(target)).includes(segment),
-  );
+  pathSegments(dirname(target)).includes("agents");
 
 const collectCacheOutputs = (
   agentName: string,
@@ -499,7 +493,6 @@ const selectTargetArtifacts = (
 ): TargetArtifacts => {
   const compileOwnedSkills =
     targetId !== "cursor" &&
-    targetId !== "openclaw" &&
     surfaces.skills;
   return {
     tools: surfaces.tools
@@ -639,7 +632,6 @@ const planTargetLowering = (options: {
   if (
     !options.surfaces.hasLowerableArtifacts &&
     options.targetId !== "amp-code" &&
-    options.targetId !== "factory-droid" &&
     options.targetId !== "pi" &&
     options.targetId !== "omp" &&
     options.targetId !== "kimi-code" &&

@@ -10,7 +10,6 @@ import {
   parseMarkdownFile,
   readManifest,
   reconstructMarkdown,
-  resolveManifestTargets,
   validateSkill,
 } from "./manifest.js";
 import type {
@@ -18,7 +17,6 @@ import type {
   HarnessId,
   HarnessScope,
   PluginManifest,
-  PluginTargetId,
 } from "./types.js";
 import { expandPath, readFile } from "./fs.js";
 import {
@@ -115,28 +113,12 @@ const COMPILE_COPIES_TARGETED_SKILL_HARNESSES = new Set<HarnessId>([
   "omp",
 ]);
 
-const manifestTargetsAnyArtifact = (
-  manifest: ResolvedPluginManifest,
-  artifact: string,
-  harnessId: HarnessId,
-): boolean => {
-  const targets = (manifest.targets as Record<string, readonly PluginTargetId[] | undefined>)[artifact];
-  return new Set(resolveManifestTargets(targets ?? [])).has(harnessId);
-};
-
 const compileOwnsTargetedPluginSkills = (
   manifest: ResolvedPluginManifest,
   harnessId: HarnessId,
-): boolean => {
-  if (!manifestHasCompileTargets(manifest, harnessId)) return false;
-  if (COMPILE_COPIES_TARGETED_SKILL_HARNESSES.has(harnessId)) return true;
-  return (
-    harnessId === "factory-droid" &&
-    ["agents", "tools", "hooks"].some((artifact) =>
-      manifestTargetsAnyArtifact(manifest, artifact, harnessId),
-    )
-  );
-};
+): boolean =>
+  manifestHasCompileTargets(manifest, harnessId) &&
+  COMPILE_COPIES_TARGETED_SKILL_HARNESSES.has(harnessId);
 
 const shouldPlanFileRouterRules = (
   manifest: ResolvedPluginManifest,

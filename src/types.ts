@@ -7,7 +7,6 @@ export type HarnessId =
   | "claude-code"
   | "opencode"
   | "opencode2"
-  | "openclaw"
   | "hermes"
   | "codex-cli"
   | "antigravity-cli"
@@ -15,7 +14,6 @@ export type HarnessId =
   | "amp-code"
   | "amp-orb"
   | "cursor"
-  | "factory-droid"
   | "pi"
   | "omp"
   | "grok"
@@ -219,17 +217,6 @@ export interface CursorFrontmatter {
   alwaysApply?: boolean;
 }
 
-// Factory Droid typed frontmatter block
-export interface FactoryDroidFrontmatter {
-  description?: string;
-  model?: string | "inherit";
-  reasoningEffort?: "low" | "medium" | "high";
-  tools?: string | string[];
-  "user-invocable"?: boolean;
-  "disable-model-invocation"?: boolean;
-  "argument-hint"?: string;
-}
-
 // Codex CLI typed frontmatter block
 export interface CodexCliFrontmatter {
   description?: string;
@@ -246,7 +233,6 @@ export interface UnifiedFrontmatter {
   "claude-code"?: ClaudeCodeFrontmatter;
   opencode?: OpenCodeAgentFrontmatter;
   opencode2?: OpenCodeAgentFrontmatter;
-  openclaw?: Record<string, unknown>;
   hermes?: Record<string, unknown>;
   "codex-cli"?: CodexCliFrontmatter;
   "antigravity-cli"?: Record<string, unknown>;
@@ -254,7 +240,6 @@ export interface UnifiedFrontmatter {
   "amp-code"?: Record<string, unknown>;
   "amp-orb"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;
-  "factory-droid"?: FactoryDroidFrontmatter;
   pi?: Record<string, unknown>;
   omp?: Record<string, unknown>;
   grok?: Record<string, unknown>;

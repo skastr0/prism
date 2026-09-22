@@ -135,40 +135,6 @@ test("refresh writes amp-orb skills at the explicit checkout root and rejects a 
   });
 });
 
-test("refresh skips direct skills when compile owns targeted plugin skills", async () => {
-  await withPrismSandbox(async ({ prismHome, roots, rootFor }) => {
-    const pluginRoot = await createPlugin(prismHome, "compiled-skills", {
-      targets: {
-        skills: ["codex-cli", "openclaw"],
-        tools: ["codex-cli"],
-      },
-    });
-    await writeText(
-      join(pluginRoot, "skills", "demo", "SKILL.md"),
-      "---\nname: demo\ndescription: Demo skill\n---\n# Demo\n\nUse this skill.\n",
-    );
-
-    const result = await refreshPlugin({
-      pluginPath: pluginRoot,
-      harnesses: ["codex-cli", "openclaw"],
-      prismHome,
-      overwrite: false,
-      dryRun: true,
-      roots,
-    });
-    const paths = result.reports.flatMap((report) =>
-      report.ops.map((op) => ("targetPath" in op ? op.targetPath : "")),
-    );
-
-    expect(paths.some((path) => path.includes(join(rootFor("openclaw"), "skills", "demo")))).toBe(
-      true,
-    );
-    expect(
-      paths.some((path) => path.includes(join(rootFor("codex-cli"), "skills", "demo"))),
-    ).toBe(false);
-  });
-});
-
 test("refresh lowers Cursor markdown commands into a local command plugin", async () => {
   await withPrismSandbox(async ({ prismHome, roots, rootFor }) => {
     const pluginRoot = await createPlugin(prismHome, "cursor-commands", {

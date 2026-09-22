@@ -19,7 +19,6 @@ export const HarnessIdSchema = Schema.Literals([
   "codex-cli",
   "cursor",
   "devin",
-  "factory-droid",
   "grok",
   "hermes",
   "kimi-code",

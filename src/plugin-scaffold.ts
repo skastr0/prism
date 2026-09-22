@@ -116,10 +116,6 @@ export default {
     "claude-code": {
       model: "sonnet",
     },
-    "factory-droid": {
-      model: "inherit",
-      tools: ["Read", "Grep", "Glob"],
-    },
   },
 } satisfies AgentSource;
 `;
@@ -166,10 +162,9 @@ const buildManifestTargets = (options: PluginScaffoldOptions): PluginManifestTar
       "opencode2",
       "codex-cli",
       "cursor",
-      "factory-droid",
     ];
   }
-  if (options.withAgent) targets.agents = ["claude-code", "opencode2", "factory-droid"];
+  if (options.withAgent) targets.agents = ["claude-code", "opencode2"];
   if (options.withSkill) targets.skills = ["coding-harness", "claw-harness"];
   return targets;
 };

@@ -8,10 +8,9 @@
       "claude-code",
       "opencode",
       "codex-cli",
-      "cursor",
-      "factory-droid"
+      "cursor"
     ],
-    "agents": ["claude-code", "opencode", "factory-droid"],
+    "agents": ["claude-code", "opencode"],
     "skills": ["coding-harness", "claw-harness"]
   }
 }

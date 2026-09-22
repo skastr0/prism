@@ -1671,7 +1671,7 @@ test("validate rejects agent targets for harnesses without compile lowerers", as
       {
         name: "unsupported-agent-target",
         version: "0.1.0",
-        targets: { agents: ["opencode", "openclaw"] },
+        targets: { agents: ["opencode", "amp-orb"] },
       },
       null,
       2,

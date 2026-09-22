@@ -6,7 +6,7 @@ An example plugin that demonstrates shared artifact targeting from `plugin.json`
 
 - `plugin.json` is the only source of install targeting.
 - Shared rules use the `coding-harness` preset.
-- Shared skills use both `coding-harness` and `claw-harness`, so OpenClaw receives the shared skill tree too.
+- Shared skills use both `coding-harness` and `claw-harness`, so Hermes receives the shared skill tree too.
 - Commands and agents use explicit harness lists because not every harness supports those artifact types.
 - There is no `harness/` directory here because every targeted harness uses the same shared files.
 
@@ -19,8 +19,8 @@ An example plugin that demonstrates shared artifact targeting from `plugin.json`
   "description": "Example plugin showing shared harness targets without overlays",
   "targets": {
     "rules": ["coding-harness"],
-    "commands": ["claude-code", "opencode", "codex-cli", "cursor", "factory-droid"],
-    "agents": ["claude-code", "opencode", "factory-droid"],
+    "commands": ["claude-code", "opencode", "codex-cli", "cursor"],
+    "agents": ["claude-code", "opencode"],
     "skills": ["coding-harness", "claw-harness"]
   }
 }
@@ -40,5 +40,4 @@ prism plan --plugin ./examples/my-standards --all
 
 - Frontmatter in the markdown artifacts only carries descriptions and harness-specific settings.
 - There are no file-level `targets:` blocks in this example.
-- OpenClaw v1 receives the shared skill files only in this example because there is no matching `harness/openclaw/skills/...` overlay.
 - See `examples/harness-overlays-valid` for the matching harness-overlay example.

@@ -11,12 +11,10 @@ import { claudeCodeCatalog } from "./claude-code.js";
 import { codexCliCatalog } from "./codex-cli.js";
 import { cursorCatalog } from "./cursor.js";
 import { devinCatalog } from "./devin.js";
-import { factoryDroidCatalog } from "./factory-droid.js";
 import { grokCatalog } from "./grok.js";
 import { hermesCatalog } from "./hermes.js";
 import { kimiCodeCatalog } from "./kimi-code.js";
 import { ompCatalog } from "./omp.js";
-import { openclawCatalog } from "./openclaw.js";
 import { opencodeCatalog } from "./opencode.js";
 import { opencode2Catalog } from "./opencode2.js";
 import { piCatalog } from "./pi.js";
@@ -37,7 +35,6 @@ export const HARNESS_CATALOGS: Record<HarnessId, HarnessCatalog> = {
   "claude-code": claudeCodeCatalog,
   opencode: opencodeCatalog,
   opencode2: opencode2Catalog,
-  openclaw: openclawCatalog,
   hermes: hermesCatalog,
   "codex-cli": codexCliCatalog,
   "antigravity-cli": antigravityCliCatalog,
@@ -45,7 +42,6 @@ export const HARNESS_CATALOGS: Record<HarnessId, HarnessCatalog> = {
   "amp-code": ampCodeCatalog,
   "amp-orb": ampOrbCatalog,
   cursor: cursorCatalog,
-  "factory-droid": factoryDroidCatalog,
   pi: piCatalog,
   omp: ompCatalog,
   grok: grokCatalog,

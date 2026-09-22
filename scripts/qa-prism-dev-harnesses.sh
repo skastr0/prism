@@ -23,7 +23,6 @@ CONSUMERS=(
 
 COMPILE_HARNESSES=(
   codex-cli opencode amp-code hermes cursor claude-code grok
-  factory-droid antigravity-cli kimi-code pi
 )
 
 mkdir -p "$SANDBOX/roots"
@@ -244,11 +243,10 @@ if [[ -f "$cursor_mcp" ]]; then
 fi
 
 # Consumer plugin bundles may exist for agents/skills; MCP sections must stay empty.
-for harness in claude-code grok factory-droid; do
+for harness in claude-code grok; do
   case "$harness" in
     claude-code) mcp_rel="skills/prism-generated-atelier/.mcp.json" ;;
     grok) mcp_rel="plugins/prism-generated-atelier/.mcp.json" ;;
-    factory-droid) mcp_rel="plugins/prism-generated-atelier/mcp.json" ;;
   esac
   mcp_file="$SANDBOX/roots/$harness/$mcp_rel"
   if [[ -f "$mcp_file" ]]; then

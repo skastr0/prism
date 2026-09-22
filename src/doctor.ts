@@ -673,7 +673,6 @@ const namespaceScanDirs = (harness: HarnessId): string[] => {
       return ["plugins", "skills", "mcp"];
     case "antigravity-cli":
     case "grok":
-    case "factory-droid":
       return ["plugins", "skills"];
     case "kimi-code":
       return ["plugins", "skills"];
@@ -685,7 +684,6 @@ const namespaceScanDirs = (harness: HarnessId): string[] => {
       return ["plugins", "skills"];
     case "amp-orb":
       return ["."];
-    case "openclaw":
       return ["skills"];
     case "devin":
       return ["skills", "hooks"];

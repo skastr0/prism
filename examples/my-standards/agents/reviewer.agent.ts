@@ -17,9 +17,5 @@ export default {
     "claude-code": {
       model: "sonnet",
     },
-    "factory-droid": {
-      model: "inherit",
-      tools: ["Read", "Grep", "Glob"],
-    },
   },
 } satisfies AgentSource;

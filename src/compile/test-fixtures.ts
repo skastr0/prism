@@ -14,7 +14,6 @@ const GOLDEN_TARGET_HARNESSES = [
   "claude-code",
   "antigravity-cli",
   "grok",
-  "factory-droid",
   "pi",
   "kimi-code",
 ] as const;

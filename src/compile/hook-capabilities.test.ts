@@ -62,12 +62,6 @@ describe("hook-capabilities", () => {
       expect(codexSessionEnd.nativeEvent).toBe("Stop");
     }
 
-    // openclaw has no hook lowerer and is not in the program sequence: a
-    // permanently-unsupported anchor for the unsupported-with-note pattern.
-    const openclawToolBefore = HOOK_CAPABILITIES["openclaw"]["tool.before"];
-    expect(openclawToolBefore.kind).toBe("unsupported");
-    expect(openclawToolBefore.note).toContain("no hook lowerer");
-
     const cursorToolBefore = HOOK_CAPABILITIES.cursor["tool.before"];
     expect(cursorToolBefore.kind).toBe("native");
     if (cursorToolBefore.kind === "native") {

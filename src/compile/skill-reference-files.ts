@@ -5,7 +5,7 @@
  * markdown the skill links to (e.g. `workflow-authoring.md`,
  * `references/spec.md`) for progressive disclosure — SKILL.md stays short and
  * links out to the full download. Several directory-native lowerers
- * (claude-code, grok, factory-droid, codex-cli, pi — see
+ * (claude-code, grok, codex-cli, pi — see
  * `src/compile/lowerers/*`) only ever plan a single `skills/<name>/SKILL.md`
  * write, so every sibling reference file is silently dropped from compiled
  * output: an agent following a link in SKILL.md finds nothing there.

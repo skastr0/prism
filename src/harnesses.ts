@@ -71,25 +71,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     alternativeRulesFiles: ["CLAUDE.md"],
   },
 
-  openclaw: {
-    id: "openclaw",
-    name: "OpenClaw",
-    globalConfigPath: "~/.openclaw/",
-    projectConfigPath: null,
-    rulesFile: null,
-    rulesDir: null,
-    commandsDir: null,
-    agentsDir: "agents/",
-    toolsDir: null,
-    skillsDir: "skills/",
-    configFile: null,
-    configFormat: "json",
-    supportsTools: false,
-    supportsCommands: false,
-    supportsAgents: true,
-    supportsSkills: true,
-  },
-
   hermes: {
     id: "hermes",
     name: "Hermes Agent",
@@ -227,26 +208,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsAgents: false,
     supportsSkills: true,
     alternativeRulesFiles: ["AGENTS.md"],
-  },
-
-  "factory-droid": {
-    id: "factory-droid",
-    name: "Factory Droid",
-    globalConfigPath: "~/.factory/",
-    projectConfigPath: ".factory/",
-    rulesFile: "AGENTS.md",
-    rulesDir: "rules/",
-    commandsDir: "commands/",
-    agentsDir: "droids/",
-    toolsDir: null,
-    skillsDir: "skills/",
-    configFile: "settings.json",
-    configFormat: "json",
-    supportsTools: true,
-    supportsCommands: true,
-    supportsAgents: true,
-    supportsSkills: true,
-    alternativeRulesFiles: [".droid.yaml", "CLAUDE.md"],
   },
 
   pi: {

@@ -126,7 +126,6 @@ const MEMORY_NAV_HARNESSES: ReadonlySet<string> = new Set([
   "claude-code",
   "grok",
   "codex-cli",
-  "openclaw",
   "omp",
 ]);
 

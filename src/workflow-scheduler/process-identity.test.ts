@@ -60,11 +60,12 @@ describe("process identity", () => {
   });
 
   /**
-   * `starttime` is in clock ticks (10 ms on this host), so two processes
+   * The start identity is coarse — `starttime` clock ticks (10 ms) on Linux,
+   * the one-second `ps -o lstart` timestamp on macOS — so two processes
    * started within one tick legitimately share a value — the identity is a
    * *comparison*, not a unique key. That does not weaken pid-reuse detection:
    * a collision would require a reused pid to be handed out within the same
-   * 10 ms tick as the original, and the kernel recycles pids only after the
+   * tick as the original, and the kernel recycles pids only after the
    * counter wraps, which takes many thousands of process creations. What must
    * hold is that each process is identified correctly against its *own* pid.
    */
@@ -74,8 +75,8 @@ describe("process identity", () => {
     const firstIdentity = processIdentityOf(first.pid);
     const secondIdentity = processIdentityOf(second.pid);
 
-    expect(Number(firstIdentity.startId)).toBeGreaterThan(0);
-    expect(Number(secondIdentity.startId)).toBeGreaterThan(0);
+    expect(firstIdentity.startId).not.toBeNull();
+    expect(secondIdentity.startId).not.toBeNull();
     expect(observeProcessIdentity(firstIdentity).kind).toBe("same-process");
     expect(observeProcessIdentity(secondIdentity).kind).toBe("same-process");
 

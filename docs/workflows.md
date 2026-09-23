@@ -77,6 +77,16 @@ Curate harness/model choices once; workflow authors choose a role by its descrip
       "name": "reviewer",
       "description": "Use for difficult correctness reviews and counterexamples.",
       "config": { "worker": "amp-code", "model": "high" }
+    },
+    {
+      "name": "orb-scout",
+      "description": "Bounded repo inspection in a cheap hosted orb.",
+      "config": { "worker": "amp-orb", "project": "owner/repo", "size": "a1.tiny", "model": "low" }
+    },
+    {
+      "name": "macbook-builder",
+      "description": "Heavy build/test execution on the operator's runner.",
+      "config": { "worker": "amp-runner", "runnerId": "macbook", "runnerDir": "/Users/x/Projects/prism" }
     }
   ]
 }
@@ -152,7 +162,7 @@ Every field:
 
 ```ts
 type WorkflowWorkerId =
-  | "amp-code" | "antigravity-cli" | "claude-code" | "codex-cli" | "cursor"
+  | "amp-code" | "amp-orb" | "amp-runner" | "antigravity-cli" | "claude-code" | "codex-cli" | "cursor"
   | "devin" | "grok" | "hermes" | "kimi-code" | "opencode" | "omp";
 ```
 
@@ -166,10 +176,19 @@ worker: {
   sessionPersistence?: "persistent" | "ephemeral"; // claude-code | codex-cli | omp
   restrictedTools?: readonly string[];   // tool restriction list passed to the worker
   retry?: { maxAttempts?: number; backoffMs?: number };
+  // amp-orb / amp-runner only:
+  project?: string;                    // amp-orb (required): namespace/name, owner/repo, or repo URL
+  size?: "a1.tiny" | "a1.small" | "a1.medium" | "a1.large" | "a1.xxlarge" | "a1.3xlarge"; // amp-orb
+  visibility?: "private" | "unlisted" | "workspace" | "group"; // amp-orb
+  runnerId?: string;                   // amp-runner (required): id from `amp --no-tui --runner-id <id>`
+  runnerDir?: string;                  // amp-runner: absolute dir the runner serves
+  labels?: readonly string[];          // amp-orb / amp-runner: `--label`, repeatable, cosmetic
 }
 ```
 
-**Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own flags. The type is per-worker: Codex may use `sandbox-read-only`; Claude, Grok, Amp, and OMP may not. `prism workflow validate` fails closed with the same remediation as run. Do not copy a Codex sandbox pin onto another harness.
+**Remote Amp executors** (`amp-orb`, `amp-runner`) dispatch through the local amp CLI with `--stream-json` and stay attached until the remote turn ends; `session_id` is the stable thread id and the same-thread repair continuation (`amp threads continue <id> --orb-execute`) drives decode and criteria repairs. One orb thread serves one task (sequential tasks on one thread keep it warm; a paused orb costs $0 — see [workflow-orbs.md](./workflow-orbs.md)). `project` (orb) and `runnerId` (runner) are required; `size` overrides the project's orb size. Changes come back as code only if the task's prompt instructs the agent to commit and push (orbs) or land in the runner's own checkout (runners). Tool permissions are governed by the remote machine's Amp settings or the ampcode.com project — Prism cannot override them per invocation, so these workers accept only `legacy` (the default) and any other mode fails `prism workflow validate` and dispatch with remediation. Catalog pins (`worker.catalogModel`) fail closed for `amp-orb` (the pin plugin is written under the local cwd and the orb runs its own checkout — commit a plugin mode and set `model` to its key instead) and are allowed for `amp-runner` only when `runnerDir` equals the workflow's working directory; an unset `runnerDir` means the runner's own start directory, which Prism cannot verify, so it also fails closed. There is no `worker.effort` for these workers in v1 (no per-invocation effort seam reaches the remote amp process). Cache identity folds `project`, `size`, `runnerId`, and `runnerDir` in; `title`, `labels`, and `visibility` stay out.
+
+**Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own flags. The type is per-worker: Codex may use `sandbox-read-only`; Claude, Grok, Amp, and OMP may not; `amp-orb` and `amp-runner` accept only `legacy`. `prism workflow validate` fails closed with the same remediation as run. Do not copy a Codex sandbox pin onto another harness.
 
 **Reasoning effort.** `worker.effort` is supported only where the capability registry declares a direct per-task control. Fixed values are Claude Code `low | medium | high | xhigh | max`, Antigravity CLI `low | medium | high`, Hermes `none | minimal | low | medium | high | xhigh | max | ultra`, Kimi Code `low | medium | high | xhigh | max`, and OMP `off | minimal | low | medium | high | xhigh | max | auto`. Kimi Code sets effort through the undocumented `KIMI_MODEL_THINKING_EFFORT` environment variable on the spawned worker process. When the selected model's row in `<KIMI_CODE_HOME>/config.toml` declares `support_efforts`, validation also checks that model-specific subset. Amp, Codex CLI, and Grok use discovered per-model values from `prism workflow refresh-harness-types`; validation checks both the discovered union and the selected model's supported set. A task-level `worker.effort` overrides effort from its modelspace target. Codex and OMP modelspace targets use `effort`; `variant` is not an alias and fails with a one-line migration fix. `variant` remains a model-selection setting where the harness uses it. Cursor and Devin carry effort in model slugs, while Devin, Cursor, and OpenCode do not accept `worker.effort`.
 
@@ -191,7 +210,7 @@ Tasks without a `worker` fall back to the CLI: `prism workflow run --worker <id>
 
 `model` resolves through an exact precedence chain (`resolveWorkflowTaskModelResolution`):
 
-1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`. After `prism workflow refresh-harness-types`, that string is checked against the installed harness's discovered slugs. OMP pins are `provider/id` selectors from `omp models --json` (example: `ollama-cloud/glm-5.3-flash`); unpinned OMP tasks prefer `~/.omp/agent/config.yml` `modelRoles.default` with the `:thinking` suffix stripped. `opencode-go/*` is Console Go and 400s in workflow `--print` (`MissingSessionID`). Amp inventories three surfaces: the `--mode` dial (`low | medium | high | ultra`), plugin mode keys (both valid `worker.model` / `--mode` values), and the curated `provider/model` catalog from `amp plugins show-agent-options --json`. Catalog slugs are `worker.catalogModel` (`AmpCodeCatalogSlug`); reasoning effort is `worker.effort` (`AmpCodeEffort`). Amp has no `--model` flag, so Prism pins catalog/effort through a one-shot project plugin mode when no existing plugin mode already binds that slug. Run metadata reports `model` as the catalog slug (or dial), plus `ampMode`, `catalogModel`, and `effort` — never the transport key `prism-pin`. A dial in `worker.model` can `extends` that pin; a plugin mode key cannot combine with `catalogModel` / `effort`. `prism workflow validate` fail-closes when the snapshot lists the catalog row and `worker.effort` is not on that row. Modelspaces stay optional policy, not the inventory.
+1. **Task literal** — `worker.model: "gpt-5.6-terra"` wins outright. Source: `task`. After `prism workflow refresh-harness-types`, that string is checked against the installed harness's discovered slugs. OMP pins are `provider/id` selectors from `omp models --json` (example: `ollama-cloud/glm-5.3-flash`); unpinned OMP tasks prefer `~/.omp/agent/config.yml` `modelRoles.default` with the `:thinking` suffix stripped. `opencode-go/*` is Console Go and 400s in workflow `--print` (`MissingSessionID`). Amp inventories three surfaces: the `--mode` dial (`low | medium | high | ultra`), plugin mode keys (both valid `worker.model` / `--mode` values), and the curated `provider/model` catalog from `amp plugins show-agent-options --json`. Catalog slugs are `worker.catalogModel` (`AmpCodeCatalogSlug`); reasoning effort is `worker.effort` (`AmpCodeEffort`). Amp has no `--model` flag, so Prism pins catalog/effort through a one-shot project plugin mode when no existing plugin mode already binds that slug. Run metadata reports `model` as the catalog slug (or dial), plus `ampMode`, `catalogModel`, and `effort` — never the transport key `prism-pin`. A dial in `worker.model` can `extends` that pin; a plugin mode key cannot combine with `catalogModel` / `effort`. `prism workflow validate` fail-closes when the snapshot lists the catalog row and `worker.effort` is not on that row. The remote Amp workers (`amp-orb`, `amp-runner`) share the dial/plugin-mode `worker.model` addressing but never take catalog pins (`amp-orb` always; `amp-runner` only when `runnerDir` equals the workflow's working directory — see Workers and permissions). Modelspaces stay optional policy, not the inventory.
 2. **Task modelspace profile ref** — `worker.model: { kind: "model-profile-ref", plugin, modelspace, profile }` resolves the profile's target for the task's worker; the first concrete model binding wins. Use harness-bound fields: `provider` where supported, OpenCode's `variant`, and Codex/OMP's `effort`. No entry for that worker → `WorkflowModelResolutionError`.
 3. **Nothing anywhere** — resolves to the CLI `--model` if given; otherwise `undefined`. Spawn omits the harness model flag so the user's harness default stays. Do not invent a Prism default. Named workers compile to ordinary task configurations, not an extra runtime preference layer.
 

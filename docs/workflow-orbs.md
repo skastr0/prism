@@ -173,6 +173,22 @@ Jev is a task kind, not a named harness worker. Its endpoint/model configuration
 requests returned model `jev-1.13.0`. Bind each question's subject through `instructions`; a question
 ID alone is not a subject binding. High confidence is not proof of semantic correctness.
 
+## Orchestrating orbs from workflows
+
+Workflow tasks can dispatch to Amp's hosted orbs and to operator-declared runners directly — the
+`amp-orb` and `amp-runner` workflow workers (see [workflows.md](./workflows.md#workers-and-permissions)):
+
+```ts
+worker: { worker: "amp-orb", project: "owner/repo", size: "a1.tiny", model: "low" }
+worker: { worker: "amp-runner", runnerId: "macbook", runnerDir: "/Users/x/Projects/prism" }
+```
+
+One orb thread serves one task: sequential tasks pinned to the same target reuse the thread through
+same-thread repair continuations, keeping the orb warm across the run; the gap between tasks may
+idle-pause and a paused orb costs $0. Catalog pins fail closed for these workers (the pin plugin lives
+in the local checkout, not the orb's) — commit a plugin mode and set `model` to its key, or use a
+dial. `amp-runner` accepts catalog pins only when `runnerDir` equals the workflow's working directory.
+
 ## Operation and failure boundaries
 
 See [workflow scheduling](./workflow-scheduling.md), [workflow semantics](./workflows.md), and

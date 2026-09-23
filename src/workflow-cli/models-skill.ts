@@ -59,6 +59,7 @@ prism workflow models --worker cursor --query opus
 | \`cursor\` | \`legacy\` \`permissive\` \`full-access\` \`sandbox-workspace-write\` |
 | \`devin\` \`omp\` | \`legacy\` \`permissive\` \`restricted\` \`full-access\` |
 | \`amp-code\` \`antigravity-cli\` \`grok\` \`hermes\` \`kimi-code\` \`opencode\` | \`legacy\` \`permissive\` \`full-access\` |
+| \`amp-orb\` \`amp-runner\` | \`legacy\` only — no per-invocation override reaches the remote executor |
 
 - Nothing is saved by this skill. Pins live in the workflow source; the harness default stays when you omit the field.
 

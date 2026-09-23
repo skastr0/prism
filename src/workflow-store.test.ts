@@ -129,10 +129,11 @@ describe("workflow store", () => {
     store.close();
 
     // PASSIVE checkpoints every frame it can without contention (this store
-    // is the only connection, so nothing blocks it) into the main file, and
-    // SQLite's own last-connection-closing cleanup truncates the now-fully-
-    // checkpointed WAL back to zero length — the "no orphan WAL" contract.
-    const walSizeAfterClose = (await stat(walPath)).size;
+    // is the only connection, so nothing blocks it) into the main file, then
+    // the last connection's close leaves no orphan WAL: SQLite builds that
+    // persist the WAL (Apple's system SQLite) leave it truncated to zero,
+    // stock builds (Bun's bundled SQLite on Linux) delete it.
+    const walSizeAfterClose = await stat(walPath).then((s) => s.size, () => 0);
     expect(walSizeAfterClose).toBe(0);
   });
 

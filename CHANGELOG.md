@@ -13,6 +13,18 @@ line. `0.4.0` was committed but never tagged or published.
 
 ### Added
 
+- **Amp remote workflow workers** — `amp-orb` (hosted orb per task thread,
+  dispatched through `amp --orb-execute --stream-json` with `--project` /
+  `--orb-size` / `--visibility` / `--label`) and `amp-runner` (Amp on an
+  operator-declared `amp --no-tui --runner-id` runner via
+  `--executor runner:<id>` / `--runner-dir`). Both stay attached until the
+  remote turn ends, capture the stable thread id from the stream, and repair
+  on the same thread via `amp threads continue <id> --orb-execute`. Remote
+  executors accept only `legacy` permission (others fail validate and dispatch
+  with remediation); `amp-orb` rejects catalog pins and `amp-runner` allows
+  them only when `runnerDir` equals the workflow's working directory;
+  `project` / `runnerId` are required. Cache identity folds project, orb
+  size, runner id, and runner dir in.
 - **Workflow reasoning effort controls** — capability-backed CLI unions for
   Claude Code, Antigravity CLI, Hermes, and OMP; discovered per-model effort
   sets for Amp, Codex CLI, and Grok; modelspace effort resolution, validation,

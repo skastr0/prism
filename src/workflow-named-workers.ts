@@ -1,6 +1,5 @@
 /** Portable, user-curated worker configurations. Runtime reads installed truth only. */
-import { isAbsolute } from "node:path";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { Data, Effect, Schema } from "effect";
 import { exists, expandPath, readFile, writeFile } from "./fs.js";
 import { workflowWorkerHarnessIds } from "./lowerer-capabilities.js";

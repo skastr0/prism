@@ -183,9 +183,10 @@ worker: { worker: "amp-orb", project: "owner/repo", size: "a1.tiny", model: "low
 worker: { worker: "amp-runner", runnerId: "macbook", runnerDir: "/Users/x/Projects/prism" }
 ```
 
-One orb thread serves one task: sequential tasks pinned to the same target reuse the thread through
-same-thread repair continuations, keeping the orb warm across the run; the gap between tasks may
-idle-pause and a paused orb costs $0. Catalog pins fail closed for these workers (the pin plugin lives
+One orb thread per task: repairs inside a task continue that thread; a
+finished task's orb idle-pauses at $0. `threadCleanup` is not in v1 — decode
+and criteria repairs need the thread after the worker returns. Catalog pins
+fail closed for these workers (the pin plugin lives
 in the local checkout, not the orb's) — commit a plugin mode and set `model` to its key, or use a
 dial. `amp-runner` accepts catalog pins only when `runnerDir` equals the workflow's working directory.
 

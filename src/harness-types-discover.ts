@@ -689,24 +689,34 @@ const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) =>
 /**
  * Snapshot the account-wide Amp runners: one `amp -x --stream-json` turn in
  * the cheapest mode whose only job is calling `list_runners`, parsed from the
- * tool result. Fail-soft: a failed capture records the reason and no runners.
- * The thread the turn creates is deleted afterwards.
+ * tool result. Fail-soft: a failed capture records the reason and no runners,
+ * but still deletes any thread the turn created (its partial stdout carries
+ * the session id even when the turn times out). The reason is also returned
+ * so the caller can surface it when the capture was explicitly requested.
  */
 export const discoverAmpRunners = async (
   options: DiscoverHarnessTypesOptions = {},
-): Promise<DiscoveredAmpRunners> => {
+): Promise<{ readonly discovered: DiscoveredAmpRunners; readonly failedExplicit?: string }> => {
   const run = options.runCommand ?? defaultAmpTurnRunner;
   const stdout = await run("amp", ["-x", AMP_RUNNERS_PROMPT, "--stream-json", "--mode", "low"]);
   const parsed = parseAmpRunnersStreamJson(stdout);
   if (parsed.sessionId !== undefined) {
     await run("amp", ["threads", "delete", parsed.sessionId]);
+  } else {
+    // A failed turn still created its thread (session_id arrives in the init
+    // line before any failure); recover it from the partial stdout.
+    const leaked = [...stdout.matchAll(/"session_id":"(T-[^"]+)"/g)].map((match) => match[1]!);
+    for (const id of [...new Set(leaked)]) {
+      await run("amp", ["threads", "delete", id]);
+    }
   }
-  return {
+  const discovered: DiscoveredAmpRunners = {
     runners: parsed.runners,
     source: parsed.runners.length > 0 ? "command" : "empty",
     capturedAt: new Date().toISOString(),
     ...(parsed.error !== undefined ? { error: parsed.error } : {}),
   };
+  return { discovered, ...(parsed.error !== undefined ? { failedExplicit: parsed.error } : {}) };
 };
 
 /** Previously captured runner snapshot, preserved by a plain refresh. */
@@ -731,11 +741,23 @@ export const refreshHarnessTypes = async (
   ]);
   const previous = previousAmpRunners(prismHome);
   let ampRunners: DiscoveredAmpRunners | undefined = previous;
+  let ampRunnersCaptureError: string | undefined;
   if (options.discoverAmpRunners === true) {
-    const fresh = await discoverAmpRunners(options);
+    const { discovered, failedExplicit } = await discoverAmpRunners(options);
     // A failed capture keeps the previously captured runners (an old entry is
     // valid); a legitimate empty capture (no live runners) replaces them.
-    ampRunners = fresh.error !== undefined && (previous?.runners.length ?? 0) > 0 ? previous : fresh;
+    ampRunners = failedExplicit !== undefined && (previous?.runners.length ?? 0) > 0 ? previous : discovered;
+    // An explicit capture failure is never silent: the operator asked for it.
+    if (failedExplicit !== undefined) {
+      const kept = ampRunners?.runners.length ?? 0;
+      ampRunnersCaptureError = [
+        `The Amp runner capture failed: ${failedExplicit}`,
+        kept > 0 && ampRunners?.capturedAt !== undefined
+          ? `The previous runner snapshot from ${ampRunners.capturedAt} (${kept} runner${kept === 1 ? "" : "s"}) was kept.`
+          : "No previous runner snapshot was kept.",
+        "Check `amp login` / network access and re-run the same command.",
+      ].join(" ");
+    }
   }
   const snapshot: HarnessTypesSnapshot = {
     generatedAt: new Date().toISOString(),
@@ -743,7 +765,8 @@ export const refreshHarnessTypes = async (
     ampProjects,
     ...(ampRunners !== undefined ? { ampRunners } : {}),
   };
-  return writeHarnessTypesSnapshot(prismHome, snapshot);
+  const written = writeHarnessTypesSnapshot(prismHome, snapshot);
+  return { ...written, ...(ampRunnersCaptureError !== undefined ? { ampRunnersCaptureError } : {}) };
 };
 
 export const renderHarnessTypesRefreshHuman = (result: RefreshHarnessTypesResult): string => {

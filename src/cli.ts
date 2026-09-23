@@ -679,9 +679,17 @@ workflow
       const modelsSkill = await writeWorkflowModelsSkill(prismHome);
       if (options.json === true) {
         await writeStdout(`${JSON.stringify({ ...result, skillPath: skill.path, modelsSkillPath: modelsSkill.path }, null, 2)}\n`);
+        if (result.ampRunnersCaptureError !== undefined) {
+          await writeStderr(`${result.ampRunnersCaptureError}\n`);
+          exitWith(EXIT_CODES.domainFailure);
+        }
         return;
       }
       await writeStdout(`${renderHarnessTypesRefreshHuman(result)}\nSkill: ${skill.path}\nModels skill: ${modelsSkill.path}\n`);
+      if (result.ampRunnersCaptureError !== undefined) {
+        await writeStderr(`${result.ampRunnersCaptureError}\n`);
+        exitWith(EXIT_CODES.domainFailure);
+      }
     } catch (error) {
       printCliError(error, "Workflow refresh-harness-types failed");
       exitWith(EXIT_CODES.domainFailure);

@@ -61,6 +61,12 @@ export interface RefreshHarnessTypesResult {
   readonly modelsPath: string;
   readonly discoveredPath: string;
   readonly snapshot: HarnessTypesSnapshot;
+  /**
+   * Set only when the explicit `--discover-amp-runners` capture failed: the
+   * reason plus what was kept. The refresh itself still succeeded; the CLI
+   * surfaces this as a non-zero exit so the failure is never silent.
+   */
+  readonly ampRunnersCaptureError?: string;
 }
 
 const CAMEL_BY_HARNESS: Readonly<Record<WorkflowWorkerId, string>> = {

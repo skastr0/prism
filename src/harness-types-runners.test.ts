@@ -34,7 +34,7 @@ const runnerRow = (runnerId: string, dirs: readonly string[]): unknown => ({
 describe("discoverAmpRunners", () => {
   test("parses a one-shot turn transcript into a command source", async () => {
     const calls: Array<{ command: string; args: readonly string[] }> = [];
-    const discovered = await discoverAmpRunners({
+    const { discovered } = await discoverAmpRunners({
       runCommand: async (command, args) => {
         calls.push({ command, args });
         if (args[0] === "-x") {
@@ -56,12 +56,28 @@ describe("discoverAmpRunners", () => {
   });
 
   test("fails soft when the turn errors, with the reason and no thread deletion", async () => {
-    const discovered = await discoverAmpRunners({
+    const { discovered } = await discoverAmpRunners({
       runCommand: async () => "AMP_TURN_ERROR: Command failed: amp -x (exit 1): not logged in",
     });
     expect(discovered.source).toBe("empty");
     expect(discovered.runners).toEqual([]);
     expect(discovered.error).toBe("Command failed: amp -x (exit 1): not logged in");
+  });
+
+  test("a timed-out turn still deletes the thread its partial stdout named", async () => {
+    const calls: Array<readonly string[]> = [];
+    const partial = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "T-timed-out", cwd: "/x" }),
+    ].join("\n");
+    const { discovered, failedExplicit } = await discoverAmpRunners({
+      runCommand: async (command, args) => {
+        calls.push(args);
+        return args[0] === "-x" ? `AMP_TURN_ERROR: amp -x timed out after 180s — ${partial}` : "ok\n";
+      },
+    });
+    expect(failedExplicit).toContain("timed out");
+    expect(discovered.runners).toEqual([]);
+    expect(calls[1]).toEqual(["threads", "delete", "T-timed-out"]);
   });
 });
 
@@ -117,11 +133,42 @@ describe("refresh harness-types runner preservation", () => {
       discoverAmpRunners: true,
     });
     expect(result.snapshot.ampRunners?.runners.map((runner) => runner.runnerId)).toEqual(["build-box", "macbook"]);
+    expect(result.ampRunnersCaptureError).toBeUndefined();
     const source = await readFile(result.modelsPath, "utf8");
     expect(source).toContain('"build-box"');
     expect(source).toContain('"/work/a" | "/work/b"');
     const human = renderHarnessTypesRefreshHuman(result);
     expect(human).toContain("amp-runner: 2 runners, 3 served dirs (command)");
+  });
+
+  test("an explicit failed capture is never silent: reason + kept-snapshot note, and the result carries it", async () => {
+    const prismHome = await mkdtemp(join(tmpdir(), "prism-runners-explicit-err-"));
+    await writeRunners(prismHome);
+    const result = await refreshHarnessTypes(prismHome, {
+      home: join(prismHome, "home"),
+      runCommand: async (command, args) =>
+        command === "amp" && args[0] === "-x" ? "AMP_TURN_ERROR: offline" : "ok\n",
+      readText: () => undefined,
+      discoverAmpRunners: true,
+    });
+    expect(result.ampRunnersCaptureError).toContain("The Amp runner capture failed: offline");
+    expect(result.ampRunnersCaptureError).toContain("previous runner snapshot from 2026-09-22T01:00:00.000Z (1 runner) was kept");
+    expect(result.ampRunnersCaptureError).toContain("Check `amp login` / network access and re-run");
+    // The old snapshot is kept on disk, and the human line reports it without a fake count.
+    expect(result.snapshot.ampRunners?.runners.map((runner) => runner.runnerId)).toEqual(["macbook"]);
+    expect(renderHarnessTypesRefreshHuman(result)).toContain("amp-runner: 1 runner, 1 served dir (command)");
+  });
+
+  test("an explicit failed capture with no previous snapshot also reports the failure", async () => {
+    const prismHome = await mkdtemp(join(tmpdir(), "prism-runners-err-noprev-"));
+    const result = await refreshHarnessTypes(prismHome, {
+      home: join(prismHome, "home"),
+      runCommand: async (command, args) =>
+        command === "amp" && args[0] === "-x" ? "AMP_TURN_ERROR: offline" : "ok\n",
+      readText: () => undefined,
+      discoverAmpRunners: true,
+    });
+    expect(result.ampRunnersCaptureError).toContain("No previous runner snapshot was kept");
   });
 
   test("a failed live capture keeps the previously captured runners", async () => {

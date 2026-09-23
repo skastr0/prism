@@ -188,7 +188,14 @@ export const parseAmpRunnersStreamJson = (
   const trimmed = stdout.trim();
   if (trimmed.length === 0) return { runners: [], error: "amp -x --stream-json produced no output" };
   if (trimmed.startsWith(AMP_TURN_ERROR_PREFIX)) {
-    return { runners: [], error: trimmed.slice(AMP_TURN_ERROR_PREFIX.length).trim() };
+    return {
+      runners: [],
+      // A failed turn still leaves the session id in its partial stdout
+      // (the init line arrives before any failure); surface it so the caller
+      // can delete the thread. Thread ids are opaque beyond the T- prefix.
+      sessionId: /"session_id":"(T-[^"]+)"/u.exec(trimmed)?.[1],
+      error: trimmed.slice(AMP_TURN_ERROR_PREFIX.length).trim(),
+    };
   }
 
   let sessionId: string | undefined;
@@ -280,13 +287,11 @@ export const validateAmpRunnerTarget = (
 ): string | undefined => {
   const runners = discovered?.runners ?? [];
   if (runners.length === 0) return undefined;
-  const runner = runners.find((candidate) => candidate.runnerId === runnerId)
-    ?? (runners.filter((candidate) => candidate.runnerId.toLowerCase() === runnerId.toLowerCase()).length === 1
-      ? runners.find((candidate) => candidate.runnerId.toLowerCase() === runnerId.toLowerCase())
-      : undefined);
+  // Amp runner ids are exact; a differently-cased id is a different id.
+  const runner = runners.find((candidate) => candidate.runnerId === runnerId);
   if (runner === undefined) {
     const wanted = runnerId.toLowerCase();
-    const nearby = runners.filter((candidate) => candidate.runnerId.toLowerCase() === wanted || candidate.name.toLowerCase() === wanted);
+    const nearby = runners.filter((candidate) => candidate.runnerId.toLowerCase() === wanted);
     const known = runners.map(runnerLabel).sort((left, right) => left.localeCompare(right));
     return [
       `Unknown Amp runner ${JSON.stringify(runnerId)} for worker 'amp-runner'.`,

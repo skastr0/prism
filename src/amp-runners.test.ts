@@ -136,7 +136,10 @@ describe("validateAmpRunnerTarget", () => {
     expect(error).toContain('Unknown Amp runner "build-box"');
     expect(error).toContain("mac-mini (macmini.local), macbook (MacBookPro)");
     expect(error).toContain("prism workflow refresh-harness-types --discover-amp-runners");
-    expect(validateAmpRunnerTarget("MacBook", undefined, discovered())).toBeUndefined();
+    // Amp runner ids are exact: a differently-cased id fails with the exact id.
+    const cased = validateAmpRunnerTarget("MacBook", undefined, discovered());
+    expect(cased).toContain('Unknown Amp runner "MacBook"');
+    expect(cased).toContain('Did you mean "macbook"?');
   });
 
   test("validates the (runnerId, runnerDir) pair against that runner's served directories", () => {

@@ -14,6 +14,7 @@ import {
 import { ampWorkerPins, validateAmpCatalogPins } from "./workflow-amp-worker.js";
 import { ampRemoteTargetOf, resolveAmpRemotePinPlan } from "./workflow-amp-remote-worker.js";
 import { validateAmpOrbProject } from "./amp-projects.js";
+import { validateAmpRunnerTarget } from "./amp-runners.js";
 import { assertOmpWorkflowModel } from "./workflow-omp-worker.js";
 import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
@@ -149,6 +150,10 @@ const resolveTaskModelRow = (
       if (target.worker === "amp-orb") {
         const projectError = validateAmpOrbProject(target.project, snapshot?.ampProjects);
         if (projectError !== undefined) throw new Error(projectError);
+      }
+      if (target.worker === "amp-runner") {
+        const runnerError = validateAmpRunnerTarget(target.runnerId, target.runnerDir, snapshot?.ampRunners);
+        if (runnerError !== undefined) throw new Error(runnerError);
       }
       resolveAmpRemotePinPlan({
         target,

@@ -173,6 +173,11 @@ try {
   report("DONE amp remote smoke");
 } catch (error) {
   exitCode = 1;
+  // A step that threw after its stream started still owns a thread; collect
+  // its id from the typed error's metadata before cleanup.
+  if (error instanceof AmpWorkflowWorkerError) {
+    for (const thread of collectThreadIds(error.metadata)) createdThreads.add(thread);
+  }
   report(`FAIL amp remote smoke: ${error instanceof Error ? error.message : String(error)}`);
 } finally {
   // Every thread this smoke created is deleted, success or failure.

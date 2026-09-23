@@ -11,8 +11,18 @@ line. `0.4.0` was committed but never tagged or published.
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-23
+
 ### Added
 
+- **Typed Amp projects and runners** — `prism workflow refresh-harness-types`
+  snapshots `amp projects list` into a typed `project` union for `amp-orb`;
+  the opt-in `--discover-amp-runners` flag spends one small Amp turn calling
+  `list_runners` to capture every live runner on the account (all machines)
+  with its served directories. `runnerId` and per-runner `runnerDir` are typed,
+  and `validate` plus the named-worker catalog fail closed on unknown values
+  with the known list and the refresh command. A plain refresh preserves the
+  last runner snapshot.
 - **Pinned third-party skills** — plugin `skill-refs/*.skill-ref.json` pointers, commit and content hashes in `prism.lock`, cached git extraction, normal refresh ownership, `prism skills import-npx`/`update`, and doctor untracked-skill findings with opt-in pruning.
 - **Amp remote workflow workers** — `amp-orb` (hosted orb per task thread,
   dispatched through `amp --orb-execute --stream-json` with `--project` /
@@ -38,12 +48,23 @@ line. `0.4.0` was committed but never tagged or published.
 
 ### Changed
 
+- **Bun 1.4.2** — `package.json` `packageManager` is the single pin: CI reads
+  it via `bun-version-file`, `mise.toml` pins the local toolchain, and the test
+  preload fails with the fix when the running Bun drifts. Bun 1.3.14's resolver
+  leak segfaulted long suites; 1.4.2 also runs the suite ~25% faster.
 - The `opencode` harness and workflow worker now target OpenCode v2, using `opencode run --format json [--auto]` from the task directory.
 
 ### Removed
 
 - Factory Droid and OpenClaw harness targets, lowerers, catalogs, fixtures, and documentation.
 - The separate `opencode2` id and OpenCode v1 worker path; manifests using the removed id fail validation.
+
+### Fixed
+
+- Plain `bun test` is self-sufficient on a clean checkout: the preload rebuilds
+  stale SDK/declaration build outputs and gives each run a private `TMPDIR`.
+- macOS-only test assumptions (process start identity, case-insensitive GC
+  fixture names, SQLite WAL persistence).
 
 ## 0.7.1 - 2026-09-22
 

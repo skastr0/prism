@@ -28,8 +28,10 @@ import { runBackupsSummary, type RunBackupsSummary } from "./state/run-backups.j
 import { MISSING_OWNED_FILE_SELF_HEALS, parseRegionRef } from "./sync/plan.js";
 import {
   manifestHasCompileTargets,
+  manifestTargetsArtifact,
   readManifest,
 } from "./manifest.js";
+import { listSkillPointers } from "./third-party-skills.js";
 import { compilePluginForTarget } from "./compile/pipeline.js";
 import { describePrismCause } from "./errors.js";
 import {
@@ -219,6 +221,12 @@ const readAllSnapshots = async (
 
 const detectUntrackedSkillDirs = async (options: DoctorOptions): Promise<DoctorFinding[]> => {
   const snapshots = await readAllSnapshots(options.prismHome);
+  const pointerNames = options.pluginPath
+    ? new Set((await listSkillPointers(options.pluginPath)).map((pointer) => pointer.name))
+    : new Set<string>();
+  const manifest = options.pluginPath && pointerNames.size > 0
+    ? await readManifest(options.pluginPath)
+    : undefined;
   const owned = new Set<string>();
   for (const snapshot of snapshots) {
     for (const entry of snapshot.manifest?.entries ?? []) {
@@ -238,6 +246,20 @@ const detectUntrackedSkillDirs = async (options: DoctorOptions): Promise<DoctorF
         if (!stats.isDirectory() && !stats.isSymbolicLink()) continue;
         if (!(await exists(join(dir, "SKILL.md")))) continue;
         if ([...owned].some((path) => path.startsWith(`${resolve(dir)}/`))) continue;
+        if (manifest && pointerNames.has(name) && manifestTargetsArtifact(manifest, "skills", harnessId)) {
+          findings.push(finding({
+            severity: "error",
+            family: "skill.untracked",
+            code: "skill.untracked",
+            message: `Declared skill pointer ${dir} has not been refreshed. Run prism refresh ${options.pluginPath} --harness ${harnessId}; if the existing directory is foreign-owned, review it and rerun with --overwrite.`,
+            harness: harnessId,
+            plugin: manifest.name,
+            root,
+            path: dir,
+            fix: "manual",
+          }));
+          continue;
+        }
         if (options.pruneUntracked && options.fix) {
           await rm(dir, { recursive: stats.isDirectory(), force: true });
           continue;

@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { withPrismSandbox } from "./testing/prism-sandbox.js";
 import { refreshPlugin } from "./refresh.js";
+import { runDoctor } from "./doctor.js";
 import { importNpxSkills, updateSkillPins } from "./third-party-skills-cli.js";
 import {
   cachedSkillDirectory,
@@ -65,6 +66,28 @@ test("pinned pointer refresh uses desired-state ownership, verifies hash, and wo
     expect(offline.success).toBe(true);
     await writeSkillLock(plugin, { demo: { source: pointer.source, commit: pointer.commit, skillPath: pointer.skillPath, contentHash: "0".repeat(64) } });
     await expect(refreshPlugin(options)).rejects.toThrow("hash mismatch");
+  });
+});
+
+test("doctor directs an unrefreshed pointer to refresh without pruning or adopting its foreign directory", async () => {
+  await withPrismSandbox(async ({ prismHome, roots, rootFor }) => {
+    const { plugin, pointer } = await fixture(prismHome);
+    const hash = await hashSkillDirectory(await cachedSkillDirectory(pointer, prismHome));
+    await writeSkillLock(plugin, { demo: { source: pointer.source, commit: pointer.commit, skillPath: pointer.skillPath, contentHash: hash } });
+    const foreignSkill = join(rootFor("opencode"), "skills", "demo", "SKILL.md");
+    await write(foreignSkill, "---\nname: demo\ndescription: Existing npx skill\n---\n# Foreign\n");
+
+    const options = { pluginPath: plugin, harnesses: ["opencode"] as const, scope: "global" as const, prismHome, roots, fix: false };
+    const report = await runDoctor(options);
+    const finding = report.findings.find((item) => item.code === "skill.untracked" && item.path === dirname(foreignSkill));
+    expect(finding?.message).toContain(`prism refresh ${plugin} --harness opencode`);
+    expect(finding?.message).not.toContain("prune");
+    await runDoctor({ ...options, fix: true, pruneUntracked: true });
+    expect(await readFile(foreignSkill, "utf8")).toContain("# Foreign");
+
+    const refresh = await refreshPlugin({ pluginPath: plugin, harnesses: ["opencode"], prismHome, roots, overwrite: false, dryRun: false });
+    expect(refresh.success).toBe(false);
+    expect(await readFile(foreignSkill, "utf8")).toContain("# Foreign");
   });
 });
 

@@ -17,7 +17,7 @@ const firstWorkerSnapshot = (store: WorkflowStore, runId: string): WorkflowWorke
   return snapshot?.kind === "workflow-task" ? snapshot : undefined;
 };
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
-import { DEFAULT_WORKFLOW_DECODE_REPAIRS, defineTask, defineWorkflow, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
+import { DEFAULT_WORKFLOW_DECODE_REPAIRS, defineTask, defineWorkflow, type WorkflowFinishOptions, type WorkflowWorkerId, type WorkflowWorkerIdWithoutRequiredOptions } from "./workflows.js";
 
 const tempRoots: string[] = [];
 
@@ -61,7 +61,7 @@ const deadPid = async (): Promise<number> => {
 
 const createWorkflow = (options?: {
   readonly prompt?: string;
-  readonly worker?: WorkflowWorkerId;
+  readonly worker?: WorkflowWorkerIdWithoutRequiredOptions;
   readonly model?: string;
   readonly finish?: WorkflowFinishOptions<{ summary: string }>;
 }) => {

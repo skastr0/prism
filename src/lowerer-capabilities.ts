@@ -79,6 +79,9 @@ const unsupported = (summary = "Prism does not manage this surface."): LowererSu
   summary,
 });
 
+const ampRunnerInstallNote =
+  "Runners execute in existing checkouts on the operator's machine; install surfaces belong to the checkout's own harness targets.";
+
 const compileUnsupported: CompileTargetCapabilities = {
   agents: "unsupported",
   agentModelBindings: "ignored",
@@ -375,7 +378,7 @@ export const LOWERER_CAPABILITIES = {
   "amp-orb": {
     harness: "amp-orb",
     family: "coding-harness",
-    workflowWorker: false,
+    workflowWorker: true,
     workflowEffort: null,
     compile: compileUnsupported,
     surfaces: {
@@ -393,9 +396,31 @@ export const LOWERER_CAPABILITIES = {
       agentConfig: unsupported(),
     },
     notes: [
-      "amp-orb is a hosted skills checkout, not a second root for amp-code.",
-      "Family is coding-harness so the type fits. It is not a member of the coding-harness preset and not a workflow worker.",
+      "amp-orb names Amp's hosted orb executor. Install surface: hosted skills checkout (skills only, not a second amp-code root).",
+      "Workflow surface: project-bound orb threads via `amp --orb-execute --stream-json`.",
+      "Family is coding-harness so the type fits. It is not a member of the coding-harness preset.",
       "Publication (clone, commit, push, reload) is outside this target.",
+    ],
+  },
+  "amp-runner": {
+    harness: "amp-runner",
+    family: "coding-harness",
+    workflowWorker: true,
+    workflowEffort: null,
+    compile: compileUnsupported,
+    surfaces: {
+      pluginBundle: unsupported(ampRunnerInstallNote),
+      rules: unsupported(ampRunnerInstallNote),
+      commands: unsupported(ampRunnerInstallNote),
+      agents: unsupported(ampRunnerInstallNote),
+      skills: unsupported(ampRunnerInstallNote),
+      generatedTools: unsupported(ampRunnerInstallNote),
+      hooks: unsupported(ampRunnerInstallNote),
+      agentConfig: unsupported(ampRunnerInstallNote),
+    },
+    notes: [
+      "amp-runner names Amp executing on an operator-declared `amp --no-tui --runner-id <id>` runner. Workflow-worker only.",
+      "Not a member of the coding-harness preset, --all, or installed-harness auto-detect: it has no install surface.",
     ],
   },
   "amp-code": {
@@ -711,6 +736,14 @@ export const getCompileTargetCapabilities = (
   Object.hasOwn(LOWERER_CAPABILITIES, harness)
     ? LOWERER_CAPABILITIES[harness as HarnessId].compile
     : compileUnsupported;
+
+/**
+ * Whether a harness has any install/compile surface Prism can write. A harness
+ * without one (workflow-worker-only, e.g. amp-runner) is never an implicit
+ * install target: not in `--all`, not in installed-harness auto-detect.
+ */
+export const harnessHasInstallSurface = (harness: HarnessId): boolean =>
+  Object.values(LOWERER_CAPABILITIES[harness].surfaces).some((surface) => surface.kind !== "unsupported");
 
 /**
  * Harness ids flagged `workflowWorker: true` above — computed at the type

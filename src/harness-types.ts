@@ -59,6 +59,8 @@ export interface RefreshHarnessTypesResult {
 
 const CAMEL_BY_HARNESS: Readonly<Record<WorkflowWorkerId, string>> = {
   "amp-code": "ampCode",
+  "amp-orb": "ampOrb",
+  "amp-runner": "ampRunner",
   "antigravity-cli": "antigravity",
   "claude-code": "claudeCode",
   "codex-cli": "codex",

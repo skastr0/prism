@@ -12,6 +12,7 @@ export type HarnessId =
   | "kimi-code"
   | "amp-code"
   | "amp-orb"
+  | "amp-runner"
   | "cursor"
   | "pi"
   | "omp"
@@ -237,6 +238,7 @@ export interface UnifiedFrontmatter {
   "kimi-code"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;
   "amp-orb"?: Record<string, unknown>;
+  "amp-runner"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;
   pi?: Record<string, unknown>;
   omp?: Record<string, unknown>;

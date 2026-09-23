@@ -7,6 +7,7 @@ import { Command, CommanderError, InvalidArgumentError, Option as CommanderOptio
 import { Effect, Exit } from "effect";
 import { randomUUID } from "node:crypto";
 import { detectInstalledHarnessIds } from "./harness-install-detection.js";
+import { harnessHasInstallSurface } from "./lowerer-capabilities.js";
 import {
   getAllHarnessIds,
   getHarness,
@@ -3676,7 +3677,7 @@ function resolveRequestedHarnesses(
   config: { allowInstalledDefault: boolean },
 ): HarnessId[] {
   if (options.all) {
-    return getAllHarnessIds().filter((id) => id !== "amp-orb");
+    return getAllHarnessIds().filter((id) => id !== "amp-orb" && harnessHasInstallSurface(id));
   }
 
   if (options.harness) {

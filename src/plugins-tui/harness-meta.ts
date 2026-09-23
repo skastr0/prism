@@ -19,6 +19,7 @@ const MARKS: Record<string, HarnessMark> = {
   "kimi-code": { glyph: "◐", color: "#f48c6c", short: "kimi" },
   "amp-code": { glyph: "★", color: "#f0b040", short: "amp" },
   "amp-orb": { glyph: "☁", color: "#7eb6ff", short: "orb" },
+  "amp-runner": { glyph: "⌂", color: "#9fe8b0", short: "runner" },
   cursor: { glyph: "▸", color: "#8080ff", short: "cursor" },
   pi: { glyph: "π", color: "#ff58a8", short: "pi" },
   grok: { glyph: "✶", color: "#6288ff", short: "grok" },

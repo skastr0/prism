@@ -125,7 +125,13 @@ export const ampWorkerPins = (
   task: AnyWorkflowWorkerTask,
 ): { readonly catalogModel?: string; readonly effort?: string } => {
   const worker = task.worker;
-  if (worker === undefined || worker.worker !== "amp-code") return {};
+  // amp-orb's option types forbid pins; reading them anyway lets remote dispatch fail closed.
+  if (
+    worker === undefined
+    || (worker.worker !== "amp-code" && worker.worker !== "amp-orb" && worker.worker !== "amp-runner")
+  ) {
+    return {};
+  }
   const config = worker as { readonly catalogModel?: unknown; readonly effort?: unknown };
   return {
     ...(typeof config.catalogModel === "string"
@@ -237,7 +243,7 @@ ${config.join("\n")}
 `;
 };
 
-const prepareAmpCatalogPin = async (
+export const prepareAmpCatalogPin = async (
   cwd: string,
   plan: AmpCatalogPinPlan,
 ): Promise<{ readonly cleanup: () => Promise<void> }> => {
@@ -361,7 +367,7 @@ export const buildAmpArgs = (input: {
   ];
 };
 
-const parseAmpStreamJsonResult = (stdout: string): string | undefined => {
+export const parseAmpStreamJsonResult = (stdout: string): string | undefined => {
   for (const line of stdout.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;

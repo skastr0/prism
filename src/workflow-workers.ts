@@ -8,6 +8,7 @@ import {
   type WorkflowWorkerId,
 } from "./workflows.js";
 import { assertAmpPermission, runAmpWorkflowTask } from "./workflow-amp-worker.js";
+import { assertAmpRemotePermission, runAmpOrbWorkflowTask, runAmpRunnerWorkflowTask } from "./workflow-amp-remote-worker.js";
 import { resolveAntigravityPermission, runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
 import { buildClaudeArgs, runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { buildCodexArgs, runCodexWorkflowTask } from "./workflow-codex-worker.js";
@@ -85,6 +86,28 @@ const workflowWorkerAdapters = {
       model: resolveWorkflowTaskModel(task, { worker: "amp-code", fallbackModel: options.model }),
       catalogModel: task.worker?.worker === "amp-code" ? task.worker.catalogModel : undefined,
       effort: resolveWorkflowTaskEffort(task, { worker: "amp-code", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
+      abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
+      repair: options.context?.repair,
+    }),
+  },
+  "amp-orb": {
+    id: "amp-orb",
+    runTask: (task, options) => runAmpOrbWorkflowTask(task, {
+      cwd: options.cwd,
+      model: resolveWorkflowTaskModel(task, { worker: "amp-orb", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
+      abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
+      repair: options.context?.repair,
+    }),
+  },
+  "amp-runner": {
+    id: "amp-runner",
+    runTask: (task, options) => runAmpRunnerWorkflowTask(task, {
+      cwd: options.cwd,
+      model: resolveWorkflowTaskModel(task, { worker: "amp-runner", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
@@ -262,6 +285,12 @@ export const assertWorkflowWorkerPermission = (
   switch (worker) {
     case "amp-code":
       assertAmpPermission(mode);
+      return;
+    case "amp-orb":
+    case "amp-runner":
+      // Remote executors accept only `legacy`; other modes fail closed here so
+      // validation rejects them before any dispatch.
+      assertAmpRemotePermission(worker, mode);
       return;
     case "antigravity-cli":
       resolveAntigravityPermission(mode);

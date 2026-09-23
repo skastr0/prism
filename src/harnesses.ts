@@ -168,6 +168,27 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsSkills: true,
   },
 
+  // Amp on an operator-declared runner (`amp --no-tui --runner-id <id>`).
+  // Workflow-worker only: no install surface, placeholder root, no files written.
+  "amp-runner": {
+    id: "amp-runner",
+    name: "Amp Runner",
+    globalConfigPath: "~/.prism/amp-runner/",
+    projectConfigPath: null,
+    rulesFile: null,
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: null,
+    toolsDir: null,
+    skillsDir: null,
+    configFile: null,
+    configFormat: "markdown",
+    supportsTools: false,
+    supportsCommands: false,
+    supportsAgents: false,
+    supportsSkills: false,
+  },
+
   cursor: {
     id: "cursor",
     name: "Cursor",

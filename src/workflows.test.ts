@@ -17,6 +17,7 @@ import {
   type WorkflowPermissionMode,
   type WorkflowTaskWorkerOptions,
   type WorkflowWorkerId,
+  type WorkflowWorkerIdWithoutRequiredOptions,
   type WorkflowRuntime,
   type WorkflowOutputSchema,
   type WorkflowTaskOutput,
@@ -254,7 +255,7 @@ describe("workflow authoring primitives", () => {
   });
 
   test("resolved modelspace targets flow into non-opencode worker args", () => {
-    const taskFor = (worker: WorkflowWorkerId) =>
+    const taskFor = (worker: WorkflowWorkerIdWithoutRequiredOptions) =>
       defineTask({
         id: `build-${worker}`,
         prompt: "Use the selected model profile.",

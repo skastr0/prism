@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { getAllHarnessIds, getHarness, resolveHarnessRoot } from "./harnesses.js";
+import { harnessHasInstallSurface } from "./lowerer-capabilities.js";
 import type { HarnessId } from "./types.js";
 
 /**
@@ -8,7 +9,7 @@ import type { HarnessId } from "./types.js";
  */
 export const detectInstalledHarnessIds = (): HarnessId[] =>
   getAllHarnessIds().filter((id) => {
-    if (id === "amp-orb") return false;
+    if (id === "amp-orb" || !harnessHasInstallSurface(id)) return false;
     const root = resolveHarnessRoot(getHarness(id), "global");
     return root !== null && existsSync(root);
   });

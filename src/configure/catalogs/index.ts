@@ -6,6 +6,7 @@
 import type { HarnessId } from "../../types.js";
 import { ampCodeCatalog } from "./amp-code.js";
 import { ampOrbCatalog } from "./amp-orb.js";
+import { ampRunnerCatalog } from "./amp-runner.js";
 import { antigravityCliCatalog } from "./antigravity-cli.js";
 import { claudeCodeCatalog } from "./claude-code.js";
 import { codexCliCatalog } from "./codex-cli.js";
@@ -39,6 +40,7 @@ export const HARNESS_CATALOGS: Record<HarnessId, HarnessCatalog> = {
   "kimi-code": kimiCodeCatalog,
   "amp-code": ampCodeCatalog,
   "amp-orb": ampOrbCatalog,
+  "amp-runner": ampRunnerCatalog,
   cursor: cursorCatalog,
   pi: piCatalog,
   omp: ompCatalog,

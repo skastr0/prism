@@ -186,19 +186,75 @@ export type OmpWorkflowPermissionMode = Extract<
   "legacy" | "permissive" | "restricted" | "full-access"
 >;
 
+export const WORKFLOW_SESSION_PERSISTENCE_WORKERS = [
+  "claude-code",
+  "codex-cli",
+  "omp",
+] as const satisfies ReadonlyArray<WorkflowWorkerId>;
+
+/** Remote Amp executors: hosted orbs and operator-declared runners. */
+export type AmpRemoteWorkflowWorkerId = Extract<WorkflowWorkerId, "amp-orb" | "amp-runner">;
+
+/**
+ * Workers whose full options can be built from `{ worker, model, ... }` alone.
+ * TypeScript's smarter union checking (TS 3.5+) decomposes a wide `worker`
+ * discriminant across the options union, so a helper typed against the full
+ * {@link WorkflowWorkerId} that cannot supply remote workers' required fields
+ * (`project`, `runnerId`) would silently accept remote ids as invalid tasks.
+ * Loose helpers must narrow to this.
+ */
+export type WorkflowWorkerIdWithoutRequiredOptions = Exclude<WorkflowWorkerId, AmpRemoteWorkflowWorkerId>;
+
+/**
+ * Remote Amp executors (orb, runner) read tool permissions from the remote
+ * machine's Amp settings or the ampcode.com project; Prism has no
+ * per-invocation override that reaches them.
+ */
+export type AmpRemoteWorkflowPermissionMode = Extract<WorkflowPermissionMode, "legacy">;
+
 export type WorkflowWorkerPermissionMode<W extends WorkflowWorkerId> =
   W extends "claude-code" ? ClaudeWorkflowPermissionMode
     : W extends "codex-cli" ? CodexWorkflowPermissionMode
       : W extends "cursor" ? CursorWorkflowPermissionMode
         : W extends "devin" ? DevinWorkflowPermissionMode
           : W extends "omp" ? OmpWorkflowPermissionMode
-            : WorkflowDialPermissionMode;
+            : W extends AmpRemoteWorkflowWorkerId ? AmpRemoteWorkflowPermissionMode
+              : WorkflowDialPermissionMode;
 
-export const WORKFLOW_SESSION_PERSISTENCE_WORKERS = [
-  "claude-code",
-  "codex-cli",
-  "omp",
-] as const satisfies ReadonlyArray<WorkflowWorkerId>;
+/** Documented orb sizes (https://ampcode.com/docs/orbs/sizes-and-costs); `a1.3xlarge` needs Gigawatt/Enterprise. */
+export const AMP_ORB_SIZES = ["a1.tiny", "a1.small", "a1.medium", "a1.large", "a1.xxlarge", "a1.3xlarge"] as const;
+export type AmpOrbSize = (typeof AMP_ORB_SIZES)[number];
+
+/** Amp thread visibility values (`--visibility`). */
+export const AMP_THREAD_VISIBILITIES = ["private", "unlisted", "workspace", "group"] as const;
+export type AmpThreadVisibility = (typeof AMP_THREAD_VISIBILITIES)[number];
+
+type AmpRemoteWorkerOptionsFor<W extends AmpRemoteWorkflowWorkerId> = {
+  readonly sessionPersistence?: never;
+  /** `--label`, repeatable. Cosmetic: not part of cache identity. */
+  readonly labels?: ReadonlyArray<string>;
+} & (W extends "amp-orb"
+  ? {
+    /** Amp project for the orb: namespace/name, owner/repo, or repository URL (`--project`). */
+    readonly project: string;
+    /** `--orb-size`; defaults to the project's size. */
+    readonly size?: AmpOrbSize;
+    /** Thread visibility; defaults to Amp's own default. Cosmetic: not part of cache identity. */
+    readonly visibility?: AmpThreadVisibility;
+    /** Catalog pins need a plugin in the orb's checkout; commit a plugin mode and set `model` to its key. */
+    readonly catalogModel?: never;
+    readonly effort?: never;
+  }
+  : {
+    /** Runner id from `amp --no-tui --runner-id <id>` (`--executor runner:<id>`). */
+    readonly runnerId: string;
+    /** Absolute directory the runner serves (`--runner-dir`); defaults to the runner's start directory. */
+    readonly runnerDir?: string;
+    /** Allowed only when `runnerDir` equals the workflow's cwd, where Prism writes the pin plugin. */
+    readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code">;
+    /** `null` effort capability today: the remote amp process exposes no per-invocation effort seam. */
+    readonly effort?: never;
+  });
 
 export type WorkflowSessionPersistenceWorkerId =
   typeof WORKFLOW_SESSION_PERSISTENCE_WORKERS[number];
@@ -239,13 +295,38 @@ type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
     readonly permission?: WorkflowWorkerPermissionMode<W>;
   } & (W extends "amp-code"
     ? { readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code"> }
-    : { readonly catalogModel?: never })
+    : W extends "amp-runner"
+      ? { readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code"> }
+      : { readonly catalogModel?: never })
   & (W extends WorkflowEffortWorkerHarnessId
     ? { readonly effort?: WorkflowHarnessEffort<W> }
     : { readonly effort?: never })
   & (W extends WorkflowSessionPersistenceWorkerId
     ? { readonly sessionPersistence?: WorkflowSessionPersistence }
-    : { readonly sessionPersistence?: never });
+    : { readonly sessionPersistence?: never })
+  // Remote Amp executors (amp-orb, amp-runner): labels are cosmetic and never
+  // join cache identity; local workers take none.
+  & (W extends AmpRemoteWorkflowWorkerId
+    ? { readonly labels?: ReadonlyArray<string> }
+    : { readonly labels?: never })
+  & (W extends "amp-orb"
+    ? {
+      /** Amp project for the orb: namespace/name, owner/repo, or repository URL (`--project`). */
+      readonly project: string;
+      /** `--orb-size`; defaults to the project's size. */
+      readonly size?: AmpOrbSize;
+      /** Thread visibility; defaults to Amp's own default. Cosmetic: not part of cache identity. */
+      readonly visibility?: AmpThreadVisibility;
+    }
+    : { readonly project?: never; readonly size?: never; readonly visibility?: never })
+  & (W extends "amp-runner"
+    ? {
+      /** Runner id from `amp --no-tui --runner-id <id>` (`--executor runner:<id>`). */
+      readonly runnerId: string;
+      /** Absolute directory the runner serves (`--runner-dir`); defaults to the runner's start directory. */
+      readonly runnerDir?: string;
+    }
+    : { readonly runnerId?: never; readonly runnerDir?: never });
 
 export type WorkflowTaskWorkerOptions =
   | (WorkflowTaskWorkerOptionsCommon & {

@@ -117,6 +117,22 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     // Amp --mode: low | medium | high | ultra | plugin mode key. `low` is the cheap-fast default.
     defaultModel: "low",
   },
+  // Remote Amp executors dispatch through the local amp CLI; same binary and
+  // --mode addressing as amp-code.
+  "amp-orb": {
+    harness: "amp-orb",
+    command: "amp",
+    envVar: "PRISM_WORKFLOW_AMP_BIN",
+    probeArgs: ["--version"],
+    defaultModel: "low",
+  },
+  "amp-runner": {
+    harness: "amp-runner",
+    command: "amp",
+    envVar: "PRISM_WORKFLOW_AMP_BIN",
+    probeArgs: ["--version"],
+    defaultModel: "low",
+  },
   "antigravity-cli": {
     harness: "antigravity-cli",
     command: "agy",

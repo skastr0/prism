@@ -2415,7 +2415,7 @@ skillsCommand
 
 skillsCommand
   .command("update [name]")
-  .requiredOption("--plugin <plugin-path>", "Plugin containing skill-refs")
+  .option("--plugin <plugin-path>", "Plugin containing skill-refs", ".")
   .action(async (name: string | undefined, options: { plugin: string }) => {
     try {
       const changes = await updateSkillPins({ pluginPath: expandPath(options.plugin), prismHome: resolvePrismHome(), ...(name ? { name } : {}) });

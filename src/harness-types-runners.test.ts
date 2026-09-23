@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  defaultAmpTurnRunner,
   discoverAmpRunners,
   previousAmpRunners,
   refreshHarnessTypes,
@@ -101,6 +102,26 @@ describe("discoverAmpRunners", () => {
     expect(failedExplicit).toContain("ETIMEDOUT");
     expect(discovered.runners).toEqual([]);
     expect(calls[1]).toEqual(["threads", "delete", "T-real-timeout"]);
+  });
+
+  test("the capture spawn runs amp with stdin closed, never an open pipe", async () => {
+    // Regression: amp -x waits on an open stdin when there is no TTY and
+    // fails with "Error: Timeout while reading from stdin"; the capture
+    // spawn must run it with stdin ignored.
+    const binDir = await mkdtemp(join(tmpdir(), "prism-amp-stdin-"));
+    await writeFile(
+      join(binDir, "amp"),
+      "#!/bin/sh\nif [ -p /dev/stdin ]; then echo STDIN_PIPE; else echo STDIN_IGNORED; fi\n",
+      { mode: 0o755 },
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+    try {
+      expect(await defaultAmpTurnRunner("amp", ["-x", "prompt"])).toContain("STDIN_IGNORED");
+    } finally {
+      process.env.PATH = previousPath;
+      await rm(binDir, { recursive: true, force: true });
+    }
   });
 });
 

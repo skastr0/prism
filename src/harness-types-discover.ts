@@ -3,7 +3,7 @@
  * Cache reads and CLI lists never throw; empty means "leave this worker as string".
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -670,15 +670,10 @@ export const discoverAmpProjects = async (
  * `AMP_TURN_ERROR:` sentinel; the untruncated partial stdout is appended on
  * its own line so the init line's session id survives for thread cleanup.
  */
-const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) => {
+export const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) => {
   try {
-    const { stdout } = await execFileAsync(command, [...args], {
-      encoding: "utf8",
-      timeout: 180_000,
-      maxBuffer: 16 * 1024 * 1024,
-      env: process.env,
-    });
-    return typeof stdout === "string" ? stdout : "";
+    const { stdout } = await runAmpTurn(command, args, 180_000);
+    return stdout;
   } catch (error) {
     const cause = error as { message?: string; stderr?: string; stdout?: string };
     const detail = [cause.message ?? "", typeof cause.stderr === "string" ? cause.stderr.trim() : ""]
@@ -691,6 +686,56 @@ const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) =>
       : `${AMP_TURN_ERROR_PREFIX} ${detail}`;
   }
 };
+
+const AMP_TURN_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Run a one-shot amp turn with node spawn: stdin ignored (amp waits on an
+ * open stdin pipe when there is no TTY and dies with "Timeout while reading
+ * from stdin"), stdout/stderr captured, killed after the timeout. Rejection
+ * carries { stdout, stderr } so the partial transcript survives for session
+ * recovery.
+ */
+const runAmpTurn = (command: string, args: readonly string[], timeoutMs: number): Promise<{
+  readonly stdout: string;
+  readonly stderr: string;
+}> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], {
+      env: process.env,
+      // The turn must run headless: with the default piped stdin, amp waits
+      // for input that never comes and fails with "Timeout while reading
+      // from stdin".
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdout.length < AMP_TURN_MAX_BUFFER_BYTES) stdout += chunk.toString("utf8");
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderr.length < AMP_TURN_MAX_BUFFER_BYTES) stderr += chunk.toString("utf8");
+    });
+    const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+    const settle = (outcome: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      outcome();
+    };
+    child.on("error", (cause) => settle(() => reject(Object.assign(cause, { stdout, stderr }))));
+    child.on("close", (code, signal) => settle(() => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const reason = signal !== null
+        ? `${command} timed out after ${Math.round(timeoutMs / 1000)}s (signal ${signal})`
+        : `Command failed: ${command} (exit ${code})`;
+      reject(Object.assign(new Error(reason), { stdout, stderr }));
+    }));
+  });
 
 /**
  * Snapshot the account-wide Amp runners: one `amp -x --stream-json` turn in

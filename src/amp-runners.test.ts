@@ -114,6 +114,16 @@ describe("parseAmpRunnersStreamJson", () => {
       .toBe("Command failed: amp -x (exit 1): not logged in");
     expect(parseAmpRunnersStreamJson("Error: not logged in\n").error).toContain("no list_runners tool result found");
   });
+
+  test("a sentinel with an appended partial transcript reports only the reason line", () => {
+    const partial = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "T-leak", cwd: "/x" }),
+    ].join("\n");
+    const parsed = parseAmpRunnersStreamJson(`AMP_TURN_ERROR: amp -x timed out after 180s\n${partial}`);
+    expect(parsed.error).toBe("amp -x timed out after 180s");
+    expect(parsed.error).not.toContain("session_id");
+    expect(parsed.sessionId).toBe("T-leak");
+  });
 });
 
 const discovered = (): DiscoveredAmpRunners => ({

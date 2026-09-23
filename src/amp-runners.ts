@@ -194,7 +194,10 @@ export const parseAmpRunnersStreamJson = (
       // (the init line arrives before any failure); surface it so the caller
       // can delete the thread. Thread ids are opaque beyond the T- prefix.
       sessionId: /"session_id":"(T-[^"]+)"/u.exec(trimmed)?.[1],
-      error: trimmed.slice(AMP_TURN_ERROR_PREFIX.length).trim(),
+      // Only the reason (the first line) is the error: the partial transcript
+      // appended after it exists solely for session-id recovery, not for the
+      // operator-facing message.
+      error: trimmed.slice(AMP_TURN_ERROR_PREFIX.length).split("\n", 1)[0]!.trim(),
     };
   }
 

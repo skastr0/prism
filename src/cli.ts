@@ -658,10 +658,14 @@ workflow
   .command("refresh-harness-types")
   .description("Discover installed harness models and write global typed unions for plugin-free workflow authoring")
   .option("--json", "Emit machine-readable JSON")
-  .action(async (options: { readonly json?: boolean }) => {
+  .option(
+    "--discover-amp-runners",
+    "Also snapshot the account-wide Amp runners (list_runners) with a one-shot amp turn; costs one small Amp thread, which is deleted afterwards",
+  )
+  .action(async (options: { readonly json?: boolean; readonly discoverAmpRunners?: boolean }) => {
     try {
       const prismHome = resolvePrismHome();
-      const result = await refreshHarnessTypes(prismHome);
+      const result = await refreshHarnessTypes(prismHome, { discoverAmpRunners: options.discoverAmpRunners === true });
       const { key } = deriveProjectKey();
       const refsDir = projectGeneratedRefsDir(prismHome, key);
       await generateWorkflowTsconfig({

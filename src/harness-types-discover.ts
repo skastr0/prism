@@ -14,9 +14,16 @@ import {
   type HarnessTypesSnapshot,
   writeHarnessTypesSnapshot,
   type RefreshHarnessTypesResult,
+  harnessDiscoveredPath,
 } from "./harness-types.js";
 import type { WorkflowWorkerId } from "./workflows.js";
 import { parseAmpProjectsList, type DiscoveredAmpProjects } from "./amp-projects.js";
+import {
+  AMP_RUNNERS_PROMPT,
+  AMP_TURN_ERROR_PREFIX,
+  parseAmpRunnersStreamJson,
+  type DiscoveredAmpRunners,
+} from "./amp-runners.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,6 +35,14 @@ export interface DiscoverHarnessTypesOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly readText?: HarnessTypesReadText;
   readonly runCommand?: HarnessTypesCommandRunner;
+  /**
+   * Also snapshot the account-wide Amp runners with a one-shot `amp -x` turn
+   * whose only job is calling the `list_runners` platform tool. Opt-in: the
+   * turn creates a small Amp thread (cheapest mode, deleted afterwards).
+   * A plain refresh never runs it and preserves a previously captured
+   * runner snapshot.
+   */
+  readonly discoverAmpRunners?: boolean;
 }
 
 const CLAUDE_MODEL_ALIASES = [
@@ -648,6 +663,64 @@ export const discoverAmpProjects = async (
   };
 };
 
+/**
+ * Runner discovery turns can take a couple of minutes (an agent turn, not a
+ * CLI list), so they get their own runner with a longer timeout than the
+ * 8s `defaultRunCommand`. On failure the reason is surfaced through the
+ * `AMP_TURN_ERROR:` sentinel instead of being swallowed.
+ */
+const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) => {
+  try {
+    const { stdout } = await execFileAsync(command, [...args], {
+      encoding: "utf8",
+      timeout: 180_000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: process.env,
+    });
+    return typeof stdout === "string" ? stdout : "";
+  } catch (error) {
+    const cause = error as { message?: string; stderr?: string };
+    const detail = [cause.message ?? "", typeof cause.stderr === "string" ? cause.stderr.trim() : ""]
+      .filter((part) => part.length > 0).join(" — ");
+    return `${AMP_TURN_ERROR_PREFIX} ${detail.slice(0, 500)}`;
+  }
+};
+
+/**
+ * Snapshot the account-wide Amp runners: one `amp -x --stream-json` turn in
+ * the cheapest mode whose only job is calling `list_runners`, parsed from the
+ * tool result. Fail-soft: a failed capture records the reason and no runners.
+ * The thread the turn creates is deleted afterwards.
+ */
+export const discoverAmpRunners = async (
+  options: DiscoverHarnessTypesOptions = {},
+): Promise<DiscoveredAmpRunners> => {
+  const run = options.runCommand ?? defaultAmpTurnRunner;
+  const stdout = await run("amp", ["-x", AMP_RUNNERS_PROMPT, "--stream-json", "--mode", "low"]);
+  const parsed = parseAmpRunnersStreamJson(stdout);
+  if (parsed.sessionId !== undefined) {
+    await run("amp", ["threads", "delete", parsed.sessionId]);
+  }
+  return {
+    runners: parsed.runners,
+    source: parsed.runners.length > 0 ? "command" : "empty",
+    capturedAt: new Date().toISOString(),
+    ...(parsed.error !== undefined ? { error: parsed.error } : {}),
+  };
+};
+
+/** Previously captured runner snapshot, preserved by a plain refresh. */
+export const previousAmpRunners = (prismHome: string): DiscoveredAmpRunners | undefined => {
+  try {
+    const path = harnessDiscoveredPath(prismHome);
+    if (!existsSync(path)) return undefined;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as HarnessTypesSnapshot;
+    return parsed && typeof parsed === "object" ? parsed.ampRunners : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const refreshHarnessTypes = async (
   prismHome: string,
   options: DiscoverHarnessTypesOptions = {},
@@ -656,10 +729,19 @@ export const refreshHarnessTypes = async (
     discoverWorkflowHarnessModels(options),
     discoverAmpProjects(options),
   ]);
+  const previous = previousAmpRunners(prismHome);
+  let ampRunners: DiscoveredAmpRunners | undefined = previous;
+  if (options.discoverAmpRunners === true) {
+    const fresh = await discoverAmpRunners(options);
+    // A failed capture keeps the previously captured runners (an old entry is
+    // valid); a legitimate empty capture (no live runners) replaces them.
+    ampRunners = fresh.error !== undefined && (previous?.runners.length ?? 0) > 0 ? previous : fresh;
+  }
   const snapshot: HarnessTypesSnapshot = {
     generatedAt: new Date().toISOString(),
     harnesses,
     ampProjects,
+    ...(ampRunners !== undefined ? { ampRunners } : {}),
   };
   return writeHarnessTypesSnapshot(prismHome, snapshot);
 };
@@ -680,6 +762,15 @@ export const renderHarnessTypesRefreshHuman = (result: RefreshHarnessTypesResult
     const count = projects.projects.length;
     const note = projects.error !== undefined && count === 0 ? ` — ${projects.error}` : "";
     lines.push(`  amp-orb: ${String(count)} project${count === 1 ? "" : "s"} (${projects.source})${note}`);
+  }
+  const runners = result.snapshot.ampRunners;
+  if (runners !== undefined) {
+    const count = runners.runners.length;
+    const dirs = runners.runners.reduce((sum, runner) => sum + runner.directories.length, 0);
+    const note = runners.error !== undefined && count === 0 ? ` — ${runners.error}` : "";
+    lines.push(
+      `  amp-runner: ${String(count)} runner${count === 1 ? "" : "s"}, ${String(dirs)} served dir${dirs === 1 ? "" : "s"} (${runners.source})${note}`,
+    );
   }
   return lines.join("\n");
 };

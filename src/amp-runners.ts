@@ -137,10 +137,14 @@ const normalizeDirectory = (row: DecodedRunner["directories"][number]): AmpRunne
 const normalizeRunner = (row: DecodedRunner): AmpRunner | undefined => {
   const runnerId = nonBlank(row.runnerId);
   if (runnerId === undefined) return undefined;
+  // Trailing slashes are normalized once, at snapshot time, so the generated
+  // directory union and validateAmpRunnerTarget compare the same strings.
   const directories = row.directories
     .map(normalizeDirectory)
-    .filter((directory): directory is AmpRunnerDirectory => directory !== undefined);
+    .filter((directory): directory is AmpRunnerDirectory => directory !== undefined)
+    .map((directory) => ({ ...directory, path: normalizeDir(directory.path) }));
   const unique = [...new Map(directories.map((directory) => [directory.path, directory])).values()]
+    .filter((directory) => directory.path.length > 0)
     .sort((left, right) => left.path.localeCompare(right.path));
   const name = nonBlank(row.name) ?? runnerId;
   const hostname = nonBlank(row.hostname);
@@ -208,20 +212,22 @@ export const parseAmpRunnersStreamJson = (
     for (const block of message.content) {
       if (!isRecord(block) || block.type !== "tool_result") continue;
       for (const text of candidateTexts(block.content)) {
-      const payload = extractRunnersPayload(text);
-      if (payload === undefined) continue;
-      try {
-        const { runners, dropped } = decodeRunnersPayload(payload);
-        if (runners.length === 0 && decodeError === undefined) {
-          decodeError = dropped > 0
-            ? `list_runners returned ${dropped} runner row(s) without a usable runnerId`
-            : "list_runners returned no runners";
-          continue;
+        const payload = extractRunnersPayload(text);
+        if (payload === undefined) continue;
+        try {
+          const { runners, dropped } = decodeRunnersPayload(payload);
+          // An empty runner list is a valid capture (no live runners); only
+          // rows without a usable runnerId make the capture empty-but-broken.
+          if (runners.length === 0 && dropped > 0 && decodeError === undefined) {
+            decodeError = dropped > 0
+              ? `list_runners returned ${dropped} runner row(s) without a usable runnerId`
+              : "list_runners returned no runners";
+            continue;
+          }
+          return { runners, sessionId, ...(dropped > 0 ? { error: `skipped ${dropped} runner row(s) with a blank runnerId` } : {}) };
+        } catch (cause) {
+          decodeError = `list_runners result failed decode: ${cause instanceof Error ? cause.message : String(cause)}`;
         }
-        return { runners, sessionId, ...(dropped > 0 ? { error: `skipped ${dropped} runner row(s) with a blank runnerId` } : {}) };
-      } catch (cause) {
-        decodeError = `list_runners result failed decode: ${cause instanceof Error ? cause.message : String(cause)}`;
-      }
       }
     }
   }
@@ -242,11 +248,21 @@ const normalizeDir = (path: string): string => {
   return trimmed.length > 1 ? trimmed.replace(/\/+$/u, "") : trimmed;
 };
 
+
 /** Sorted unique directories one runner serves. */
 export const ampRunnerServedDirs = (runner: AmpRunner): readonly string[] =>
   [...new Set(runner.directories.map((directory) => normalizeDir(directory.path)))]
     .filter((path) => path.length > 0)
     .sort((left, right) => left.localeCompare(right));
+
+/** One runner's directories, normalized and deduped (the snapshot's canonical form). */
+export const ampRunnerNormalizedDirs = (runner: AmpRunner): readonly AmpRunnerDirectory[] => {
+  const served = new Set(ampRunnerServedDirs(runner));
+  return runner.directories
+    .map((directory) => ({ ...directory, path: normalizeDir(directory.path) }))
+    .filter((directory) => served.has(directory.path))
+    .sort((left, right) => left.path.localeCompare(right.path));
+};
 
 const runnerLabel = (runner: AmpRunner): string =>
   runner.hostname !== undefined ? `${runner.runnerId} (${runner.hostname})` : runner.runnerId;

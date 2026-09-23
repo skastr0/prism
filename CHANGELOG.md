@@ -13,6 +13,7 @@ line. `0.4.0` was committed but never tagged or published.
 
 ### Added
 
+- **Pinned third-party skills** — plugin `skill-refs/*.skill-ref.json` pointers, commit and content hashes in `prism.lock`, cached git extraction, normal refresh ownership, `prism skills import-npx`/`update`, and doctor untracked-skill findings with opt-in pruning.
 - **Amp remote workflow workers** — `amp-orb` (hosted orb per task thread,
   dispatched through `amp --orb-execute --stream-json` with `--project` /
   `--orb-size` / `--visibility` / `--label`) and `amp-runner` (Amp on an

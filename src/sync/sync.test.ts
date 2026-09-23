@@ -336,33 +336,34 @@ describe("sync engine — cross-plugin ownership guard (PQ-162)", () => {
   // that still carries a stale attribution from before a producer-side
   // attribution fix — the entry converges silently instead of permanently
   // wedging every future refresh on a plugin-name mismatch bytes can never
-  // resolve. A genuine two-author collision never coincides on content by
-  // accident (proven above), so this costs that law nothing.
+  // resolve. Bare-name skills have the stricter one-author law even when
+  // their bytes happen to match; this case uses a generated runtime bundle.
   test("a plugin-attribution mismatch with byte-identical content converges silently, never a conflict, and self-heals the recorded owner", async () => {
+    const mirrorPath = join(root, "plugins", "prism-generated-owner", "dist", "server.mjs");
     await refreshScoped(
-      desiredWith({ files: [{ targetPath: skillPath(), content: "shared bytes\n", plugin: "plugin-a" }] }),
+      desiredWith({ files: [{ targetPath: mirrorPath, content: "shared bytes\n", plugin: "plugin-a" }] }),
       "plugin-a",
     );
 
     const report = await refreshScoped(
-      desiredWith({ files: [{ targetPath: skillPath(), content: "shared bytes\n", plugin: "plugin-b" }] }),
+      desiredWith({ files: [{ targetPath: mirrorPath, content: "shared bytes\n", plugin: "plugin-b" }] }),
       "plugin-b",
     );
     expect(report.failures).toEqual([]);
     expect(kinds(report)).toEqual(["skip"]);
-    expect(await readFile(skillPath())).toBe("shared bytes\n");
+    expect(await readFile(mirrorPath)).toBe("shared bytes\n");
 
     // The manifest now self-heals to the latest plugin's attribution (the
     // same rule any owned-file write already follows) — plugin-b's own next
     // write, even with diverged content, is a normal repair by its now-
     // recorded owner, not a fresh cross-plugin collision.
     const repaired = await refreshScoped(
-      desiredWith({ files: [{ targetPath: skillPath(), content: "plugin-b's own update\n", plugin: "plugin-b" }] }),
+      desiredWith({ files: [{ targetPath: mirrorPath, content: "plugin-b's own update\n", plugin: "plugin-b" }] }),
       "plugin-b",
     );
     expect(repaired.failures).toEqual([]);
     expect(kinds(repaired)).toEqual(["repair"]);
-    expect(await readFile(skillPath())).toBe("plugin-b's own update\n");
+    expect(await readFile(mirrorPath)).toBe("plugin-b's own update\n");
   });
 
   test("a plugin-attribution mismatch with diverging content still fails closed, naming both — the content gate never masks a real collision", async () => {

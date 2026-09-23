@@ -68,6 +68,7 @@ import {
 import type { SyncReport } from "./sync/apply.js";
 import { blockedTargetErrors } from "./sync/run.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
+import { importNpxSkills, updateSkillPins } from "./third-party-skills-cli.js";
 import { loadWorkflowFile, paddedTableColumns, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { runWorkflow } from "./workflow-runner.js";
@@ -2394,6 +2395,37 @@ if (jevAskCommandRef !== undefined) {
   }
 }
 
+const skillsCommand = program
+  .command("skills")
+  .description("Manage pinned third-party skill pointers in Prism plugins");
+
+skillsCommand
+  .command("import-npx")
+  .requiredOption("--into <plugin-path>", "Plugin that will own the imported pointers and targets.skills")
+  .option("--dry-run", "Show pointers without writing or fetching skill contents", false)
+  .action(async (options: { into: string; dryRun: boolean }) => {
+    try {
+      const changes = await importNpxSkills({ pluginPath: expandPath(options.into), prismHome: resolvePrismHome(), dryRun: options.dryRun });
+      for (const change of changes) console.log(`${options.dryRun ? "PLAN" : "PIN"} ${change.name}: ${change.newCommit} ${change.newHash}`);
+    } catch (error) {
+      printCliError(error, "skills import-npx failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+skillsCommand
+  .command("update [name]")
+  .requiredOption("--plugin <plugin-path>", "Plugin containing skill-refs")
+  .action(async (name: string | undefined, options: { plugin: string }) => {
+    try {
+      const changes = await updateSkillPins({ pluginPath: expandPath(options.plugin), prismHome: resolvePrismHome(), ...(name ? { name } : {}) });
+      for (const change of changes) console.log(`${change.name}: ${change.oldCommit ?? "new"} → ${change.newCommit}; content ${change.oldHash ?? "new"} → ${change.newHash}; ${change.diff}`);
+    } catch (error) {
+      printCliError(error, "skills update failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
 const toolsCommand = program
   .command("tools")
   .description(
@@ -2540,6 +2572,7 @@ program
     "Converge fixable refresh findings, and reconcile snapshot state for deleted install roots/files (gated on this flag, never silent -- see snapshot.dead-root-dropped/snapshot.stale-entry-dropped)",
     false,
   )
+  .option("--prune-untracked", "Report untracked harness skill directories for pruning; combine with --fix to remove", false)
   .option("--json", "Print a machine-readable JSON report", false)
   .action(async (pluginPath: string | undefined, options) => {
     try {
@@ -2551,6 +2584,7 @@ program
         ...(options.project ? { projectPath: options.project } : {}),
         prismHome: resolvePrismHome(),
         fix: options.fix,
+        pruneUntracked: options.pruneUntracked,
       });
       if (options.json) {
         console.log(JSON.stringify(report, null, 2));

@@ -26,6 +26,7 @@
 - [Install & quick start](#install--quick-start)
 - [One source, fourteen harnesses](#one-source-fourteen-harnesses)
 - [The authoring surface](#the-authoring-surface)
+- [Pinned third-party skills](#pinned-third-party-skills)
 - [Workflows: typed task graphs over real harnesses](#workflows-typed-task-graphs-over-real-harnesses)
 - [Stateless tools — no daemon, no MCP](#stateless-tools--no-daemon-no-mcp)
 - [Convergence: refresh, plan, doctor](#convergence-refresh-plan-doctor)
@@ -118,6 +119,16 @@ Explore interactively with `prism plugins <dir>` (plugin manager TUI) and valida
 | Devin CLI | `devin` | `~/.config/devin/` | `.devin/` |
 
 Each harness has a dedicated lowerer that knows its native surface — plugin bundle, TS plugin API, markdown file, or config patch — and golden-fixture tests pin the generated output. The full support matrix, including which targets are proven live versus compile-verified, lives in [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
+
+## Pinned third-party skills
+
+A plugin may point to an upstream git skill without copying its source into the plugin. Add `skill-refs/<name>.skill-ref.json` with `name`, `source` (GitHub shorthand or git URL), a 40-character `commit`, and the in-repo `skillPath` ending in `SKILL.md`. The plugin's existing `targets.skills` decides which harnesses receive it. `prism.lock` records the commit and Prism's SHA-256 hash of every file in that skill directory.
+
+```json
+{"name":"demo","source":"owner/repo","commit":"0123456789abcdef0123456789abcdef01234567","skillPath":"skills/demo/SKILL.md"}
+```
+
+`prism skills import-npx --into <plugin> --dry-run` previews pointers from `~/.agents/.skill-lock.json`; omit `--dry-run` to write them and their lock hashes. `prism skills update [name] --plugin <plugin>` reviews upstream commits and pins the new content. Refresh fetches a missing pinned commit into `PRISM_HOME/cache/third-party-skills`, verifies its content hash, and installs it through Prism's normal planner. A warm cache supports offline refresh. `prism doctor --prune-untracked` previews skill directories outside Prism's ledger; add `--fix` to remove them.
 
 ## The authoring surface
 

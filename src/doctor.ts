@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { lstat, readFile as readFileBytes, rm } from "node:fs/promises";
 import { Effect, Layer } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
@@ -56,7 +57,8 @@ export type DoctorFindingFamily =
   | "region.integrity"
   | "determinism.selfcheck"
   | "launchd.residue"
-  | "workflow.store-registry";
+  | "workflow.store-registry"
+  | "skill.untracked";
 
 export interface DoctorFinding {
   readonly schema: "prism.doctor.finding.v1";
@@ -98,6 +100,8 @@ export interface DoctorOptions {
   readonly projectPath?: string;
   readonly prismHome: string;
   readonly fix: boolean;
+  /** With --fix, remove untracked skill directories; otherwise only report them. */
+  readonly pruneUntracked?: boolean;
   /** Optional harness-root resolver; when provided, global roots come from here instead of HOME. */
   readonly roots?: HarnessRootsEnv;
 }
@@ -213,6 +217,47 @@ const readAllSnapshots = async (
   return results;
 };
 
+const detectUntrackedSkillDirs = async (options: DoctorOptions): Promise<DoctorFinding[]> => {
+  const snapshots = await readAllSnapshots(options.prismHome);
+  const owned = new Set<string>();
+  for (const snapshot of snapshots) {
+    for (const entry of snapshot.manifest?.entries ?? []) {
+      if (entry.mode === "owned") owned.add(resolve(entry.targetPath));
+    }
+  }
+  const findings: DoctorFinding[] = [];
+  for (const harnessId of options.harnesses) {
+    const harness = getHarness(harnessId);
+    if (!harness.supportsSkills || harness.skillsDir === null) continue;
+    for (const root of rootsForHarness(harnessId, options.scope, options.projectPath, options.roots)) {
+      const skillsRoot = join(root, harness.skillsDir);
+      if (!(await exists(skillsRoot))) continue;
+      for (const name of await listDir(skillsRoot)) {
+        const dir = join(skillsRoot, name);
+        const stats = await lstat(dir);
+        if (!stats.isDirectory() && !stats.isSymbolicLink()) continue;
+        if (!(await exists(join(dir, "SKILL.md")))) continue;
+        if ([...owned].some((path) => path.startsWith(`${resolve(dir)}/`))) continue;
+        if (options.pruneUntracked && options.fix) {
+          await rm(dir, { recursive: stats.isDirectory(), force: true });
+          continue;
+        }
+        findings.push(finding({
+          severity: "error",
+          family: "skill.untracked",
+          code: "skill.untracked",
+          message: `Untracked skill directory ${dir}. ${options.pruneUntracked ? "Dry run: would prune it; add --fix to apply." : "Run prism doctor --prune-untracked --fix to remove it, or declare it as a pinned skill pointer in a plugin."}`,
+          harness: harnessId,
+          root,
+          path: dir,
+          fix: "manual",
+        }));
+      }
+    }
+  }
+  return findings;
+};
+
 const validateOwnedSnapshotEntry = async (
   manifest: SnapshotManifest,
   entry: SnapshotEntry,
@@ -236,9 +281,9 @@ const validateOwnedSnapshotEntry = async (
     })];
   }
 
-  let content: string;
+  let content: Uint8Array;
   try {
-    content = await readFile(entry.targetPath);
+    content = await readFileBytes(entry.targetPath);
   } catch (error) {
     return [finding({
       severity: "error",
@@ -1310,6 +1355,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
   );
   findings.push(...(await detectLaunchdResidue(options.prismHome)));
   findings.push(...(await detectWorkflowStoreRegistryResidue(options.prismHome)));
+  findings.push(...(await detectUntrackedSkillDirs(options)));
 
   const pluginInspection = await inspectPlugin(options);
   findings.push(...pluginInspection.findings);

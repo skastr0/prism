@@ -92,11 +92,11 @@ const executeOp = async (
 
   switch (op.kind) {
     case "create":
-      await writeFile(op.targetPath, op.content, op.mode === undefined ? {} : { mode: op.mode });
+      await writeFile(op.targetPath, op.bytes ?? op.content, op.mode === undefined ? {} : { mode: op.mode });
       return;
     case "repair":
       await backup(op.backup, op.targetPath);
-      await writeFile(op.targetPath, op.content, op.mode === undefined ? {} : { mode: op.mode });
+      await writeFile(op.targetPath, op.bytes ?? op.content, op.mode === undefined ? {} : { mode: op.mode });
       return;
     case "patch-regions":
       await backup(op.backup, op.targetPath);

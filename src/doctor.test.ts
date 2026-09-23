@@ -59,6 +59,18 @@ test("doctor exit code is success for a clean report", async () => {
   expect(doctorExitCode(report)).toBe(EXIT_CODES.success);
 });
 
+test("doctor reports untracked skill directories and prunes only with both opt-ins", async () => {
+  const dir = join(process.env.HOME!, ".config", "opencode", "skills", "foreign");
+  await writeText(join(dir, "SKILL.md"), "---\nname: foreign\ndescription: Foreign skill\n---\n# Foreign\n");
+  const options = { harnesses: ["opencode"] as const, scope: "global" as const, prismHome: join(root, "prism-home"), fix: false };
+  const reported = await runDoctor(options);
+  expect(reported.findings.some((finding) => finding.code === "skill.untracked" && finding.path === dir)).toBe(true);
+  await runDoctor({ ...options, pruneUntracked: true });
+  expect(await readFile(join(dir, "SKILL.md"))).toContain("foreign");
+  await runDoctor({ ...options, fix: true, pruneUntracked: true });
+  await expect(readFile(join(dir, "SKILL.md"))).rejects.toThrow();
+});
+
 // PQ-159: doctor surfaces run-backup retention as read-only visibility --
 // count/size/oldest age -- never as a DoctorFinding, so it never flips exit
 // code on an otherwise clean, healthy world.

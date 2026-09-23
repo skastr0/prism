@@ -22,6 +22,7 @@
 import { stat } from "node:fs/promises";
 import { computeContentHash } from "../content-hash.js";
 import { PathConflictError } from "../errors.js";
+import { readFile as readFileBytes } from "node:fs/promises";
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
@@ -50,8 +51,8 @@ import {
 export const MISSING_OWNED_FILE_SELF_HEALS = true as const;
 
 export type SyncOp =
-  | { readonly kind: "create"; readonly targetPath: string; readonly content: string; readonly mode?: number; readonly plugin: string; readonly reason: "new" }
-  | { readonly kind: "repair"; readonly targetPath: string; readonly content: string; readonly mode?: number; readonly plugin: string; readonly reason: "source-changed" | "drifted"; readonly backup: boolean }
+  | { readonly kind: "create"; readonly targetPath: string; readonly content: string; readonly bytes?: Uint8Array; readonly mode?: number; readonly plugin: string; readonly reason: "new" }
+  | { readonly kind: "repair"; readonly targetPath: string; readonly content: string; readonly bytes?: Uint8Array; readonly mode?: number; readonly plugin: string; readonly reason: "source-changed" | "drifted"; readonly backup: boolean }
   | { readonly kind: "skip"; readonly targetPath: string; readonly plugin: string }
   | { readonly kind: "chmod"; readonly targetPath: string; readonly mode: number; readonly plugin: string }
   | { readonly kind: "patch-regions"; readonly targetPath: string; readonly content: string; readonly changedRegions: ReadonlyArray<string>; readonly removedRegions: ReadonlyArray<string>; readonly backup: boolean; readonly create: boolean }
@@ -195,7 +196,7 @@ const regionContentHash = (region: DesiredRegion): string =>
     region.kind === "marker" ? renderMarkerRegion(region) : JSON.stringify(region.value),
   );
 
-const ownedFileContentHash = (_harness: string, content: string): string =>
+const ownedFileContentHash = (_harness: string, content: string | Uint8Array): string =>
   computeContentHash(content);
 
 const removeOrphanedRegion = (
@@ -225,15 +226,15 @@ const planOwnedFile = async (options: {
   const { harness, desired, snapshotEntry, degradedOwnership } = options;
   // Exact-byte comparison: whether a rewrite is needed at all must never be
   // fooled by normalization — a genuinely new port always has to land on disk.
-  const desiredHash = computeContentHash(desired.content);
+  const desiredHash = computeContentHash(desired.bytes ?? desired.content);
 
   if (!(await exists(desired.targetPath))) {
-    return [{ kind: "create", targetPath: desired.targetPath, content: desired.content, mode: desired.mode, plugin: desired.plugin, reason: "new" }];
+    return [{ kind: "create", targetPath: desired.targetPath, content: desired.content, ...(desired.bytes ? { bytes: desired.bytes } : {}), mode: desired.mode, plugin: desired.plugin, reason: "new" }];
   }
 
-  let diskContent: string;
+  let diskContent: Uint8Array;
   try {
-    diskContent = await readFile(desired.targetPath);
+    diskContent = await readFileBytes(desired.targetPath);
   } catch {
     // A directory (or unreadable object) where Prism wants a file is foreign
     // by definition — classify, don't throw; the rest of the plan proceeds.
@@ -272,6 +273,7 @@ const planOwnedFile = async (options: {
       kind: "repair",
       targetPath: desired.targetPath,
       content: desired.content,
+      ...(desired.bytes ? { bytes: desired.bytes } : {}),
       mode: desired.mode,
       plugin: desired.plugin,
       reason: drifted ? "drifted" : "source-changed",
@@ -280,7 +282,7 @@ const planOwnedFile = async (options: {
   }
 
   if (degradedOwnership) {
-    return [{ kind: "repair", targetPath: desired.targetPath, content: desired.content, mode: desired.mode, plugin: desired.plugin, reason: "drifted", backup: true }];
+    return [{ kind: "repair", targetPath: desired.targetPath, content: desired.content, ...(desired.bytes ? { bytes: desired.bytes } : {}), mode: desired.mode, plugin: desired.plugin, reason: "drifted", backup: true }];
   }
 
   return [{
@@ -542,10 +544,8 @@ const assertNoPathConflicts = (desired: DesiredRoot): void => {
  * attribution from before a producer-side attribution fix: since the bytes
  * are unchanged, that stale entry converges silently instead of wedging
  * every future refresh against a plugin-name mismatch it can never resolve.
- * A REAL two-author collision (skills, agents, commands at a bare-name
- * path) never coincides on content by accident, so this narrowing costs
- * nothing there — same-content-different-author is not a scenario real
- * independent artifacts fall into.
+ * Bare-name skills are explicitly excluded from the content gate: two
+ * plugins declaring the same skill name crash even when their bytes match.
  */
 const assertNoForeignOwnerConflicts = (
   desired: DesiredRoot,
@@ -559,11 +559,13 @@ const assertNoForeignOwnerConflicts = (
   for (const file of desired.files) {
     const entry = ownedEntryByPath.get(file.targetPath);
     if (entry === undefined || entry.plugin === file.plugin) continue;
-    const desiredHash = computeContentHash(file.content);
+    const desiredHash = computeContentHash(file.bytes ?? file.content);
     const converged =
       desiredHash === entry.contentHash ||
-      ownedFileContentHash(desired.harness, file.content) === entry.contentHash;
-    if (converged) continue;
+      ownedFileContentHash(desired.harness, file.bytes ?? file.content) === entry.contentHash;
+    // A bare-name skill has one author even when two plugins happen to emit
+    // identical bytes. Its name is the collision key, not its content.
+    if (converged && !file.targetPath.endsWith("/SKILL.md")) continue;
     throw new PathConflictError({
       targetPath: file.targetPath,
       firstPlugin: entry.plugin,
@@ -639,7 +641,7 @@ export const planSync = async (options: {
       // Normalized so a later standalone drift check (doctor.ts) and the
       // repair-reason classification above compare in the same domain a
       // dynamic port/url never counts as drift in (PQ-167).
-      contentHash: ownedFileContentHash(options.desired.harness, desired.content),
+      contentHash: ownedFileContentHash(options.desired.harness, desired.bytes ?? desired.content),
       mode: "owned",
       plugin: desired.plugin,
     });

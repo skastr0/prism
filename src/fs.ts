@@ -62,11 +62,11 @@ export async function readJson<T>(path: string): Promise<T> {
 }
 
 /**
- * Write string content to file
+ * Write content to a file atomically, preserving exact bytes for binary assets.
  */
 export async function writeFile(
   path: string,
-  content: string,
+  content: string | Uint8Array,
   options: { readonly mode?: number } = {}
 ): Promise<void> {
   const fs = await import("node:fs/promises");

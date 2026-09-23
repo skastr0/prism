@@ -1,4 +1,5 @@
 import { basename, join, resolve } from "node:path";
+import { readFile as readFileBytes } from "node:fs/promises";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
 import type { HarnessRootsEnv } from "./services/prism-env.js";
 import {
@@ -18,7 +19,8 @@ import type {
   HarnessScope,
   PluginManifest,
 } from "./types.js";
-import { expandPath, readFile } from "./fs.js";
+import { expandPath, listDirRecursive, readFile } from "./fs.js";
+import { assertSkillLock, listSkillPointers, readSkillLock, verifyCachedSkill } from "./third-party-skills.js";
 import {
   AmpOrbSkillError,
   ampOrbRetainedBytes,
@@ -688,6 +690,60 @@ const addSkillsForHarness = async (options: {
   }
 };
 
+const addThirdPartySkillsForHarness = async (options: {
+  readonly builder: DesiredRootBuilder;
+  readonly manifest: PluginManifest;
+  readonly pluginPath: string;
+  readonly plugin: string;
+  readonly harness: HarnessConfig;
+  readonly prismHome: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<void> => {
+  if (!options.harness.supportsSkills || !manifestTargetsArtifact(options.manifest, "skills", options.harness.id)) return;
+  if (options.harness.skillsDir === null && options.harness.id !== "amp-orb") return;
+  const pointers = await listSkillPointers(options.pluginPath);
+  if (pointers.length === 0) return;
+  const lock = await readSkillLock(options.pluginPath);
+  const root = resolveGlobalHarnessRoot(options.harness, options.roots);
+  const targetDir = options.harness.id === "amp-orb" ? ampOrbSkillsRoot(root) : join(root, options.harness.skillsDir!);
+  const ampOrbFiles: Array<{ relativePath: string; sourcePath: string }> = [];
+  for (const pointer of pointers) {
+    const contentHash = assertSkillLock(pointer, lock[pointer.name], options.pluginPath);
+    const sourceDir = await verifyCachedSkill(pointer, options.prismHome, contentHash);
+    for (const relativePath of await listDirRecursive(sourceDir)) {
+      const file: ArtifactSourceFile = {
+        relativePath: `${pointer.name}/${relativePath}`,
+        sourcePath: join(sourceDir, relativePath),
+        scope: "shared",
+      };
+      ampOrbFiles.push({ relativePath: file.relativePath, sourcePath: file.sourcePath });
+      options.builder.addFile(options.harness.id, root, {
+        targetPath: join(targetDir, file.relativePath),
+        content: "",
+        bytes: await readFileBytes(file.sourcePath),
+        plugin: options.plugin,
+      });
+    }
+  }
+  if (options.harness.id === "amp-orb") {
+    await assertAmpOrbCheckout(targetDir);
+    const plannedNames = new Set(
+      options.builder.rootFor(options.harness.id, root).files
+        .map((file) => file.targetPath.slice(targetDir.length + 1).split("/")[0])
+        .filter((name): name is string => Boolean(name)),
+    );
+    const foreign = await listForeignAmpOrbSkills(targetDir, plannedNames);
+    if (plannedNames.size + foreign.length > 200) {
+      throw new AmpOrbSkillError(`amp-orb checkout would contain ${plannedNames.size + foreign.length} skills, above Amp's 200-skill limit. Remove or rename skills before refresh.`);
+    }
+    await assertAmpOrbSkillPlan({
+      root: targetDir,
+      existingRepoBytes: await ampOrbRetainedBytes(targetDir, new Set(ampOrbFiles.map((file) => file.relativePath))),
+      files: ampOrbFiles,
+    });
+  }
+};
+
 export const planPluginRefresh = async (options: RefreshOptions): Promise<PlannedRefresh> => {
   const pluginPath = expandPath(options.pluginPath);
   const manifest = await readManifest(pluginPath);
@@ -728,6 +784,9 @@ export const planPluginRefresh = async (options: RefreshOptions): Promise<Planne
       plugin,
       harness,
       roots: options.roots,
+    });
+    await addThirdPartySkillsForHarness({
+      builder, manifest, pluginPath, plugin, harness, prismHome: options.prismHome, roots: options.roots,
     });
   }
 

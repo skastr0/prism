@@ -16,6 +16,8 @@
 export interface DesiredFile {
   readonly targetPath: string;
   readonly content: string;
+  /** Exact bytes for non-text artifacts; takes precedence over content. */
+  readonly bytes?: Uint8Array;
   readonly mode?: number;
   /** Diagnostic attribution only — never identity. */
   readonly plugin: string;

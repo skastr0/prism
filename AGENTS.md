@@ -176,6 +176,7 @@ Prism stores cross-harness state in Prism home, defaulting to `~/.prism` and ove
 - `~/.prism/config.json` controls managed behavior. The current config shape is `{ "version": 1, "backup": { "mode": "always" | "never", "retentionPerTarget": 3 } }`.
 - `~/.prism/backups/` stores managed backups outside harness config trees. Prism preserves original filenames and does not create sibling `.bak` files.
 - `~/.prism/state/roots/*.json` records files and rule sections Prism owns for each harness root.
+- `~/.prism/cache/third-party-skills/` holds only selected directories from pinned upstream git skills. Plugins declare pointers in `skill-refs/<name>.skill-ref.json`; `prism.lock -> thirdPartySkills` records SHA-256 content hashes. `targets.skills` remains the sole harness targeting policy. Refresh verifies pins before desired-state planning; `prism skills update` is the explicit repin command.
 - `~/.prism/state/harness-types/` is the machine-wide discovered harness model cache (`prism workflow refresh-harness-types`). It is not project-keyed.
 - Re-running `prism refresh` is the sync operation. It compiles first where relevant, writes desired outputs, skips unchanged content, fails closed on drift, and prunes stale Prism-owned outputs.
 - Existing files that Prism does not own are not silently adopted. Use `--overwrite` when deliberately replacing an unmanaged whole-file artifact.
@@ -597,6 +598,9 @@ my-plugin/
 │   └── <skill-name>/
 │       ├── SKILL.md    # Skill definition
 │       └── *.md        # Supporting files
+├── skill-refs/         # Pinned git skill pointers (mutually exclusive with same-name skills/)
+│   └── <skill-name>.skill-ref.json
+├── prism.lock          # Includes thirdPartySkills commit and content hashes
 ├── skillspaces/        # Compile-time skill name disambiguation tables
 │   └── *.skillspace.ts
 └── harness/            # Optional harness-specific overlays

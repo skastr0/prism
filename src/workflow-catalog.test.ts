@@ -80,6 +80,8 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
     expect(([...WORKFLOW_WORKERS] as string[]).sort()).toEqual(
       [
         "amp-code",
+        "amp-orb",
+        "amp-runner",
         "antigravity-cli",
         "claude-code",
         "codex-cli",
@@ -98,7 +100,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
     const unflagged = Object.values(LOWERER_CAPABILITIES)
       .filter((profile) => !profile.workflowWorker)
       .map((profile): string => profile.harness);
-    expect(unflagged.sort()).toEqual(["amp-orb", "pi"].sort());
+    expect(unflagged.sort()).toEqual(["pi"]);
     for (const harness of unflagged) {
       expect(WORKFLOW_WORKERS as readonly string[]).not.toContain(harness);
     }

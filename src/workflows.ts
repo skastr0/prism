@@ -115,6 +115,15 @@ export interface WorkflowHarnessCatalogModelMap {}
  */
 export interface WorkflowHarnessEffortMap {}
 
+/**
+ * Discovered Amp orb projects (`amp projects list --json`). Empty in core;
+ * refresh augments `"amp-orb"` so `worker.project` narrows to known projects.
+ */
+export interface WorkflowHarnessProjectMap {}
+
+export type WorkflowHarnessProject<W extends WorkflowWorkerId> =
+  W extends keyof WorkflowHarnessProjectMap ? WorkflowHarnessProjectMap[W] : string;
+
 export type WorkflowHarnessModel<W extends WorkflowWorkerId> =
   | (W extends keyof WorkflowHarnessModelMap ? WorkflowHarnessModelMap[W] : string)
   | WorkflowModelProfileRef;
@@ -284,8 +293,11 @@ type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
     : { readonly labels?: never })
   & (W extends "amp-orb"
     ? {
-      /** Amp project for the orb: namespace/name, owner/repo, or repository URL (`--project`). */
-      readonly project: string;
+      /**
+       * Amp project for the orb (`--project`): namespace/name, owner/repo, or repository URL.
+       * Narrows to discovered projects after `prism workflow refresh-harness-types`.
+       */
+      readonly project: WorkflowHarnessProject<"amp-orb">;
       /** `--orb-size`; defaults to the project's size. */
       readonly size?: AmpOrbSize;
       /** Thread visibility; defaults to Amp's own default. Cosmetic: not part of cache identity. */

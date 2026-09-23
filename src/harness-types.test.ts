@@ -20,7 +20,9 @@ import {
   parseOmpModelsJson,
   parseOpenCodeModels,
   refreshHarnessTypes,
+  renderHarnessTypesRefreshHuman,
 } from "./harness-types-discover.js";
+import { parseAmpProjectsList } from "./amp-projects.js";
 import { renderHarnessModelsModule, type HarnessTypesSnapshot } from "./harness-types.js";
 import { buildWorkflowPaths, resolveWorkflowTypeDirs } from "./workflow-tsconfig.js";
 
@@ -88,6 +90,52 @@ export const workflow = defineWorkflow({
   return ts.getPreEmitDiagnostics(program).map((diagnostic) =>
     ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
   );
+};
+
+const PROJECTS_JSON = JSON.stringify([
+  { id: "p1", namespace: "acme-ns", name: "prism", repositoryURL: "https://github.com/acme/prism", remoteURLs: ["https://github.com/acme/prism"] },
+  { id: "p2", namespace: "acme-ns", name: "orb-setup", repositoryURL: "https://github.com/acme/orb-setup", remoteURLs: [] },
+]);
+
+/** Type-check one plugin-free workflow whose task uses `worker` against a rendered snapshot. */
+const typecheckWorkerAgainstSnapshot = async (
+  snapshot: HarnessTypesSnapshot,
+  worker: string,
+): Promise<readonly string[]> => {
+  const dir = await mkdtemp(join(tmpdir(), "prism-harness-project-"));
+  const harnessPath = join(dir, "harness-models.ts");
+  const workflowPath = join(dir, "flow.workflow.ts");
+  await writeFile(harnessPath, renderHarnessModelsModule(snapshot), "utf8");
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+export const workflow = defineWorkflow({
+  name: "typed-project",
+  tasks: [defineTask({
+    id: "orb",
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    worker: ${worker},
+  })],
+});
+`, "utf8");
+  const { options, errors } = ts.convertCompilerOptionsFromJson({
+    target: "ESNext",
+    module: "ESNext",
+    moduleResolution: "bundler",
+    strict: true,
+    skipLibCheck: true,
+    noEmit: true,
+    paths: {
+      prism: [join(srcDir, "workflows.ts")],
+      "prism/harnesses": [harnessPath],
+      effect: [effectDts],
+    },
+  }, dir);
+  if (errors.length > 0) return errors.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+  const program = ts.createProgram([workflowPath, harnessPath], options);
+  return ts.getPreEmitDiagnostics(program).map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
 };
 
 describe("harness model parsers", () => {
@@ -306,6 +354,44 @@ export const workflow = defineWorkflow({
     )).toEqual([]);
   });
 
+  test("emits discovered Amp orb projects as the amp-orb worker.project union", () => {
+    const source = renderHarnessModelsModule({
+      generatedAt: "2026-09-22T00:00:00.000Z",
+      harnesses: [],
+      ampProjects: { projects: parseAmpProjectsList(PROJECTS_JSON).projects, source: "command" },
+    });
+    expect(source).toContain("export const ampOrbProjects");
+    expect(source).toContain("export type AmpOrbProject");
+    expect(source).toMatch(/interface WorkflowHarnessProjectMap \{\s*"amp-orb": "acme-ns\/orb-setup" \| "acme-ns\/prism" \| "acme\/orb-setup" \| "acme\/prism" \| "https:\/\/github\.com\/acme\/orb-setup" \| "https:\/\/github\.com\/acme\/prism";/s);
+  });
+
+  test("omits the project union when discovery found no projects", () => {
+    const source = renderHarnessModelsModule({
+      generatedAt: "2026-09-22T00:00:00.000Z",
+      harnesses: [],
+      ampProjects: { projects: [], source: "empty", error: "amp projects list --json produced no output" },
+    });
+    expect(source).not.toContain("ampOrbProjects");
+    expect(source).not.toContain("WorkflowHarnessProjectMap");
+  });
+
+  test("plugin-free amp-orb worker.project accepts discovered projects and rejects unknown ones", async () => {
+    const snapshot: HarnessTypesSnapshot = {
+      generatedAt: "2026-09-22T00:00:00.000Z",
+      harnesses: [],
+      ampProjects: { projects: parseAmpProjectsList(PROJECTS_JSON).projects, source: "command" },
+    };
+    expect(await typecheckWorkerAgainstSnapshot(snapshot, '{ worker: "amp-orb", project: "acme-ns/prism" }')).toEqual([]);
+    expect(await typecheckWorkerAgainstSnapshot(snapshot, '{ worker: "amp-orb", project: "https://github.com/acme/orb-setup" }')).toEqual([]);
+    const bad = await typecheckWorkerAgainstSnapshot(snapshot, '{ worker: "amp-orb", project: "acme-ns/unknown" }');
+    expect(bad.some((message) => message.includes("acme-ns/unknown"))).toBe(true);
+  });
+
+  test("without discovered projects amp-orb worker.project stays a string", async () => {
+    const snapshot: HarnessTypesSnapshot = { generatedAt: "2026-09-22T00:00:00.000Z", harnesses: [] };
+    expect(await typecheckWorkerAgainstSnapshot(snapshot, '{ worker: "amp-orb", project: "any/project" }')).toEqual([]);
+  });
+
   test("plugin-free worker.model accepts live slugs and rejects unknown ones", async () => {
     const ok = await typecheckPluginFreeWorkflow("high");
     expect(ok).toEqual([]);
@@ -328,6 +414,8 @@ describe("refreshHarnessTypes", () => {
     const amp = result.snapshot.harnesses.find((entry) => entry.harness === "amp-code");
     expect(amp?.source).toBe("empty");
     expect(amp?.models).toEqual([]);
+    expect(result.snapshot.ampProjects).toEqual({ projects: [], source: "empty", error: "amp projects list --json produced no output" });
+    expect(source).not.toContain("ampOrbProjects");
   });
 
   test("records command-discovered slugs when a runner returns output", async () => {
@@ -352,6 +440,7 @@ describe("refreshHarnessTypes", () => {
             }],
           });
         }
+        if (command === "amp" && args[0] === "projects" && args[1] === "list" && args[2] === "--json") return PROJECTS_JSON;
         if (command === "opencode" && args[0] === "models") return "opencode/deepseek-v4-flash\n";
         if (command === "omp" && args[0] === "models" && args[1] === "--json") {
           return JSON.stringify({
@@ -401,6 +490,10 @@ describe("refreshHarnessTypes", () => {
     expect(source).toContain("opencode-go/glm-5.3-flash");
     expect(source).toContain('"omp": "opencode-go/glm-5.3-flash"');
     expect(source).not.toContain("ompEfforts");
+    expect(result.snapshot.ampProjects?.source).toBe("command");
+    expect(result.snapshot.ampProjects?.projects.map((project) => project.name)).toEqual(["prism", "orb-setup"]);
+    expect(source).toContain('"amp-orb": "acme-ns/orb-setup" | "acme-ns/prism"');
+    expect(renderHarnessTypesRefreshHuman(result)).toContain("amp-orb: 2 projects (command)");
   });
 });
 

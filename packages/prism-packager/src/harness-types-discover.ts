@@ -3,7 +3,7 @@
  * Cache reads and CLI lists never throw; empty means "leave this worker as string".
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -14,9 +14,16 @@ import {
   type HarnessTypesSnapshot,
   writeHarnessTypesSnapshot,
   type RefreshHarnessTypesResult,
+  harnessDiscoveredPath,
 } from "./harness-types.js";
 import type { WorkflowWorkerId } from "./workflows.js";
 import { parseAmpProjectsList, type DiscoveredAmpProjects } from "./amp-projects.js";
+import {
+  AMP_RUNNERS_PROMPT,
+  AMP_TURN_ERROR_PREFIX,
+  parseAmpRunnersStreamJson,
+  type DiscoveredAmpRunners,
+} from "./amp-runners.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,6 +35,14 @@ export interface DiscoverHarnessTypesOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly readText?: HarnessTypesReadText;
   readonly runCommand?: HarnessTypesCommandRunner;
+  /**
+   * Also snapshot the account-wide Amp runners with a one-shot `amp -x` turn
+   * whose only job is calling the `list_runners` platform tool. Opt-in: the
+   * turn creates a small Amp thread (cheapest mode, deleted afterwards).
+   * A plain refresh never runs it and preserves a previously captured
+   * runner snapshot.
+   */
+  readonly discoverAmpRunners?: boolean;
 }
 
 const CLAUDE_MODEL_ALIASES = [
@@ -648,6 +663,138 @@ export const discoverAmpProjects = async (
   };
 };
 
+/**
+ * Runner discovery turns can take a couple of minutes (an agent turn, not a
+ * CLI list), so they get their own runner with a longer timeout than the
+ * 8s `defaultRunCommand`. On failure the reason is surfaced through the
+ * `AMP_TURN_ERROR:` sentinel; the untruncated partial stdout is appended on
+ * its own line so the init line's session id survives for thread cleanup.
+ */
+export const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) => {
+  try {
+    const { stdout } = await runAmpTurn(command, args, 180_000);
+    return stdout;
+  } catch (error) {
+    const cause = error as { message?: string; stderr?: string; stdout?: string };
+    const detail = [cause.message ?? "", typeof cause.stderr === "string" ? cause.stderr.trim() : ""]
+      .filter((part) => part.length > 0).join(" — ").slice(0, 500);
+    // Only the reason is truncated; the partial transcript after it stays
+    // whole so parseAmpRunnersStreamJson can find the thread to delete.
+    const partial = typeof cause.stdout === "string" ? cause.stdout : "";
+    return partial.length > 0
+      ? `${AMP_TURN_ERROR_PREFIX} ${detail}\n${partial}`
+      : `${AMP_TURN_ERROR_PREFIX} ${detail}`;
+  }
+};
+
+const AMP_TURN_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Run a one-shot amp turn with node spawn: stdin ignored (amp waits on an
+ * open stdin pipe when there is no TTY and dies with "Timeout while reading
+ * from stdin"), stdout/stderr captured, killed after the timeout. Rejection
+ * carries { stdout, stderr } so the partial transcript survives for session
+ * recovery.
+ */
+const runAmpTurn = (command: string, args: readonly string[], timeoutMs: number): Promise<{
+  readonly stdout: string;
+  readonly stderr: string;
+}> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], {
+      env: process.env,
+      // The turn must run headless: with the default piped stdin, amp waits
+      // for input that never comes and fails with "Timeout while reading
+      // from stdin".
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdout.length < AMP_TURN_MAX_BUFFER_BYTES) stdout += chunk.toString("utf8");
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderr.length < AMP_TURN_MAX_BUFFER_BYTES) stderr += chunk.toString("utf8");
+    });
+    const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+    const settle = (outcome: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      outcome();
+    };
+    child.on("error", (cause) => settle(() => reject(Object.assign(cause, { stdout, stderr }))));
+    child.on("close", (code, signal) => settle(() => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const reason = signal !== null
+        ? `${command} timed out after ${Math.round(timeoutMs / 1000)}s (signal ${signal})`
+        : `Command failed: ${command} (exit ${code})`;
+      reject(Object.assign(new Error(reason), { stdout, stderr }));
+    }));
+  });
+
+/**
+ * Snapshot the account-wide Amp runners: one `amp -x --stream-json` turn in
+ * the cheapest mode whose only job is calling `list_runners`, parsed from the
+ * tool result. Fail-soft: a failed capture records the reason and no runners,
+ * but still deletes any thread the turn created (its partial stdout carries
+ * the session id even when the turn times out). The reason is also returned
+ * so the caller can surface it when the capture was explicitly requested.
+ */
+export const discoverAmpRunners = async (
+  options: DiscoverHarnessTypesOptions = {},
+): Promise<{ readonly discovered: DiscoveredAmpRunners; readonly failedExplicit?: string }> => {
+  const run = options.runCommand ?? defaultAmpTurnRunner;
+  let stdout: string;
+  try {
+    stdout = await run("amp", ["-x", AMP_RUNNERS_PROMPT, "--stream-json", "--mode", "low"]);
+  } catch (error) {
+    // The runner contract is total: a rejecting runner is handled like a
+    // failed turn, with its .stdout (the partial transcript, session id
+    // included) recovered below for thread deletion.
+    const cause = error as { message?: string; stdout?: string };
+    const detail = (typeof cause.message === "string" ? cause.message : "unknown error").slice(0, 500);
+    const partial = typeof cause.stdout === "string" ? cause.stdout : "";
+    stdout = partial.length > 0
+      ? `${AMP_TURN_ERROR_PREFIX} ${detail}\n${partial}`
+      : `${AMP_TURN_ERROR_PREFIX} ${detail}`;
+  }
+  const parsed = parseAmpRunnersStreamJson(stdout);
+  if (parsed.sessionId !== undefined) {
+    await run("amp", ["threads", "delete", parsed.sessionId]);
+  } else {
+    // A failed turn still created its thread (session_id arrives in the init
+    // line before any failure); recover it from the partial stdout.
+    const leaked = [...stdout.matchAll(/"session_id":"(T-[^"]+)"/g)].map((match) => match[1]!);
+    for (const id of [...new Set(leaked)]) {
+      await run("amp", ["threads", "delete", id]);
+    }
+  }
+  const discovered: DiscoveredAmpRunners = {
+    runners: parsed.runners,
+    source: parsed.runners.length > 0 ? "command" : "empty",
+    capturedAt: new Date().toISOString(),
+    ...(parsed.error !== undefined ? { error: parsed.error } : {}),
+  };
+  return { discovered, ...(parsed.error !== undefined ? { failedExplicit: parsed.error } : {}) };
+};
+
+/** Previously captured runner snapshot, preserved by a plain refresh. */
+export const previousAmpRunners = (prismHome: string): DiscoveredAmpRunners | undefined => {
+  try {
+    const path = harnessDiscoveredPath(prismHome);
+    if (!existsSync(path)) return undefined;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as HarnessTypesSnapshot;
+    return parsed && typeof parsed === "object" ? parsed.ampRunners : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const refreshHarnessTypes = async (
   prismHome: string,
   options: DiscoverHarnessTypesOptions = {},
@@ -656,12 +803,34 @@ export const refreshHarnessTypes = async (
     discoverWorkflowHarnessModels(options),
     discoverAmpProjects(options),
   ]);
+  const previous = previousAmpRunners(prismHome);
+  let ampRunners: DiscoveredAmpRunners | undefined = previous;
+  let ampRunnersCaptureError: string | undefined;
+  if (options.discoverAmpRunners === true) {
+    const { discovered, failedExplicit } = await discoverAmpRunners(options);
+    // A failed capture keeps the previously captured runners (an old entry is
+    // valid); a legitimate empty capture (no live runners) replaces them.
+    ampRunners = failedExplicit !== undefined && (previous?.runners.length ?? 0) > 0 ? previous : discovered;
+    // An explicit capture failure is never silent: the operator asked for it.
+    if (failedExplicit !== undefined) {
+      const kept = ampRunners?.runners.length ?? 0;
+      ampRunnersCaptureError = [
+        `The Amp runner capture failed: ${failedExplicit}`,
+        kept > 0 && ampRunners?.capturedAt !== undefined
+          ? `The previous runner snapshot from ${ampRunners.capturedAt} (${kept} runner${kept === 1 ? "" : "s"}) was kept.`
+          : "No previous runner snapshot was kept.",
+        "Check `amp login` / network access and re-run the same command.",
+      ].join(" ");
+    }
+  }
   const snapshot: HarnessTypesSnapshot = {
     generatedAt: new Date().toISOString(),
     harnesses,
     ampProjects,
+    ...(ampRunners !== undefined ? { ampRunners } : {}),
   };
-  return writeHarnessTypesSnapshot(prismHome, snapshot);
+  const written = writeHarnessTypesSnapshot(prismHome, snapshot);
+  return { ...written, ...(ampRunnersCaptureError !== undefined ? { ampRunnersCaptureError } : {}) };
 };
 
 export const renderHarnessTypesRefreshHuman = (result: RefreshHarnessTypesResult): string => {
@@ -680,6 +849,15 @@ export const renderHarnessTypesRefreshHuman = (result: RefreshHarnessTypesResult
     const count = projects.projects.length;
     const note = projects.error !== undefined && count === 0 ? ` — ${projects.error}` : "";
     lines.push(`  amp-orb: ${String(count)} project${count === 1 ? "" : "s"} (${projects.source})${note}`);
+  }
+  const runners = result.snapshot.ampRunners;
+  if (runners !== undefined) {
+    const count = runners.runners.length;
+    const dirs = runners.runners.reduce((sum, runner) => sum + runner.directories.length, 0);
+    const note = runners.error !== undefined && count === 0 ? ` — ${runners.error}` : "";
+    lines.push(
+      `  amp-runner: ${String(count)} runner${count === 1 ? "" : "s"}, ${String(dirs)} served dir${dirs === 1 ? "" : "s"} (${runners.source})${note}`,
+    );
   }
   return lines.join("\n");
 };

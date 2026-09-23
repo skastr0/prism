@@ -33,6 +33,7 @@ export interface PrismLock {
   readonly rootVersion: string;
   readonly generatedAt: string;
   readonly entries: ReadonlyArray<LockfileEntry>;
+  readonly thirdPartySkills?: Record<string, import("../third-party-skills.js").SkillLockEntry>;
 }
 
 const LOCKFILE_NAME = "prism.lock";
@@ -51,6 +52,7 @@ const comparableLockShape = (lock: PrismLock | Omit<PrismLock, "generatedAt">) =
   root: lock.root,
   rootVersion: lock.rootVersion,
   entries: lock.entries,
+  ...(lock.thirdPartySkills ? { thirdPartySkills: lock.thirdPartySkills } : {}),
 });
 
 const collectRegistries = (root: PluginRegistry): ReadonlyArray<PluginRegistry> => {
@@ -147,13 +149,14 @@ export const writeLockfile = async (
   ));
 
   const path = getLockfilePath(pluginPath);
+  const existing = await readLockfile(pluginPath);
   const comparable = {
     version: 1 as const,
     root: registry.pluginName,
     rootVersion: registry.pluginVersion,
     entries,
+    ...(existing?.thirdPartySkills ? { thirdPartySkills: existing.thirdPartySkills } : {}),
   };
-  const existing = await readLockfile(pluginPath);
 
   if (existing) {
     const existingComparable = comparableLockShape(existing);

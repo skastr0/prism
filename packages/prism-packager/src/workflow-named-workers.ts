@@ -10,6 +10,7 @@ import { validateKimiWorkflowEffort } from "./workflow-kimi-effort.js";
 import { assertWorkflowWorkerPermission, defaultWorkflowWorkerPermission } from "./workflow-workers.js";
 import { resolveAmpCatalogPinPlan } from "./workflow-amp-worker.js";
 import { validateAmpOrbProject } from "./amp-projects.js";
+import { validateAmpRunnerTarget } from "./amp-runners.js";
 import { AMP_ORB_SIZES, AMP_THREAD_VISIBILITIES } from "./workflows.js";
 import type { WorkflowTaskWorkerOptions, WorkflowWorkerId } from "./workflows.js";
 
@@ -203,6 +204,10 @@ export const decodeWorkflowWorkerCatalog = (
     if (config.worker === "amp-orb") {
       const projectError = validateAmpOrbProject(config.project, options.effortSnapshot?.ampProjects);
       if (projectError !== undefined) throw new Error(`Named worker ${JSON.stringify(name)}: ${projectError}`);
+    }
+    if (config.worker === "amp-runner") {
+      const runnerError = validateAmpRunnerTarget(config.runnerId, config.runnerDir, options.effortSnapshot?.ampRunners);
+      if (runnerError !== undefined) throw new Error(`Named worker ${JSON.stringify(name)}: ${runnerError}`);
     }
     if (config.worker === "amp-code") {
       resolveAmpCatalogPinPlan({

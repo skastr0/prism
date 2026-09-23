@@ -749,6 +749,11 @@ async function validateManifestLayout(
   errors.push(...await validateNoSourceMarkdownAgents(pluginPath));
   errors.push(...await validateHarnessOverlays(pluginPath, typedManifest));
   errors.push(...validatePresentArtifactTargets(typedManifest, presentArtifacts));
+  const { listSkillPointers } = await import("./third-party-skills.js");
+  const pointers = await listSkillPointers(pluginPath);
+  if (pointers.length > 0 && !typedManifest.targets.skills?.length) {
+    errors.push("Plugin contains skill-refs artifacts, but plugin.json targets.skills is missing; add targets.skills with the desired harness IDs or presets.");
+  }
   return errors;
 }
 

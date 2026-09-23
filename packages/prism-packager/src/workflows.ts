@@ -124,6 +124,35 @@ export interface WorkflowHarnessProjectMap {}
 export type WorkflowHarnessProject<W extends WorkflowWorkerId> =
   W extends keyof WorkflowHarnessProjectMap ? WorkflowHarnessProjectMap[W] : string;
 
+/**
+ * Discovered Amp runners (`list_runners`, captured by
+ * `refresh-harness-types --discover-amp-runners`). Empty in core; refresh
+ * augments one key per runner whose value is the union of the directories
+ * that runner serves.
+ */
+export interface WorkflowHarnessRunnerDirMap {}
+
+/**
+ * The `amp-runner` target: with a runner snapshot, a discriminated union over
+ * the live runner ids so `runnerDir` follows the chosen id (a directory
+ * another runner serves is a type error); without one, both stay plain
+ * strings. `validate` enforces the pair again at load time.
+ */
+export type AmpRunnerTargetOptions =
+  keyof WorkflowHarnessRunnerDirMap extends never
+    ? {
+      /** Runner id from `amp --no-tui --runner-id <id>` (`--executor runner:<id>`). */
+      readonly runnerId: string;
+      /** Absolute directory the runner serves (`--runner-dir`); defaults to the runner's start directory. */
+      readonly runnerDir?: string;
+    }
+    : {
+      [R in keyof WorkflowHarnessRunnerDirMap]: {
+        readonly runnerId: R;
+        readonly runnerDir?: WorkflowHarnessRunnerDirMap[R];
+      };
+    }[keyof WorkflowHarnessRunnerDirMap];
+
 export type WorkflowHarnessModel<W extends WorkflowWorkerId> =
   | (W extends keyof WorkflowHarnessModelMap ? WorkflowHarnessModelMap[W] : string)
   | WorkflowModelProfileRef;
@@ -305,12 +334,7 @@ type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
     }
     : { readonly project?: never; readonly size?: never; readonly visibility?: never })
   & (W extends "amp-runner"
-    ? {
-      /** Runner id from `amp --no-tui --runner-id <id>` (`--executor runner:<id>`). */
-      readonly runnerId: string;
-      /** Absolute directory the runner serves (`--runner-dir`); defaults to the runner's start directory. */
-      readonly runnerDir?: string;
-    }
+    ? AmpRunnerTargetOptions
     : { readonly runnerId?: never; readonly runnerDir?: never });
 
 export type WorkflowTaskWorkerOptions =

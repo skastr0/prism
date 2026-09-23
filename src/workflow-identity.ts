@@ -13,6 +13,7 @@ import {
   type WorkflowSessionPersistence,
   type WorkflowRuntimeOptions,
 } from "./workflows.js";
+import { defaultWorkflowWorkerPermission } from "./workflow-workers.js";
 import { JEV_RESULT_CONTRACT_VERSION, type JevQuestions, type JevEntry } from "./jev.js";
 import type { JevPublicConfig } from "./services/jev.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
@@ -96,7 +97,7 @@ export type WorkflowRunTaskSnapshotInput =
   | Omit<WorkflowWorkerRunTaskSnapshot, "createdAt">
   | Omit<JevRunTaskSnapshot, "createdAt">;
 
-const WORKFLOW_TASK_IDENTITY_VERSION = 5;
+const WORKFLOW_TASK_IDENTITY_VERSION = 6;
 
 const workflowWorkerSemanticsVersion = (worker: string | null): string => {
   switch (worker) {
@@ -106,6 +107,8 @@ const workflowWorkerSemanticsVersion = (worker: string | null): string => {
     case "opencode":
       return "native-cli-v2";
     case "amp-code":
+    case "amp-orb":
+    case "amp-runner":
     case "codex-cli":
     case "devin":
     case "hermes":
@@ -161,9 +164,15 @@ export const workflowTaskIdentity = (
   const effort = worker !== null && workflowWorkerSupportsEffort(worker)
     ? resolveWorkflowTaskEffort(task, { worker: worker ?? undefined, fallbackModel: runtimeOptions.fallbackModel })
     : undefined;
-  const permission = task.worker?.permission ?? runtimeOptions.fallbackPermission ?? "permissive";
+  const permission = task.worker?.permission ?? runtimeOptions.fallbackPermission ?? defaultWorkflowWorkerPermission(worker ?? undefined);
   const configuration = {
     ...(task.worker?.worker === "amp-code" && task.worker.catalogModel !== undefined ? { catalogModel: task.worker.catalogModel } : {}),
+    ...(task.worker?.worker === "amp-runner" && task.worker.catalogModel !== undefined ? { catalogModel: task.worker.catalogModel } : {}),
+    // Remote targets change where code runs: part of the content address.
+    ...(task.worker?.worker === "amp-orb" ? { ampProject: task.worker.project } : {}),
+    ...(task.worker?.worker === "amp-orb" && task.worker.size !== undefined ? { orbSize: task.worker.size } : {}),
+    ...(task.worker?.worker === "amp-runner" ? { ampRunnerId: task.worker.runnerId } : {}),
+    ...(task.worker?.worker === "amp-runner" && task.worker.runnerDir !== undefined ? { ampRunnerDir: task.worker.runnerDir } : {}),
     ...(effort !== undefined ? { effort } : {}),
     ...((worker === "hermes" || worker === "omp") && resolution?.provider !== undefined ? { provider: resolution.provider } : {}),
     ...(permission !== "permissive" ? { permission } : {}),

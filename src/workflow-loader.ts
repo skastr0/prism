@@ -12,6 +12,7 @@ import {
   validatePhaseBindings,
 } from "./workflow-validate-dynamic.js";
 import { ampWorkerPins, validateAmpCatalogPins } from "./workflow-amp-worker.js";
+import { ampRemoteTargetOf, resolveAmpRemotePinPlan } from "./workflow-amp-remote-worker.js";
 import { assertOmpWorkflowModel } from "./workflow-omp-worker.js";
 import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
@@ -28,6 +29,7 @@ import {
   isJevTask,
   isWorkflowDefinition,
   resolveWorkflowTaskEffort,
+  resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
   workflowSummary,
   type AnyWorkflowDefinition,
@@ -105,6 +107,7 @@ const staticallyReferencedWorkers = (source: string): ReadonlyArray<WorkflowStat
 const resolveTaskModelRow = (
   task: AnyWorkflowTask,
   snapshot?: ReturnType<typeof loadHarnessTypesSnapshot>,
+  cwd?: string,
 ): WorkflowTaskModelResolutionRow => {
   // A jev task has no worker pin, permission mode, or harness model to
   // resolve; its model is resolved against the Jev service config at run time.
@@ -135,6 +138,27 @@ const resolveTaskModelRow = (
   const ampError = validateAmpCatalogPins(task, snapshot);
   if (ampError !== undefined) {
     return { id: task.id, worker, ...pinFields, error: ampError };
+  }
+
+  if (worker === "amp-orb" || worker === "amp-runner") {
+    // Remote targets fail closed at validate time with the same remediation
+    // the dispatch path raises, so authors see it before any spend.
+    try {
+      const target = ampRemoteTargetOf(worker, task);
+      resolveAmpRemotePinPlan({
+        target,
+        cwd: cwd ?? process.cwd(),
+        mode: resolveWorkflowTaskModel(task, { worker }),
+        ...ampWorkerPins(task),
+      });
+    } catch (error) {
+      return {
+        id: task.id,
+        worker,
+        ...pinFields,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   try {
@@ -297,7 +321,7 @@ export const validateWorkflowFile = async (
         `workflow '${summary.name}' failed SOP phase graph validation for ${findings.length} task binding(s):\n${detail}`,
       );
     }
-    const modelResolution = probed.tasks.map((task) => resolveTaskModelRow(task, snapshot));
+    const modelResolution = probed.tasks.map((task) => resolveTaskModelRow(task, snapshot, options.cwd));
     const unresolved = modelResolution.filter((row) => row.error !== undefined);
     if (unresolved.length > 0) {
       const detail = unresolved
@@ -328,7 +352,7 @@ export const validateWorkflowFile = async (
       `workflow '${summary.name}' failed SOP phase graph validation for ${findings.length} task binding(s):\n${detail}`,
     );
   }
-  const modelResolution = tasks.map((task) => resolveTaskModelRow(task, snapshot));
+  const modelResolution = tasks.map((task) => resolveTaskModelRow(task, snapshot, options.cwd));
   const unresolved = modelResolution.filter((row) => row.error !== undefined);
   if (unresolved.length > 0) {
     const detail = unresolved

@@ -270,11 +270,20 @@ export function getWorkflowWorkerAdapter(worker: string): WorkflowWorkerAdapter 
   return adapter as WorkflowWorkerAdapter;
 }
 
+/**
+ * Per-worker default permission. Remote Amp executors (orb, runner) accept only
+ * `legacy` — no per-invocation override reaches the remote amp process — so an
+ * unconfigured remote task must default to `legacy`, not the local `permissive`
+ * default that dispatch would then reject.
+ */
+export const defaultWorkflowWorkerPermission = (worker?: string): WorkflowPermissionMode =>
+  worker === "amp-orb" || worker === "amp-runner" ? "legacy" : "permissive";
+
 export const resolveWorkflowTaskPermission = (
   task: AnyWorkflowWorkerTask,
   fallbackPermission?: WorkflowPermissionMode,
 ): WorkflowPermissionMode =>
-  task.worker?.permission ?? fallbackPermission ?? "permissive";
+  task.worker?.permission ?? fallbackPermission ?? defaultWorkflowWorkerPermission(task.worker?.worker);
 
 /** Same argv interpreters run uses. Validate calls this so illegal pins fail before spend. */
 export const assertWorkflowWorkerPermission = (

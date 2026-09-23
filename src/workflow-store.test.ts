@@ -3553,7 +3553,7 @@ describe("workflow store", () => {
 
     // Construct the same payload as workflowTaskIdentity does internally in canonical order.
     const canonicalOrder = {
-      identityVersion: 5,
+      identityVersion: 6,
       workerJsonContractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
       workerJsonInstructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
       prompt: task.prompt,

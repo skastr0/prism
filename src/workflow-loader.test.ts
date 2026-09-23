@@ -672,6 +672,51 @@ export default defineWorkflow({
     );
   });
 
+  test("validate fails closed on a remote amp worker with no target before any spend (WDX-009)", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  prompt: "Scout the repo.",
+  output,
+  worker: { worker: "amp-orb", model: "low" } as any,
+});
+
+export default defineWorkflow({ name: "orb-missing-project", tasks: [build] });
+`);
+
+    await expect(validateWorkflowFile(file)).rejects.toThrow(WorkflowValidationError);
+    await expect(validateWorkflowFile(file)).rejects.toThrow(/worker\.project is required/);
+  });
+
+  test("validate passes a well-formed remote amp worker target (WDX-009)", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  prompt: "Build on the runner.",
+  output,
+  worker: { worker: "amp-runner", runnerId: "macbook", runnerDir: ${JSON.stringify(root)}, model: "low" } as any,
+});
+
+export default defineWorkflow({ name: "runner-ok", tasks: [build] });
+`);
+
+    const result = await validateWorkflowFile(file);
+    expect(result.modelResolution[0]?.error).toBeUndefined();
+    expect(result.modelResolution[0]?.worker).toBe("amp-runner");
+  });
+
   test("validate fails naming task and worker when an explicit model profile has no target for the declared worker (WDX-009)", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

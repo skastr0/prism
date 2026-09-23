@@ -229,33 +229,6 @@ export type AmpOrbSize = (typeof AMP_ORB_SIZES)[number];
 export const AMP_THREAD_VISIBILITIES = ["private", "unlisted", "workspace", "group"] as const;
 export type AmpThreadVisibility = (typeof AMP_THREAD_VISIBILITIES)[number];
 
-type AmpRemoteWorkerOptionsFor<W extends AmpRemoteWorkflowWorkerId> = {
-  readonly sessionPersistence?: never;
-  /** `--label`, repeatable. Cosmetic: not part of cache identity. */
-  readonly labels?: ReadonlyArray<string>;
-} & (W extends "amp-orb"
-  ? {
-    /** Amp project for the orb: namespace/name, owner/repo, or repository URL (`--project`). */
-    readonly project: string;
-    /** `--orb-size`; defaults to the project's size. */
-    readonly size?: AmpOrbSize;
-    /** Thread visibility; defaults to Amp's own default. Cosmetic: not part of cache identity. */
-    readonly visibility?: AmpThreadVisibility;
-    /** Catalog pins need a plugin in the orb's checkout; commit a plugin mode and set `model` to its key. */
-    readonly catalogModel?: never;
-    readonly effort?: never;
-  }
-  : {
-    /** Runner id from `amp --no-tui --runner-id <id>` (`--executor runner:<id>`). */
-    readonly runnerId: string;
-    /** Absolute directory the runner serves (`--runner-dir`); defaults to the runner's start directory. */
-    readonly runnerDir?: string;
-    /** Allowed only when `runnerDir` equals the workflow's cwd, where Prism writes the pin plugin. */
-    readonly catalogModel?: WorkflowHarnessCatalogModel<"amp-code">;
-    /** `null` effort capability today: the remote amp process exposes no per-invocation effort seam. */
-    readonly effort?: never;
-  });
-
 export type WorkflowSessionPersistenceWorkerId =
   typeof WORKFLOW_SESSION_PERSISTENCE_WORKERS[number];
 

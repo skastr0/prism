@@ -165,6 +165,61 @@ describe("named workflow worker catalogs", () => {
     })).toThrow(/Supported: low, medium, high, xhigh, max/);
   });
 
+  test("decodes remote amp workers with their required targets and rejects the rest", () => {
+    const orb = decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-scout", { worker: "amp-orb", project: "skastr052/prism", size: "a1.tiny", model: "low" })],
+    });
+    expect(orb.workers[0]?.config).toEqual({
+      worker: "amp-orb",
+      project: "skastr052/prism",
+      size: "a1.tiny",
+      model: "low",
+    });
+
+    const runner = decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("macbook-builder", { worker: "amp-runner", runnerId: "macbook", runnerDir: "/Users/x/Projects/prism" })],
+    });
+    expect(runner.workers[0]?.config).toEqual({
+      worker: "amp-runner",
+      runnerId: "macbook",
+      runnerDir: "/Users/x/Projects/prism",
+    });
+
+    // Required targets.
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-broken", { worker: "amp-orb", model: "low" })],
+    })).toThrow(/project/);
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("runner-broken", { worker: "amp-runner" })],
+    })).toThrow(/runnerId/);
+
+    // Relative runnerDir, unknown size, non-legacy permission, effort: all fail closed.
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("runner-rel", { worker: "amp-runner", runnerId: "m", runnerDir: "relative/dir" })],
+    })).toThrow(/absolute/);
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-size", { worker: "amp-orb", project: "o/r", size: "a2.huge" })],
+    })).toThrow(/size|excess|unexpected/iu);
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-perm", { worker: "amp-orb", project: "o/r", permission: "permissive" })],
+    })).toThrow(/permission|legacy|excess|unexpected/iu);
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-effort", { worker: "amp-orb", project: "o/r", effort: "high" })],
+    })).toThrow(/effort|excess|unexpected|no per-task effort/iu);
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-pin", { worker: "amp-orb", project: "o/r", catalogModel: "zai-org/glm-5" })],
+    })).toThrow(/catalogModel|excess|unexpected/iu);
+  });
+
   test("Kimi named workers accept fixed effort values and narrow them from config", async () => {
     const home = await tempRoot();
     await writeFile(join(home, "config.toml"), `

@@ -210,4 +210,6 @@ Pick each task's worker and model by how cheaply its output can be validated:
 - **Taste / expensive-to-validate** (planning, synthesis, adversarial review) → the strongest model. Spend concentrates at the two ends — plan and final judgement — not the validatable middle.
 
 The worker set is \`claude-code\`, \`opencode\`, \`hermes\`, \`codex-cli\`, \`antigravity-cli\`, \`kimi-code\`, \`amp-code\`, \`amp-orb\`, \`amp-runner\`, \`cursor\`, \`omp\`, \`grok\`, \`devin\`. Prefer an installed named worker when the catalog has one that fits (\`prism workflow workers\`; descriptions guide selection). Otherwise compose a raw pin explicitly: slugs come from \`prism workflow models\`, and a raw \`worker: { worker, model, ... }\` is written into the workflow source by the authoring agent — never applied at run time. An unpinned worker omits the harness \`--model\` flag, so the user's harness default stays in force.
+
+Place a task by where its code must run as well as by cost: \`amp-orb\` for isolated work in a hosted orb on a project checkout (results return as JSON; code returns only as a pushed branch), \`amp-runner\` for work in an operator machine's own checkout. Pin those targets in named workers (\`project\` for an orb, \`runnerId\` + \`runnerDir\` for a runner) so tasks select them by description.
 `;

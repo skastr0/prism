@@ -132,6 +132,25 @@ Also test the no-files branch with \`{ "inspect": { "files": [] } }\`. Use separ
 
 Pick a named worker by its description — what it is for, its strengths, its limits — and state the goal in the prompt. List the current names and configurations with \`prism workflow workers\`. Descriptions guide selection; they are never task instructions. Do not copy a worker description into a prompt, and do not re-derive harness or model choices the catalog already made. Multiple names may share one harness.
 
+## Orbs and runners (remote executors)
+
+\`amp-orb\` runs a task in a fresh hosted Amp orb on a project's own checkout; \`amp-runner\` runs it on an operator's \`amp --no-tui --runner-id <id>\` runner, in that machine's checkout. Choose by where the code must run, not by model. An orb returns only its final JSON: to bring code back, the prompt must tell it to commit and push a branch and return the branch or PR URL. A runner's edits land in the runner's working tree directly.
+
+Named workers are the primary way to use them: one catalog entry pins the target once, and its description says what it is for. Install with \`prism workflow workers install ./workers.json\`:
+
+\`\`\`json
+{ "version": 1, "workers": [
+  { "name": "orb-scout", "description": "Bounded repo inspection in a cheap hosted orb on the prism project.",
+    "config": { "worker": "amp-orb", "project": "acme-ns/prism", "size": "a1.tiny", "model": "low" } },
+  { "name": "macbook-builder", "description": "Heavy build and test runs on the operator's MacBook checkout.",
+    "config": { "worker": "amp-runner", "runnerId": "macbook", "runnerDir": "/Users/me/Projects/prism" } }
+] }
+\`\`\`
+
+- **Orb project.** Run \`prism workflow refresh-harness-types\`; it snapshots \`amp projects list --json\` and types \`worker.project\` against the discovered projects (namespace/name, owner/repo, or repository URL). Validation rejects an unknown project and lists the known ones. \`size\` picks the orb (\`a1.tiny\` … \`a1.3xlarge\`); omit it for the project default. A paused orb costs nothing.
+- **Runner.** \`runnerId\` is the id the operator started the runner with; \`amp runner list\` shows the runners on this machine. Set \`runnerDir\` (absolute) to the checkout it should work in; omit it for the runner's start directory. An offline runner fails before any spend.
+- Both accept only \`permission: "legacy"\` (the default): the remote machine's Amp settings govern tools. Repairs continue the same Amp thread.
+
 ## Raw configurations (escape hatch)
 
 Named workers are the primary path. When none fits, compose a raw \`worker: { worker, model, effort, permission, ... }\` instead. Discover live slugs and per-model effort sets with \`prism workflow skill --models\`; fixed values come from Prism's capability registry: Claude Code \`low|medium|high|xhigh|max\`, Antigravity CLI \`low|medium|high\`, Hermes \`none|minimal|low|medium|high|xhigh|max|ultra\`, Kimi Code \`low|medium|high|xhigh|max\`, OMP \`off|minimal|low|medium|high|xhigh|max|auto\`. Kimi Code receives effort through the undocumented \`KIMI_MODEL_THINKING_EFFORT\` environment variable set only on the spawned worker process. If the selected model's row in \`<KIMI_CODE_HOME>/config.toml\` declares \`support_efforts\`, validation checks the value against that subset. A task's \`worker.effort\` overrides effort on its modelspace target. Codex and OMP modelspace targets use \`effort\`; \`variant\` is a model-selection field only and produces a one-line migration fix there. Devin, Cursor, and OpenCode do not accept \`worker.effort\`; their model slugs or model-selection settings carry their own meaning. Never invent a slug and never write \`model: ""\` — omit the field so the harness default stays.

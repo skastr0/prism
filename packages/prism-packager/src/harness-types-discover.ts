@@ -16,6 +16,7 @@ import {
   type RefreshHarnessTypesResult,
 } from "./harness-types.js";
 import type { WorkflowWorkerId } from "./workflows.js";
+import { parseAmpProjectsList, type DiscoveredAmpProjects } from "./amp-projects.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -632,14 +633,33 @@ export const discoverWorkflowHarnessModels = async (
   ];
 };
 
+/** Amp orb projects from `amp projects list --json`. Fail-soft like model discovery. */
+export const discoverAmpProjects = async (
+  options: DiscoverHarnessTypesOptions = {},
+): Promise<DiscoveredAmpProjects> => {
+  const run = options.runCommand ?? defaultRunCommand;
+  const stdout = await run("amp", ["projects", "list", "--json"]);
+  if (!stdout.trim()) return { projects: [], source: "empty", error: "amp projects list --json produced no output" };
+  const parsed = parseAmpProjectsList(stdout);
+  return {
+    projects: parsed.projects,
+    source: parsed.projects.length > 0 ? "command" : "empty",
+    ...(parsed.error !== undefined ? { error: parsed.error } : {}),
+  };
+};
+
 export const refreshHarnessTypes = async (
   prismHome: string,
   options: DiscoverHarnessTypesOptions = {},
 ): Promise<RefreshHarnessTypesResult> => {
-  const harnesses = await discoverWorkflowHarnessModels(options);
+  const [harnesses, ampProjects] = await Promise.all([
+    discoverWorkflowHarnessModels(options),
+    discoverAmpProjects(options),
+  ]);
   const snapshot: HarnessTypesSnapshot = {
     generatedAt: new Date().toISOString(),
     harnesses,
+    ampProjects,
   };
   return writeHarnessTypesSnapshot(prismHome, snapshot);
 };
@@ -654,6 +674,12 @@ export const renderHarnessTypesRefreshHuman = (result: RefreshHarnessTypesResult
     const count = entry.models.length;
     const note = entry.error !== undefined && count === 0 ? ` — ${entry.error}` : "";
     lines.push(`  ${entry.harness}: ${String(count)} model${count === 1 ? "" : "s"} (${entry.source})${note}`);
+  }
+  const projects = result.snapshot.ampProjects;
+  if (projects !== undefined) {
+    const count = projects.projects.length;
+    const note = projects.error !== undefined && count === 0 ? ` — ${projects.error}` : "";
+    lines.push(`  amp-orb: ${String(count)} project${count === 1 ? "" : "s"} (${projects.source})${note}`);
   }
   return lines.join("\n");
 };

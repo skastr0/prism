@@ -10,6 +10,7 @@ import { LOWERER_CAPABILITIES, workflowWorkerHarnessIds } from "./lowerer-capabi
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prismStateDir } from "./prism-home.js";
+import { ampOrbProjectRefs, type DiscoveredAmpProjects } from "./amp-projects.js";
 import type { WorkflowWorkerId } from "./workflows.js";
 
 export const HARNESS_TYPES_DIRNAME = "harness-types";
@@ -49,6 +50,8 @@ export interface DiscoveredHarnessModels {
 export interface HarnessTypesSnapshot {
   readonly generatedAt: string;
   readonly harnesses: readonly DiscoveredHarnessModels[];
+  /** `amp projects list --json`: types and validates `amp-orb` `worker.project`. */
+  readonly ampProjects?: DiscoveredAmpProjects;
 }
 
 export interface RefreshHarnessTypesResult {
@@ -59,6 +62,8 @@ export interface RefreshHarnessTypesResult {
 
 const CAMEL_BY_HARNESS: Readonly<Record<WorkflowWorkerId, string>> = {
   "amp-code": "ampCode",
+  "amp-orb": "ampOrb",
+  "amp-runner": "ampRunner",
   "antigravity-cli": "antigravity",
   "claude-code": "claudeCode",
   "codex-cli": "codex",
@@ -173,6 +178,14 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
     }
   }
 
+  const projectRefs = ampOrbProjectRefs(snapshot.ampProjects);
+  if (projectRefs.length > 0) {
+    blocks.push(`${constArray("ampOrbProjects", projectRefs)}\n${unionType("AmpOrbProject", "ampOrbProjects")}\n`);
+  }
+  const projectAugment = projectRefs.length > 0
+    ? `\n  interface WorkflowHarnessProjectMap {\n    "amp-orb": ${stringUnion(projectRefs)};\n  }`
+    : "";
+
   const catalogAugment = catalogAugmentLines.length > 0
     ? `\n  interface WorkflowHarnessCatalogModelMap {\n${catalogAugmentLines.join("\n")}\n  }`
     : "";
@@ -188,7 +201,8 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
  * on \`prism\` so \`defineTask({ worker: { worker, model } })\` is typed
  * per harness without a compiled plugin. Catalog-backed effort values
  * narrow \`worker.effort\`; fixed CLI effort sets come from Prism's capability
- * registry. Amp catalog slugs narrow \`worker.catalogModel\`.
+ * registry. Amp catalog slugs narrow \`worker.catalogModel\`; discovered Amp
+ * projects narrow amp-orb \`worker.project\`.
  * Omit \`worker.model\` to keep the harness default. Pin only from
  * \`prism workflow models --offer\` / stated preferences.
  */
@@ -203,7 +217,7 @@ ${mapLines.join("\n")}
 declare module "prism" {
   interface WorkflowHarnessModelMap {
 ${augmentLines.join("\n")}
-  }${catalogAugment}${effortAugment}
+  }${catalogAugment}${effortAugment}${projectAugment}
 }
 `;
 };

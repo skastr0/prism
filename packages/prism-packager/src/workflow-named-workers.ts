@@ -1,5 +1,5 @@
 /** Portable, user-curated worker configurations. Runtime reads installed truth only. */
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { Data, Effect, Schema } from "effect";
 import { exists, expandPath, readFile, writeFile } from "./fs.js";
 import { workflowWorkerHarnessIds } from "./lowerer-capabilities.js";
@@ -7,8 +7,10 @@ import type { HarnessTypesSnapshot } from "./harness-types.js";
 import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 import { legacyReasoningVariantError, validateWorkflowEffort, workflowEffortValues } from "./workflow-effort.js";
 import { validateKimiWorkflowEffort } from "./workflow-kimi-effort.js";
-import { assertWorkflowWorkerPermission } from "./workflow-workers.js";
+import { assertWorkflowWorkerPermission, defaultWorkflowWorkerPermission } from "./workflow-workers.js";
 import { resolveAmpCatalogPinPlan } from "./workflow-amp-worker.js";
+import { validateAmpOrbProject } from "./amp-projects.js";
+import { AMP_ORB_SIZES, AMP_THREAD_VISIBILITIES } from "./workflows.js";
 import type { WorkflowTaskWorkerOptions, WorkflowWorkerId } from "./workflows.js";
 
 const NonBlank = Schema.String.check(Schema.makeFilter((s) => s.trim().length > 0 || "Must not be blank"));
@@ -63,6 +65,23 @@ const workerConfigSchema = (snapshot?: HarnessTypesSnapshot) => Schema.Union(wor
         permission: Schema.optionalKey(Schema.Literals(["legacy", "permissive", "full-access", "sandbox-workspace-write"])) });
     case "devin":
       return Schema.Struct({ ...commonConfig, effort: effortField(worker, snapshot), worker: Schema.Literal(worker), permission: toolsPermission });
+    case "amp-orb":
+      // Remote executor: no per-invocation permission override reaches the
+      // remote amp process, so only `legacy` decodes; effort fails through
+      // effortField (the row declares no effort capability).
+      return Schema.Struct({ ...commonConfig, effort: effortField(worker, snapshot), worker: Schema.Literal(worker),
+        permission: Schema.optionalKey(Schema.Literals(["legacy"])),
+        project: NonBlank, size: Schema.optionalKey(Schema.Literals(AMP_ORB_SIZES)),
+        visibility: Schema.optionalKey(Schema.Literals(AMP_THREAD_VISIBILITIES)),
+        labels: Schema.optionalKey(Schema.Array(NonBlank)) });
+    case "amp-runner":
+      return Schema.Struct({ ...commonConfig, effort: effortField(worker, snapshot), worker: Schema.Literal(worker),
+        permission: Schema.optionalKey(Schema.Literals(["legacy"])),
+        runnerId: NonBlank,
+        runnerDir: Schema.optionalKey(Schema.String.check(Schema.makeFilter((value) =>
+          isAbsolute(value) || "Must be an absolute directory the runner serves (--runner-dir)"))),
+        catalogModel: Schema.optionalKey(NonBlank),
+        labels: Schema.optionalKey(Schema.Array(NonBlank)) });
     default:
       return Schema.Struct({ ...commonConfig, effort: effortField(worker, snapshot), worker: Schema.Literal(worker), permission: dialPermission });
   }
@@ -145,7 +164,7 @@ export const decodeWorkflowWorkerCatalog = (
   for (const { name, config } of catalog.workers) {
     if (names.has(name)) throw new Error(`Duplicate named worker ${JSON.stringify(name)}. Give each worker a unique name.`);
     names.add(name);
-    assertWorkflowWorkerPermission(config.worker, config.permission ?? "permissive", config.restrictedTools);
+    assertWorkflowWorkerPermission(config.worker, config.permission ?? defaultWorkflowWorkerPermission(config.worker), config.restrictedTools);
     const modelRef = typeof config.model === "object" ? config.model : undefined;
     if (modelRef?.targets !== undefined) {
       const target = modelRef.targets[config.worker];
@@ -180,6 +199,10 @@ export const decodeWorkflowWorkerCatalog = (
     if (config.worker === "kimi-code") {
       const kimiEffortError = validateKimiWorkflowEffort({ model, effort, kimiHome: options.kimiCodeHome });
       if (kimiEffortError !== undefined) throw new Error(kimiEffortError);
+    }
+    if (config.worker === "amp-orb") {
+      const projectError = validateAmpOrbProject(config.project, options.effortSnapshot?.ampProjects);
+      if (projectError !== undefined) throw new Error(`Named worker ${JSON.stringify(name)}: ${projectError}`);
     }
     if (config.worker === "amp-code") {
       resolveAmpCatalogPinPlan({

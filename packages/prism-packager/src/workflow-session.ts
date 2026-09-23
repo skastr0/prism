@@ -3,6 +3,8 @@ import { workflowWorkerHarnessIds } from "./lowerer-capabilities.js";
 
 export const WorkflowContinuationAdapterIdSchema = Schema.Literals([
   "amp-code",
+  "amp-orb",
+  "amp-runner",
   "antigravity-cli",
   "claude-code",
   "codex-cli",
@@ -60,6 +62,8 @@ export type WorkflowHarnessContinuationSupport = typeof WorkflowHarnessContinuat
 
 export const workflowContinuationAdapterByWorker = {
   "amp-code": "amp-code",
+  "amp-orb": "amp-orb",
+  "amp-runner": "amp-runner",
   "antigravity-cli": "antigravity-cli",
   "claude-code": "claude-code",
   "codex-cli": "codex-cli",
@@ -89,6 +93,24 @@ export const workflowHarnessContinuationSupport = {
     sessionIdField: "sessionId",
     continueCommand: "amp threads continue <sessionId> --execute <prompt>",
     capture: "stream-json session_id, local thread metadata, or threads list/search recovery",
+  },
+  "amp-orb": {
+    adapter: "amp-orb",
+    workflowWorker: true,
+    stableSessionIds: true,
+    exactSameSessionContinuation: true,
+    sessionIdField: "sessionId",
+    continueCommand: "amp threads continue <sessionId> --orb-execute --execute <prompt> --stream-json",
+    capture: "stream-json session_id (the orb thread id); never list readback",
+  },
+  "amp-runner": {
+    adapter: "amp-runner",
+    workflowWorker: true,
+    stableSessionIds: true,
+    exactSameSessionContinuation: true,
+    sessionIdField: "sessionId",
+    continueCommand: "amp threads continue <sessionId> --orb-execute --execute <prompt> --stream-json",
+    capture: "stream-json session_id (the runner thread id); never list readback",
   },
   "antigravity-cli": {
     adapter: "antigravity-cli",

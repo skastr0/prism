@@ -79,6 +79,29 @@ describe("discoverAmpRunners", () => {
     expect(discovered.runners).toEqual([]);
     expect(calls[1]).toEqual(["threads", "delete", "T-timed-out"]);
   });
+
+  test("the real runner shape: an exec error whose .stdout holds the partial transcript", async () => {
+    // Mirrors defaultAmpTurnRunner: execFileAsync rejects with an error whose
+    // .stdout carries what the process printed before the timeout, so the
+    // sentinel reason and the partial transcript must both reach the parser.
+    const calls: Array<readonly string[]> = [];
+    const partial = [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "T-real-timeout", cwd: "/x" }),
+    ].join("\n");
+    const { discovered, failedExplicit } = await discoverAmpRunners({
+      runCommand: async (command, args) => {
+        calls.push(args);
+        if (args[0] === "-x") {
+          const error = Object.assign(new Error("spawn amp ETIMEDOUT"), { stdout: partial, stderr: "" });
+          throw error;
+        }
+        return "ok\n";
+      },
+    });
+    expect(failedExplicit).toContain("ETIMEDOUT");
+    expect(discovered.runners).toEqual([]);
+    expect(calls[1]).toEqual(["threads", "delete", "T-real-timeout"]);
+  });
 });
 
 describe("refresh harness-types runner preservation", () => {

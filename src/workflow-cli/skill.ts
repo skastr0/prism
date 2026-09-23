@@ -148,7 +148,7 @@ Named workers are the primary way to use them: one catalog entry pins the target
 \`\`\`
 
 - **Orb project.** Run \`prism workflow refresh-harness-types\`; it snapshots \`amp projects list --json\` and types \`worker.project\` against the discovered projects (namespace/name, owner/repo, or repository URL). Validation rejects an unknown project and lists the known ones. \`size\` picks the orb (\`a1.tiny\` … \`a1.3xlarge\`); omit it for the project default. A paused orb costs nothing.
-- **Runner.** \`runnerId\` is the id the operator started the runner with; \`amp runner list\` shows the runners on this machine. Set \`runnerDir\` (absolute) to the checkout it should work in; omit it for the runner's start directory. An offline runner fails before any spend.
+- **Runner.** \`runnerId\` is the id the operator started the runner with. To discover the account-wide runners (every machine, not just this one) run \`prism workflow refresh-harness-types --discover-amp-runners\`: it spends one small Amp turn calling Amp's \`list_runners\` tool, snapshots each runner's id, host, and served directories, and deletes the thread it created. A plain refresh keeps a previously captured snapshot. With a snapshot, validation fails closed on an unknown runner id (it lists the live ones) and on a \`runnerDir\` that runner does not serve (it lists the served directories); without one, both stay plain strings. Offline runners fail at Amp spawn time.
 - Both accept only \`permission: "legacy"\` (the default): the remote machine's Amp settings govern tools. Repairs continue the same Amp thread.
 
 ## Raw configurations (escape hatch)
@@ -204,7 +204,7 @@ A workflow may declare \`schedule: { cron, timezone, overlap, missedRuns }\`. **
 | \`workers export\` | Print the installed catalog as portable JSON (nothing is written to the source files) |
 | \`models\` | Live harness slugs for raw pins. \`--offer\` samples; you combine pins explicitly |
 | \`catalog\` | Workers + slug counts. \`--query\` searches models when no plugin |
-| \`refresh-harness-types\` | Write \`prism/harnesses\` unions from installed CLIs |
+| \`refresh-harness-types\` | Write \`prism/harnesses\` unions from installed CLIs. \`--discover-amp-runners\` also snapshots the account-wide Amp runners (one small Amp turn) |
 | \`typecheck <file>\` | Generated tsconfig + shipped declarations |
 | \`validate <file>\` | Every probed pin: worker, model, catalog, effort, permission |
 | \`run <file>\` | Dispatch. Add \`--mock-output\` to rehearse |

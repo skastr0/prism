@@ -667,7 +667,8 @@ export const discoverAmpProjects = async (
  * Runner discovery turns can take a couple of minutes (an agent turn, not a
  * CLI list), so they get their own runner with a longer timeout than the
  * 8s `defaultRunCommand`. On failure the reason is surfaced through the
- * `AMP_TURN_ERROR:` sentinel instead of being swallowed.
+ * `AMP_TURN_ERROR:` sentinel; the untruncated partial stdout is appended on
+ * its own line so the init line's session id survives for thread cleanup.
  */
 const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) => {
   try {
@@ -679,10 +680,15 @@ const defaultAmpTurnRunner: HarnessTypesCommandRunner = async (command, args) =>
     });
     return typeof stdout === "string" ? stdout : "";
   } catch (error) {
-    const cause = error as { message?: string; stderr?: string };
+    const cause = error as { message?: string; stderr?: string; stdout?: string };
     const detail = [cause.message ?? "", typeof cause.stderr === "string" ? cause.stderr.trim() : ""]
-      .filter((part) => part.length > 0).join(" — ");
-    return `${AMP_TURN_ERROR_PREFIX} ${detail.slice(0, 500)}`;
+      .filter((part) => part.length > 0).join(" — ").slice(0, 500);
+    // Only the reason is truncated; the partial transcript after it stays
+    // whole so parseAmpRunnersStreamJson can find the thread to delete.
+    const partial = typeof cause.stdout === "string" ? cause.stdout : "";
+    return partial.length > 0
+      ? `${AMP_TURN_ERROR_PREFIX} ${detail}\n${partial}`
+      : `${AMP_TURN_ERROR_PREFIX} ${detail}`;
   }
 };
 
@@ -698,7 +704,20 @@ export const discoverAmpRunners = async (
   options: DiscoverHarnessTypesOptions = {},
 ): Promise<{ readonly discovered: DiscoveredAmpRunners; readonly failedExplicit?: string }> => {
   const run = options.runCommand ?? defaultAmpTurnRunner;
-  const stdout = await run("amp", ["-x", AMP_RUNNERS_PROMPT, "--stream-json", "--mode", "low"]);
+  let stdout: string;
+  try {
+    stdout = await run("amp", ["-x", AMP_RUNNERS_PROMPT, "--stream-json", "--mode", "low"]);
+  } catch (error) {
+    // The runner contract is total: a rejecting runner is handled like a
+    // failed turn, with its .stdout (the partial transcript, session id
+    // included) recovered below for thread deletion.
+    const cause = error as { message?: string; stdout?: string };
+    const detail = (typeof cause.message === "string" ? cause.message : "unknown error").slice(0, 500);
+    const partial = typeof cause.stdout === "string" ? cause.stdout : "";
+    stdout = partial.length > 0
+      ? `${AMP_TURN_ERROR_PREFIX} ${detail}\n${partial}`
+      : `${AMP_TURN_ERROR_PREFIX} ${detail}`;
+  }
   const parsed = parseAmpRunnersStreamJson(stdout);
   if (parsed.sessionId !== undefined) {
     await run("amp", ["threads", "delete", parsed.sessionId]);

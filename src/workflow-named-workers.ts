@@ -9,6 +9,7 @@ import { legacyReasoningVariantError, validateWorkflowEffort, workflowEffortValu
 import { validateKimiWorkflowEffort } from "./workflow-kimi-effort.js";
 import { assertWorkflowWorkerPermission, defaultWorkflowWorkerPermission } from "./workflow-workers.js";
 import { resolveAmpCatalogPinPlan } from "./workflow-amp-worker.js";
+import { validateAmpOrbProject } from "./amp-projects.js";
 import { AMP_ORB_SIZES, AMP_THREAD_VISIBILITIES } from "./workflows.js";
 import type { WorkflowTaskWorkerOptions, WorkflowWorkerId } from "./workflows.js";
 
@@ -198,6 +199,10 @@ export const decodeWorkflowWorkerCatalog = (
     if (config.worker === "kimi-code") {
       const kimiEffortError = validateKimiWorkflowEffort({ model, effort, kimiHome: options.kimiCodeHome });
       if (kimiEffortError !== undefined) throw new Error(kimiEffortError);
+    }
+    if (config.worker === "amp-orb") {
+      const projectError = validateAmpOrbProject(config.project, options.effortSnapshot?.ampProjects);
+      if (projectError !== undefined) throw new Error(`Named worker ${JSON.stringify(name)}: ${projectError}`);
     }
     if (config.worker === "amp-code") {
       resolveAmpCatalogPinPlan({

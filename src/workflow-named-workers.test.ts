@@ -220,6 +220,25 @@ describe("named workflow worker catalogs", () => {
     })).toThrow(/catalogModel|excess|unexpected/iu);
   });
 
+  test("amp-orb named workers fail closed on a project the snapshot does not list", () => {
+    const effortSnapshot: HarnessTypesSnapshot = {
+      generatedAt: "2026-09-22T00:00:00.000Z",
+      harnesses: [],
+      ampProjects: {
+        source: "command",
+        projects: [{ id: "p1", namespace: "acme-ns", name: "prism", repositoryURL: "https://github.com/acme/prism" }],
+      },
+    };
+    expect(decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-scout", { worker: "amp-orb", project: "acme/prism" })],
+    }, { effortSnapshot }).workers[0]?.config).toEqual({ worker: "amp-orb", project: "acme/prism" });
+    expect(() => decodeWorkflowWorkerCatalog({
+      version: 1,
+      workers: [worker("orb-scout", { worker: "amp-orb", project: "acme-ns/gone" })],
+    }, { effortSnapshot })).toThrow(/Named worker "orb-scout": Unknown Amp project "acme-ns\/gone".*Known projects .*acme-ns\/prism/s);
+  });
+
   test("Kimi named workers accept fixed effort values and narrow them from config", async () => {
     const home = await tempRoot();
     await writeFile(join(home, "config.toml"), `

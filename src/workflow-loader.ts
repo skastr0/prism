@@ -13,6 +13,7 @@ import {
 } from "./workflow-validate-dynamic.js";
 import { ampWorkerPins, validateAmpCatalogPins } from "./workflow-amp-worker.js";
 import { ampRemoteTargetOf, resolveAmpRemotePinPlan } from "./workflow-amp-remote-worker.js";
+import { validateAmpOrbProject } from "./amp-projects.js";
 import { assertOmpWorkflowModel } from "./workflow-omp-worker.js";
 import { loadHarnessTypesSnapshot } from "./workflow-models.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
@@ -145,6 +146,10 @@ const resolveTaskModelRow = (
     // the dispatch path raises, so authors see it before any spend.
     try {
       const target = ampRemoteTargetOf(worker, task);
+      if (target.worker === "amp-orb") {
+        const projectError = validateAmpOrbProject(target.project, snapshot?.ampProjects);
+        if (projectError !== undefined) throw new Error(projectError);
+      }
       resolveAmpRemotePinPlan({
         target,
         cwd: cwd ?? process.cwd(),

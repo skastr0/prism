@@ -10,6 +10,7 @@ import type { DesiredFile } from "./sync/desired.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 import { loadWorkflowFile, validateWorkflowFile, WorkflowLoadError, WorkflowValidationError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
+import { writeHarnessTypesSnapshot } from "./harness-types.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 
@@ -715,6 +716,65 @@ export default defineWorkflow({ name: "runner-ok", tasks: [build] });
     const result = await validateWorkflowFile(file);
     expect(result.modelResolution[0]?.error).toBeUndefined();
     expect(result.modelResolution[0]?.worker).toBe("amp-runner");
+  });
+
+  const orbProjectWorkflow = (project: string): string => `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const output = Schema.Struct({ summary: Schema.String });
+const scout = defineTask({
+  id: "scout",
+  prompt: "Scout the repo.",
+  output,
+  worker: { worker: "amp-orb", project: ${JSON.stringify(project)} } as any,
+});
+
+export default defineWorkflow({ name: "orb-project", tasks: [scout] });
+`;
+
+  const writeProjectSnapshot = (prismHome: string): void => {
+    writeHarnessTypesSnapshot(prismHome, {
+      generatedAt: "2026-09-22T00:00:00.000Z",
+      harnesses: [],
+      ampProjects: {
+        source: "command",
+        projects: [
+          { id: "p1", namespace: "acme-ns", name: "prism", repositoryURL: "https://github.com/acme/prism" },
+          { id: "p2", namespace: "acme-ns", name: "orb-setup", repositoryURL: "https://github.com/acme/orb-setup" },
+        ],
+      },
+    });
+  };
+
+  test("validate fails closed on an unknown amp-orb project, listing the known ones", async () => {
+    const root = await createTempRoot();
+    const prismHome = join(root, ".prism-home");
+    writeProjectSnapshot(prismHome);
+    const file = join(root, "workflow.ts");
+    await writeFile(file, orbProjectWorkflow("acme-ns/missing"));
+
+    const validation = validateWorkflowFile(file, { prismHome, skipTypecheck: true, cwd: root });
+    await expect(validation).rejects.toThrow(WorkflowValidationError);
+    await expect(validateWorkflowFile(file, { prismHome, skipTypecheck: true, cwd: root }))
+      .rejects.toThrow(/Unknown Amp project "acme-ns\/missing".*Known projects .*acme-ns\/orb-setup, acme-ns\/prism/s);
+  });
+
+  test("validate accepts every documented project form from the snapshot, and any project without one", async () => {
+    const root = await createTempRoot();
+    const prismHome = join(root, ".prism-home");
+    writeProjectSnapshot(prismHome);
+    for (const project of ["acme-ns/prism", "acme/prism", "https://github.com/acme/prism"]) {
+      const file = join(root, "workflow.ts");
+      await writeFile(file, orbProjectWorkflow(project));
+      const result = await validateWorkflowFile(file, { prismHome, skipTypecheck: true, cwd: root });
+      expect(result.modelResolution[0]?.error).toBeUndefined();
+    }
+    const bareHome = join(root, ".prism-home-bare");
+    const file = join(root, "workflow.ts");
+    await writeFile(file, orbProjectWorkflow("whatever/project"));
+    const result = await validateWorkflowFile(file, { prismHome: bareHome, skipTypecheck: true, cwd: root });
+    expect(result.modelResolution[0]?.error).toBeUndefined();
   });
 
   test("validate fails naming task and worker when an explicit model profile has no target for the declared worker (WDX-009)", async () => {

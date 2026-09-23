@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prismStateDir } from "./prism-home.js";
 import { ampOrbProjectRefs, type DiscoveredAmpProjects } from "./amp-projects.js";
+import { ampRunnerIds, type DiscoveredAmpRunners } from "./amp-runners.js";
 import type { WorkflowWorkerId } from "./workflows.js";
 
 export const HARNESS_TYPES_DIRNAME = "harness-types";
@@ -52,6 +53,8 @@ export interface HarnessTypesSnapshot {
   readonly harnesses: readonly DiscoveredHarnessModels[];
   /** `amp projects list --json`: types and validates `amp-orb` `worker.project`. */
   readonly ampProjects?: DiscoveredAmpProjects;
+  /** `list_runners` (one-shot Amp turn): types and validates `amp-runner` `worker.runnerId`/`runnerDir`. */
+  readonly ampRunners?: DiscoveredAmpRunners;
 }
 
 export interface RefreshHarnessTypesResult {
@@ -186,6 +189,22 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
     ? `\n  interface WorkflowHarnessProjectMap {\n    "amp-orb": ${stringUnion(projectRefs)};\n  }`
     : "";
 
+  const runners = snapshot.ampRunners?.runners ?? [];
+  const runnerDirLines = runners.map((runner) => {
+    const dirs = [...new Set(runner.directories.map((directory) => directory.path))]
+      .filter((path) => path.length > 0)
+      .sort((left, right) => left.localeCompare(right));
+    return `    ${JSON.stringify(runner.runnerId)}: ${dirs.length > 0 ? stringUnion(dirs) : "never"};`;
+  });
+  if (runners.length > 0) {
+    blocks.push(
+      `${constArray("ampRunnerIds", ampRunnerIds(snapshot.ampRunners))}\n${unionType("AmpRunnerId", "ampRunnerIds")}\n`,
+    );
+  }
+  const runnerAugment = runners.length > 0
+    ? `\n  interface WorkflowHarnessRunnerDirMap {\n${runnerDirLines.join("\n")}\n  }`
+    : "";
+
   const catalogAugment = catalogAugmentLines.length > 0
     ? `\n  interface WorkflowHarnessCatalogModelMap {\n${catalogAugmentLines.join("\n")}\n  }`
     : "";
@@ -202,7 +221,8 @@ export const renderHarnessModelsModule = (snapshot: HarnessTypesSnapshot): strin
  * per harness without a compiled plugin. Catalog-backed effort values
  * narrow \`worker.effort\`; fixed CLI effort sets come from Prism's capability
  * registry. Amp catalog slugs narrow \`worker.catalogModel\`; discovered Amp
- * projects narrow amp-orb \`worker.project\`.
+ * projects narrow amp-orb \`worker.project\`; discovered Amp runners narrow
+ * amp-runner \`worker.runnerId\` and its \`runnerDir\`.
  * Omit \`worker.model\` to keep the harness default. Pin only from
  * \`prism workflow models --offer\` / stated preferences.
  */
@@ -217,7 +237,7 @@ ${mapLines.join("\n")}
 declare module "prism" {
   interface WorkflowHarnessModelMap {
 ${augmentLines.join("\n")}
-  }${catalogAugment}${effortAugment}${projectAugment}
+  }${catalogAugment}${effortAugment}${projectAugment}${runnerAugment}
 }
 `;
 };

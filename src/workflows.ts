@@ -124,6 +124,22 @@ export interface WorkflowHarnessProjectMap {}
 export type WorkflowHarnessProject<W extends WorkflowWorkerId> =
   W extends keyof WorkflowHarnessProjectMap ? WorkflowHarnessProjectMap[W] : string;
 
+/**
+ * Discovered Amp runners (`list_runners`, captured by
+ * `refresh-harness-types --discover-amp-runners`). Empty in core; refresh
+ * augments one key per runner whose value is the union of the directories
+ * that runner serves.
+ */
+export interface WorkflowHarnessRunnerDirMap {}
+
+/** Live runner ids from the snapshot; a plain string before the first runner snapshot. */
+export type WorkflowHarnessRunnerId =
+  keyof WorkflowHarnessRunnerDirMap extends never ? string : keyof WorkflowHarnessRunnerDirMap;
+
+/** Directories served by runner W; `never` when that runner serves none. */
+export type WorkflowHarnessRunnerDir<W extends WorkflowWorkerId> =
+  W extends keyof WorkflowHarnessRunnerDirMap ? WorkflowHarnessRunnerDirMap[W] : string;
+
 export type WorkflowHarnessModel<W extends WorkflowWorkerId> =
   | (W extends keyof WorkflowHarnessModelMap ? WorkflowHarnessModelMap[W] : string)
   | WorkflowModelProfileRef;
@@ -306,10 +322,10 @@ type WorkflowTaskWorkerOptionsFor<W extends WorkflowWorkerId> =
     : { readonly project?: never; readonly size?: never; readonly visibility?: never })
   & (W extends "amp-runner"
     ? {
-      /** Runner id from `amp --no-tui --runner-id <id>` (`--executor runner:<id>`). */
-      readonly runnerId: string;
-      /** Absolute directory the runner serves (`--runner-dir`); defaults to the runner's start directory. */
-      readonly runnerDir?: string;
+      /** Runner id from `amp --no-tui --runner-id <id>` (`--executor runner:<id>`). Narrows to live runners after `refresh-harness-types --discover-amp-runners`. */
+      readonly runnerId: WorkflowHarnessRunnerId;
+      /** Absolute directory the runner serves (`--runner-dir`); defaults to the runner's start directory. Narrows to that runner's served directories. */
+      readonly runnerDir?: WorkflowHarnessRunnerDir<W>;
     }
     : { readonly runnerId?: never; readonly runnerDir?: never });
 

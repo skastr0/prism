@@ -148,6 +148,15 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     fix: "manual",
     description: "Prism-owned file cannot be read.",
   },
+
+  // skill.untracked
+  {
+    family: "skill.untracked",
+    code: "skill.untracked",
+    severity: "error",
+    fix: "manual",
+    description: "A harness skill directory is owned by neither Prism's ledger nor a declared skill pointer, or a declared pointer has not been refreshed yet.",
+  },
   {
     family: "snapshot.disk-drift",
     code: "snapshot.owned-drift",

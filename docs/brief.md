@@ -2,7 +2,7 @@
 
 updated: 2026-09-24 · version: 0.8.0 · maturity: usable-with-gaps
 
-Maturity: 22 npm releases, green CI, and my own setup runs on it (85 plugins, 21 generated Claude Code plugins); but I'm the only user I can show, the README has drifted from the code, and Cursor and Pi are compile-checked only.
+Maturity: 22 npm releases, green CI, and my own setup runs on it (85 plugins, 21 generated Claude Code plugins); but I'm the only user I can show, and Cursor and Pi are compile-checked only.
 
 ## One line
 
@@ -158,7 +158,7 @@ Prebuilt binaries for darwin-arm64, darwin-x64, linux-arm64, linux-x64 (`package
 ## Gaps
 
 - **Codex tasks fail outside a Git repo.** Running run 4 from a plain directory: `❌ Workflow run failed: codex exited with 1: Reading additional input from stdin... Not inside a trusted directory and --skip-git-repo-check was not specified.` It passed after `git init`.
-- **README has drifted from the code.** It says "fourteen", "fifteen", and "Eleven" harnesses in different places (`README.md:27,56,74,101,346`); the adapter list repeats `opencode`; it documents `TraitSource`, `OrbitSource`, and `ToolspaceSource`, which `src/index.ts` no longer exports and `src/static-gates.test.ts:127` bans. `examples/prism-harness-qa/README.md` still says tools ship as a generated MCP server; tools are CLI-only now.
+- **Example README is stale.** `examples/prism-harness-qa/README.md` still says tools ship as a generated MCP server and lists orbits and traits; tools are CLI-only and those contracts are gone. (The main README was rebuilt from this brief on 2026-09-24.)
 - **Two targets are compile-checked only.** Cursor and Pi output is pinned by golden tests, never dispatched live. Antigravity and OMP are live-dispatched but their smoke fixtures are pending. The matrix predates `amp-runner` (added in 0.8.0).
 - **Per-harness holes, by design:** Kimi has no project scope; Amp has no `session.end` hook; Hermes gets skills and tools but no agents or hooks; Devin gets no tools yet (`docs/lowerer-capability-matrix.md`).
 - **First refresh churns a little.** On an empty `HOME`, one refresh backed up `CLAUDE.md` and `AGENTS.md` it had created moments earlier, and rewrote `generated/models.ts` once per harness (`repair … (source-changed)`). The second run was clean.

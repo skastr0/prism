@@ -2,13 +2,12 @@
   <img src="assets/brand/prism-icon.png" alt="Prism" width="160" height="160" />
 </p>
 
-<h1 align="center">Prism</h1>
+<h1 align="center">prism</h1>
 
-<p align="center"><strong>Author your agent stack once. Refract it into every harness.</strong></p>
+<p align="center"><strong>prism compiles one agent source into every coding harness's native config.</strong></p>
 
 <p align="center">
-  Agents, skills, tools, hooks, and typed multi-model workflows — written once in TypeScript,<br />
-  compiled native for <strong>Claude Code, Codex, OpenCode, Grok, Kimi, Amp, Cursor</strong> and seven more.
+  Agents, skills, tools, and hooks written once, installed native in Claude Code, Codex, OpenCode, Grok, Kimi, Amp, Cursor, Pi, and more.
 </p>
 
 <p align="center">
@@ -17,135 +16,159 @@
   <a href="https://www.npmjs.com/package/@skastr0/prism">npm</a>
 </p>
 
----
-
-## Table of contents
-
-- [The pain](#the-pain)
-- [What Prism does](#what-prism-does)
-- [Install & quick start](#install--quick-start)
-- [One source, fourteen harnesses](#one-source-fourteen-harnesses)
-- [The authoring surface](#the-authoring-surface)
-- [Pinned third-party skills](#pinned-third-party-skills)
-- [Workflows: typed task graphs over real harnesses](#workflows-typed-task-graphs-over-real-harnesses)
-- [Stateless tools — no daemon, no MCP](#stateless-tools--no-daemon-no-mcp)
-- [Convergence: refresh, plan, doctor](#convergence-refresh-plan-doctor)
-- [Packages](#packages)
-- [Development](#development)
-- [Status](#status)
-- [Security](#security)
-- [Contributing](#contributing)
-- [License](#license)
+**Status:** usable, with gaps · v0.8.0 (2026-09-23) · macOS and Linux · formats may still change
 
 ---
 
 ## The pain
 
-You don't run one AI coding harness anymore.
+- **Every harness keeps its own copy.** You fix a skill in one place; days later a Codex session trips on the old copy in `~/.codex/skills`, and the agent spends its turn working out why.
+- **Your agent setup lives in dotfiles.** Agents, skills, and hooks spread across `~/.claude`, `~/.codex`, `~/.config/opencode`: unversioned, unreviewed, drifting apart.
+- **Several harnesses on one task means glue.** Shell scripts, copy-paste, and no typed contract on what comes back.
 
-- **Every harness speaks its own dialect** — the agent you wrote for Claude Code is a rewrite away from Codex, again for OpenCode, again for whatever ships next month
-- **Your best prompts rot in dotfiles** — agents, skills, and hooks scattered across `~/.claude`, `~/.codex`, `~/.config/opencode`, unversioned, drifting, unreviewable
-- **Multi-model work is ad hoc** — fanning one task across Claude, GPT, Grok, and Kimi means shell scripts, copy-paste, and no typed contract on what comes back
-
-## What Prism does
+## What prism does
 
 <p align="center">
-  <img src="assets/brand/prism-hero.png" alt="One amber source thread passing through an aperture plane and refracting into many distinct instrument channels" width="720" />
+  <img src="assets/brand/prism-hero.png" alt="One amber source thread passing through an aperture plane and refracting into many distinct channels" width="720" />
 </p>
 
-**Prism is a compiler.** One typed plugin source goes in; native agents, skills, tools, and hooks come out for fourteen harnesses — each artifact written in that harness's own format, converged idempotently, with drift detection and managed backups. One beam in, many channels out.
+You keep one plugin directory in Git. `prism refresh` writes each harness's own format into its own config directory, and running it again writes nothing. A managed file you edited is repaired, with a backup taken first. A file prism never wrote is refused.
 
-And because Prism knows every harness on your machine, it can also **conduct them**: Prism workflows are typed, Effect-powered task graphs that dispatch real harness workers, force schema-typed outputs, verify them with finish criteria, and persist every run in a durable SQLite ledger.
+prism can also send typed tasks to the harness CLIs you have installed, and rejects any answer that doesn't decode into the task's schema.
 
-### Why builders choose it
-
-- **One source of truth** — your whole agent stack is a TypeScript package: versioned, reviewed, tested, distributed
-- **Native output, not lowest-common-denominator** — each harness gets artifacts in its own idiom: plugin bundles for Claude Code, TS plugin APIs for OpenCode and Amp, config patches and markdown where that's the native shape
-- **Typed multi-model workflows** — `defineWorkflow` + Effect: fan a council across four model vendors, force every seat to return the same `Schema.Struct`, synthesize with a fifth
-- **Outputs you can trust** — deterministic and judge finish criteria with bounded repair loops; schema decode failures get repaired, not shipped
-- **A durable ledger** — every run in SQLite: replayable task cache, resume after a crash, span traces with OTLP export, evidence bundles
-- **Convergent by construction** — drifted files are detected and repaired with a backup taken first, stale artifacts get pruned, and backups live outside your config dirs
-- **Stateless tool runtime** — compiled tools load in-process from one CLI; no daemon, no socket, no MCP server to babysit
-
-### Is / is not
-
-| Prism **is** | Prism **is not** |
+| prism **is** | prism **is not** |
 |---|---|
-| A compiler from one typed source to fourteen native harness configs | A lowest-common-denominator wrapper API |
-| A typed workflow engine dispatching real harness CLIs | Another SDK calling raw model APIs |
-| Stateless CLI tools loaded in-process | A daemon, an MCP server, or a protocol sidecar |
-| Convergent and idempotent — refresh twice, change nothing | A dotfile templater that clobbers your config |
+| A compiler from one typed source to each harness's native format | A lowest-common-denominator wrapper |
+| A workflow runner that drives the harness CLIs you already use, with their logins | An SDK that calls model APIs |
+| Tools as a stateless CLI, loaded in-process | A daemon or an MCP server |
+| Idempotent: refresh twice, the second run writes nothing | A dotfile templater that overwrites your config |
 
-## Install & quick start
+## Quick start
 
 ```bash
 npm install -g @skastr0/prism
 ```
 
 ```bash
-# 1. Scaffold a harness-aware plugin (agents, skills, tools, hooks)
+# 1. Scaffold a plugin with an agent, a skill, and TypeScript tooling
 prism init my-standards --with-agent --with-skill --typescript
 
-# 2. Preview exactly what would be written, per harness
+# 2. Preview what would be written, per harness
 prism plan my-standards --all
 
-# 3. Converge — compile + write native artifacts for the harnesses you target
+# 3. Write it for the harnesses you use
 prism refresh my-standards --harness claude-code,codex-cli,opencode
 
-# 4. Verify state and harness config health any time
+# 4. Check state and config health
 prism doctor
 ```
 
-Explore interactively with `prism plugins <dir>` (plugin manager TUI) and validate structure with `prism validate <plugin-path>`.
+Step 3, trimmed:
 
-## One source, fifteen harnesses
-
-`prism harnesses` — supported targets, with where each one lives on disk:
-
-| Harness | ID | Global | Project |
-|---|---|---|---|
-| Claude Code | `claude-code` | `~/.claude/` | `.claude/` |
-| Codex CLI | `codex-cli` | `~/.codex/` | `.codex/` |
-| OpenCode | `opencode` | `~/.config/opencode/` | `.opencode/` |
-| Grok Build | `grok` | `~/.grok/` | `.grok/` |
-| Kimi Code | `kimi-code` | `~/.kimi-code/` | — |
-| Amp Code | `amp-code` | `~/.config/amp/` | `.agents/` |
-| Amp Orb | `amp-orb` | explicit `--root` skills checkout | — |
-| Antigravity CLI | `antigravity-cli` | `~/.gemini/antigravity-cli/` | `.agents/` |
-| Cursor | `cursor` | `~/.cursor/` | `.cursor/` |
-| Pi | `pi` | `~/.pi/agent/` | `.pi/` |
-| Oh My Pi | `omp` | `~/.omp/agent/` | `.omp/` |
-| Hermes | `hermes` | `~/.hermes/` | — |
-| Devin CLI | `devin` | `~/.config/devin/` | `.devin/` |
-
-Each harness has a dedicated lowerer that knows its native surface — plugin bundle, TS plugin API, markdown file, or config patch — and golden-fixture tests pin the generated output. The full support matrix, including which targets are proven live versus compile-verified, lives in [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
-
-## Pinned third-party skills
-
-A plugin may point to an upstream git skill without copying its source into the plugin. Add `skill-refs/<name>.skill-ref.json` with `name`, `source` (GitHub shorthand or git URL), a 40-character `commit`, and the in-repo `skillPath` ending in `SKILL.md`. The plugin's existing `targets.skills` decides which harnesses receive it. `prism.lock` records the commit and Prism's SHA-256 hash of every file in that skill directory.
-
-```json
-{"name":"demo","source":"owner/repo","commit":"0123456789abcdef0123456789abcdef01234567","skillPath":"skills/demo/SKILL.md"}
+```text
+📦 Refreshing plugin: my-standards v0.1.0
+🛠  Compile (claude-code, global):
+create    ~/.claude/skills/prism-generated-my-standards/agents/reviewer.md (new)
+create    ~/.claude/skills/prism-generated-my-standards/skills/example-skill/SKILL.md (new)
+🛠  Compile (opencode, global):
+create    ~/.config/opencode/agents/reviewer.md (new)
+patch     ~/.config/opencode/opencode.json [agent.reviewer.mode, agent.reviewer.model, agent.reviewer.temperature, agent.reviewer.tools]
+   codex-cli ~/.codex: create=2, patch-regions=1
+     create        ~/.codex/skills/example-skill/SKILL.md (new)
+     patch-regions ~/.codex/AGENTS.md
+✅ Done.
 ```
 
-`prism skills import-npx --into <plugin> --dry-run` previews pointers from `~/.agents/.skill-lock.json`; omit `--dry-run` to write them and their lock hashes. `prism skills update [name] --plugin <plugin>` reviews upstream commits and pins the new content. Refresh fetches a missing pinned commit into `PRISM_HOME/cache/third-party-skills`, verifies its content hash, and installs it through Prism's normal planner. A warm cache supports offline refresh. `prism doctor --prune-untracked` previews skill directories outside Prism's ledger; add `--fix` to remove them.
+Run it again:
 
-## The authoring surface
+```text
+✅ Already converged — nothing written.
+```
 
-Eight typed source contracts. Everything you author is one of these:
+`prism validate <plugin>` checks a plugin's structure before you refresh.
 
-| Contract | What it declares |
+## Drift and ownership
+
+prism tracks what it wrote. It repairs its own files and leaves yours alone.
+
+```text
+$ echo "hand edit" >> ~/.codex/prompts/test.md
+$ prism refresh my-standards --harness codex-cli
+     repair        ~/.codex/prompts/test.md (drifted)
+💾 Backups created:
+   ~/.prism/backups/20260924T072528-90hq2s/6b735ac615030cb6/prompts/test.md
+
+# a file prism never wrote is already at that path
+$ prism refresh my-standards --harness codex-cli
+⛔ Refusing to overwrite a file Prism does not manage: ~/.codex/prompts/test.md
+  hint: a file Prism has never managed already exists here with different content — delete or move it, then refresh
+```
+
+| state | where |
 |---|---|
-| `AgentSource` | An agent: identity, personality, model, traits, skills, harness targets |
-| `TraitSource` | A reusable capability grant: instructions + tool permissions agents inherit |
-| `ToolSource` | A canonical tool: Effect Schema input/output + one `handle` implementation |
-| `OrbitSource` | A phased multi-agent process: phases, orchestrator, checkpoints, evolution |
-| `HookSource` | A harness lifecycle hook: event, matcher, Effect-returning handler |
-| `ToolspaceSource` | Logical tool names mapped to harness-final names per target |
-| `ModelspaceSource` | Named model profiles resolved per harness/provider |
-| `SkillspaceSource` | Skill sets mapped per target |
+| what prism owns, per harness root | `~/.prism/state/roots/*.json` |
+| backups (never `.bak` files next to your config) | `~/.prism/backups/` |
+| settings, including backup retention | `~/.prism/config.json` |
 
-A tool is defined once, with real schemas and one implementation:
+Set `PRISM_HOME` to move all of it. Shared files such as `AGENTS.md`, `CLAUDE.md`, and `config.toml` get a fenced region; prism never takes over the whole file.
+
+## How it works
+
+```mermaid
+flowchart LR
+  manifest["plugin.json<br/>targets"] --> sources["agents/ skills/ tools/<br/>hooks/ rules/ commands/"]
+  sources --> compile["compile<br/>load → resolve → compose"]
+  compile --> lowerers["one lowerer per harness"]
+  sources --> router["file router"]
+  lowerers --> plan["planSync"]
+  router --> plan
+  ledger[("~/.prism/state/roots")] --> plan
+  plan --> apply["applySync"]
+  apply --> roots["~/.claude · ~/.codex ·<br/>~/.config/opencode · …"]
+  apply --> backups[("~/.prism/backups")]
+  apply --> ledger
+  lowerers --> tools["~/.prism/runtime/tools/#lt;plugin#gt;/runtime.mjs"]
+```
+
+`plugin.json` says which harnesses get each kind of artifact. TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`, `*.sop.ts`) go through a lowerer per harness; markdown rules, commands, and skills are routed as files. Every write goes through one planner and one writer. What each harness supports is declared in [`src/lowerer-capabilities.ts`](src/lowerer-capabilities.ts), and a target that can't carry an artifact fails validation instead of being skipped.
+
+## Harnesses
+
+`prism harnesses` lists 14 targets:
+
+| Harness | ID | Global | Project | Tested |
+|---|---|---|---|---|
+| Claude Code | `claude-code` | `~/.claude/` | `.claude/` | live |
+| OpenCode | `opencode` | `~/.config/opencode/` | `.opencode/` | live |
+| Codex CLI | `codex-cli` | `~/.codex/` | `.codex/` | live |
+| Grok Build | `grok` | `~/.grok/` | `.grok/` | live |
+| Kimi Code | `kimi-code` | `~/.kimi-code/` | — | live |
+| Amp Code | `amp-code` | `~/.config/amp/` | `.agents/` | live |
+| Antigravity CLI | `antigravity-cli` | `~/.gemini/antigravity-cli/` | `.agents/` | live |
+| Oh My Pi | `omp` | `~/.omp/agent/` | `.omp/` | live |
+| Devin CLI | `devin` | `~/.config/devin/` | `.devin/` | live |
+| Hermes Agent | `hermes` | `~/.hermes/` | — | live (no agents) |
+| Cursor | `cursor` | `~/.cursor/` | `.cursor/` | compile-checked only |
+| Pi | `pi` | `~/.pi/agent/` | `.pi/` | compile-checked only |
+| Amp Orb | `amp-orb` | `~/.prism/amp-orb/` | — | skills into a hosted checkout (`--root`), plus workflow tasks |
+| Amp Runner | `amp-runner` | `~/.prism/amp-runner/` | — | workflow tasks only |
+
+`--all` covers the first twelve. "Compile-checked only" means the generated output is pinned by golden tests but hasn't been loaded by the live harness. Per-harness surfaces (plugin bundle, TypeScript plugin API, config patch, or plain files) are in [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
+
+## Authoring
+
+Six typed source contracts, exported from `prism`:
+
+| Contract | Declares |
+|---|---|
+| `AgentSource` | an agent: identity, model, skills, harness targets |
+| `ToolSource` | a tool: Effect Schema input and output, one `handle` |
+| `HookSource` | a lifecycle hook: event, matcher, handler |
+| `SopSource` | a procedure in phases, lowered to a skill |
+| `ModelspaceSource` | named model profiles, resolved per harness |
+| `SkillspaceSource` | skill names, mapped per harness |
+
+A tool, written once ([`examples/prism-harness-qa/tools/challenge_echo.tool.ts`](examples/prism-harness-qa/tools/challenge_echo.tool.ts)):
 
 ```ts
 import { Schema } from "effect";
@@ -171,275 +194,89 @@ export default {
 } satisfies ToolSource;
 ```
 
-Traits grant it, agents bind it — and agents can fill **tool-owned slots** with their own schema fragments, which the compiler validates as part of the agent-facing contract:
+After `prism refresh`, any agent that can run a shell command calls it:
 
-```ts
-// trait: permission to the canonical tool
-export default {
-  name: "submittable",
-  tools: { submit_work: { ref: "orbit-core:submit_work" } },
-} satisfies TraitSource;
+```text
+$ prism tools invoke prism-harness-qa challenge_echo --input '{"challenge":"hello"}'
+{
+  "challenge": "hello",
+  "proof": "prism-tool-proof:hello",
+  "source": "prism-generated-tool"
+}
 
-// agent: binds the trait, fills a tool-owned slot with a typed report schema
-export default {
-  name: "builder",
-  description: "Builds scoped changes",
-  identity: "builder",
-  traits: [{
-    trait: "submittable",
-    tools: { submit_work: { slots: { builder_report: BuilderSubmitWorkReport } } },
-  }],
-} satisfies AgentSource;
+$ prism tools invoke prism-harness-qa challenge_echo --input '{"nope":1}'
+{ "error": "Expected no excess property\n  at [\"nope\"]" }
 ```
 
-The law behind it: **permissions expose tools, only filled slots synthesize new tool shapes, and the compiler never re-renders your Effect schemas** — your runtime artifacts pass through byte-stable. Full design: [`docs/tools-architecture.md`](docs/tools-architecture.md).
+OpenCode, Amp, Pi, and OMP also register the same tool through their own plugin APIs. Design: [`docs/tools-architecture.md`](docs/tools-architecture.md). Pinning skills from other Git repos: [`docs/third-party-skills.md`](docs/third-party-skills.md).
 
-The canonical public names are the `*Source` contracts above; the older `define*` helpers remain as transitional identity wrappers for authoring ergonomics.
+## Workflows
 
-## Workflows: typed task graphs over real harnesses
-
-A Prism workflow doesn't call a model API — it **dispatches a real harness CLI** (Claude Code, Codex, Grok, Kimi, OpenCode, Amp, …) as a worker, with a pinned model, a permission sandbox, and a schema the worker's final answer must decode into.
-
-This section is the tour; the complete field-by-field contract — model resolution precedence, judge semantics, phase inheritance, cache addressing, every run flag — is [`docs/workflows.md`](docs/workflows.md).
-
-### A task is a typed contract
+A workflow task runs a harness CLI you have installed, and its answer must decode into a schema:
 
 ```ts
-import { Effect, Schema } from "effect";
+import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
-const Review = Schema.Struct({
-  verdict: Schema.Literals(["ship", "revise", "block"]),
-  findings: Schema.Array(Schema.String),
-  riskiestAssumption: Schema.String,
+const countHarnesses = defineTask({
+  id: "count-harnesses",
+  prompt: "List every harness id in src/types.ts HarnessId. Return them and the count.",
+  output: Schema.Struct({ harnessIds: Schema.Array(Schema.String), count: Schema.Number }),
+  worker: { worker: "codex-cli", permission: "sandbox-read-only" },
 });
 
-const review = defineTask({
-  id: "adversarial-review",
-  worker: { worker: "codex-cli", model: "gpt-5.6-terra", permission: "sandbox-read-only" },
-  output: Review,                     // the worker's answer MUST decode into this
-  cacheKey: "release-review-v1",      // durable ledger: reruns replay from cache
-  prompt: "Attack the diff on this branch. Default to refuted.",
-  finish: {
-    maxRepairs: 1,
-    criteria: [{
-      kind: "deterministic",
-      name: "non-ship verdicts need findings",
-      check: ({ output }) =>
-        output.verdict !== "ship" && output.findings.length === 0
-          ? Effect.fail(new Error("A non-ship verdict needs findings"))
-          : Effect.void,
-      repairPrompt: () => "Name the findings that justify your verdict.",
-    }],
-  },
-});
+export default defineWorkflow({ name: "count-harnesses", tasks: [countHarnesses] });
 ```
 
-Malformed JSON doesn't crash the run and doesn't get shipped: decode failures trigger bounded repair prompts (default 2), separately budgeted from your finish-criteria repairs.
+```text
+$ prism workflow typecheck count.workflow.ts
+Workflow typecheck passed: count.workflow.ts
 
-### A workflow is an Effect
+$ prism workflow run count.workflow.ts --mock-output bad.json      # "count": "one"
+❌ Workflow run failed: workflow task count-harnesses returned output that failed schema decode
 
-Dynamic workflows get the full Effect toolkit — `Effect.gen`, structured concurrency, `Effect.result` per arm, spans on every step. This is a condensed version of a real council workflow that fans one brief across **four model vendors**, then synthesizes with a fifth:
-
-```ts
-export const workflow = defineWorkflow({
-  name: "voice-council",
-  run: (wf) =>
-    Effect.gen(function* () {
-      const seats = [
-        { id: "grok-positioning", worker: { worker: "grok",            model: "grok-4.5" } },
-        { id: "agy-strategy",     worker: { worker: "antigravity-cli", model: "Gemini 3.5 Flash (Low)" } },
-        { id: "kimi-voice",       worker: { worker: "kimi-code",       model: "kimi-code/kimi-for-coding" } },
-        { id: "opencode-proof",   worker: { worker: "opencode",        model: "ollama-cloud/glm-5.2" } },
-      ];
-
-      // Independent seats, one typed contract, failures isolated per arm
-      const settled = yield* Effect.all(
-        seats.map((seat) => Effect.result(wf.runTask(councilTask(seat)))),
-        { concurrency: "unbounded" },
-      ).pipe(Effect.withSpan("council.fanout"));
-
-      const reports = settled.flatMap((r) => (r._tag === "Success" ? [r.success] : []));
-
-      // A fifth vendor synthesizes — reports are evidence, not authority
-      return yield* wf.runTask(synthesisTask({
-        worker: { worker: "codex-cli", model: "gpt-5.6-terra", permission: "sandbox-read-only" },
-        reports,
-      })).pipe(Effect.withSpan("council.synthesis"));
-    }),
-});
-```
-
-Every seat returns the same `Schema.Struct`. No JSON scraping, no prompt-and-pray: a council whose members are Grok, Gemini, Kimi, GLM, and GPT — each behind its own harness, each type-checked on the way out.
-
-### Judges, not just checks
-
-Finish criteria come in two kinds. Deterministic checks are code. **Judge criteria** are structured verdicts — `pass`, `continue`, `fail`, `escalate` — with evidence selection, so acceptance can be a judgment call without becoming an untyped one:
-
-```ts
+$ prism workflow run count.workflow.ts
 {
-  kind: "judge",
-  name: "claims are grounded",
-  goal: "Every public claim traces to a receipt in the claim ledger.",
-  selectEvidence: ({ output }) => ({ claims: output.claimLedger }),
-  evaluate: ({ evidence }) => /* verdict: pass | continue | fail | escalate */,
-}
+  "runId": "1abbc6fa-a658-4644-81bf-c134f1cbfe49",
+  "tasks": [{
+    "id": "count-harnesses",
+    "output": { "harnessIds": ["claude-code", "opencode", "hermes", "codex-cli", "antigravity-cli", "kimi-code",
+                "amp-code", "amp-orb", "amp-runner", "cursor", "pi", "omp", "grok", "devin"], "count": 14 },
+    "status": "completed",
+    ...
 ```
 
-### Phases: typed contracts for multi-step processes
+Runs, tasks, and events are stored in SQLite; `prism workflow runs list` reads them back. A live run uses your harness login and spends its tokens, with no timeout or cost cap; `--mock-output` rehearses a workflow for free. Fan-out across harnesses, finish criteria, repair loops, caching, phases, and named task configurations: [`docs/workflows.md`](docs/workflows.md).
 
-`wf.phase(contract, fn)` scopes tasks under a named phase of a SOP — with a default output schema, inherited finish criteria, and framing (purpose, when, escalation) composed into every prompt. Each phase runs inside its own span: `workflow.phase.<sop>:<name>`.
+## Known issues
 
-### Jev tasks: one request, dozens of typed answers
+- A `codex-cli` workflow task fails outside a Git repo (`Not inside a trusted directory and --skip-git-repo-check was not specified`). Run it from a Git repo.
 
-A `jev()` task is a decision, not a worker dispatch: it issues **one** [TypeSafe System One](https://docs.typesafe.ai/concepts/system-one) call — a shared JSON `state` plus many `questions` — and returns one typed answer per question id, with confidence and full probability distributions:
+## Where it fits
 
-```ts
-const triage = jev({
-  id: "triage-tabs",
-  state: { tabs: openTabs },            // all 150 items, one request
-  questions: {
-    t1_route: { type: "choice", instructions: "About state item t1 (…)",
-                criteria: { keep: "active", park: "reference", close: null } },
-    // … one bound question per tab, plus global ones, all in the same call
-    actionable_count: { type: "score", criteria: ["none", "one or two", "three or more"] },
-    any_credential_risk: { type: "noul", criteria: { true: "an auth'd console is open" } },
-  },
-});
-```
-
-No prompt, no repair loop: answers decode against a request-correlated contract (extra or missing keys fail closed), results cache by endpoint + model + request, and over-budget requests (>~28k estimated tokens) fail pre-flight with a shard-the-state hint. Requires `TYPESAFE_API_KEY`; ad hoc via `prism jev ask`, and to agents through the `jev/systemone_ask` plugin tool — one implementation, three surfaces. The doctrine and every field: [`docs/workflows.md`](docs/workflows.md#jev-tasks--typesafe-system-one-decisions).
-
-### The ledger
-
-Every run persists to a SQLite store. That buys you operations, not just logs:
-
-```bash
-prism workflow run council.workflow.ts          # foreground run
-prism workflow run council.workflow.ts --detach # background; returns a run id
-
-prism workflow runs list                        # newest first
-prism workflow runs summary --all               # machine-wide rollup across every store
-prism workflow runs events <runId>              # append-only event stream
-prism workflow runs trace <runId> --otlp <url>  # span tree; export to a collector
-prism workflow runs export <runId>              # redacted JSON evidence bundle
-prism workflow runs resume <runId> council.workflow.ts  # completed tasks replay from cache
-prism workflow monitor                          # live run monitor TUI
-```
-
-Task results are content-addressed in a durable cache: resume a crashed run and finished tasks replay instantly; change a task's semantics and only that task re-executes. Inspect with `prism workflow cache list|show`.
-
-### No runtime limits
-
-A workflow task is a long-running agent. Prism imposes **no timeout, no output-size
-cap, no prompt ceiling, no wall clock, no task or cost ceiling** — and exposes no
-flag, task field, or environment variable to reintroduce one. There is nothing to
-tune and nothing to guess. Scope is set where it belongs: the prompt, the agent,
-the model, and the shape of the graph.
-
-Control over a live run is real, not numeric: `prism workflow runs stop <id>`
-terminates the run and its whole process group; `runs list|show|events|trace`
-shows what is happening while it happens.
-
-Transient worker failures retry with bounded attempts and backoff; config errors and cancellations never do. Each task pins one of seven permission modes, from `sandbox-read-only` to `full-access` — enforced per worker.
-
-### Eleven harness adapters
-
-`amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `cursor` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `opencode` · `omp`
-
-### Curate once, author by role
-
-Give frequently used harness/model configurations names and descriptions in a portable JSON catalog. Keep it in Git, install it on any machine, and select `worker: workers.reviewer` from `prism/refs/workers`. The generated module preserves literal types; unknown names are type errors. Multiple names can use one harness. Descriptions guide selection, not the task prompt.
-
-The [named-worker guide](docs/workflows.md#curated-named-workers) includes the JSON format. Prism ships no default catalog and never installs or authenticates a harness on its behalf. Raw harness options remain available for deliberately authored combinations.
-
-### Start with your catalog
-
-```bash
-prism workflow workers install ./workers.json    # explicitly replace the installed catalog
-prism workflow skill --install                  # install discovery skills into detected harnesses
-prism workflow skill                            # DSL + current workers + project SOP refs
-# Write ~/.prism/workflows/my-first.workflow.ts directly for your goal, then:
-prism workflow typecheck ~/.prism/workflows/my-first.workflow.ts
-prism workflow validate ~/.prism/workflows/my-first.workflow.ts
-prism workflow run ~/.prism/workflows/my-first.workflow.ts --mock-output mocks.json
-```
-
-`prism workflow skill --install` writes the authoring guide and reference chapters plus a raw-model discovery skill into each detected harness. Installed copies direct agents to `prism workflow skill` for fresh catalog and project context. Read a chapter without installing anything with `prism workflow skill --reference topology` (also `cache-and-finish`, `observability`, `scheduling`, `jev`). `--write` materializes the static skills under `PRISM_HOME` instead. `prism workflow workers export` prints portable JSON for backup or another machine; installation merges unique names from all supplied files and rejects duplicates.
-
-A plugin is optional. Named workers work without compiled SOPs or modelspaces. The skill teaches direct DSL authoring: define the goal, typed outputs, and dependencies, then choose workers by description. Without a catalog, raw configurations remain available. For deliberate raw choices, use `prism workflow skill --models`, `refresh-harness-types`, and `models --offer`; harness model unions remain machine-wide. A live run **dispatches a real harness CLI with your local install and auth—it spends real tokens**. Rehearse with `--mock-output` and `typecheck`/`validate` before running it live.
-
-## Stateless tools — no daemon, no MCP
-
-Compiled tools are **stateless CLI only**. Agents use:
-
-```bash
-prism tools list
-prism tools show <plugin>
-prism tools invoke <plugin> <tool> --input '<json-object>'
-```
-
-Compile writes under `PRISM_HOME/runtime/tools/<plugin>/`:
-
-- `catalog.json` — tool inventory
-- `SKILL.md` — agent discovery (or always-on rules via `PRISM_TOOLS_CLI_INJECT=rules`)
-- `runtime.mjs` — bundled handles loaded **in-process** by invoke (no daemon, no MCP)
-
-Some harnesses (OpenCode, Amp, Pi, OMP) also register the same handles natively in their plugin APIs. Hooks customize harness behavior via native plugins or one-shot command wrappers — never a long-lived protocol server.
-
-## Convergence: refresh, plan, doctor
-
-Prism uses `~/.prism` for durable install and compile state (`PRISM_HOME` to override).
-
-`prism refresh` is the unified convergence path: it compiles first when a plugin has compile targets for the selected harnesses, then reconciles file-router artifacts through the same sync engine. `prism plan` previews the same work without writing; `prism doctor` reports config and refresh-plan problems.
-
-- `state/roots/*.json` tracks Prism-owned outputs per harness root — repeated refreshes skip unchanged files, detect and repair drifted files (a backup is taken first), and prune stale managed files; `prism doctor` surfaces drift warnings
-- Backups live under `backups/` inside `PRISM_HOME`, never as sibling `.bak` files in your config dirs; retention is configured in `config.json`
-- Idempotency is a tested invariant, not a hope: `bun run check:refresh-idempotency` runs refresh twice in isolated `HOME`/`PRISM_HOME` and fails on warm-run stale prunes, config churn, orphan hook blocks, snapshot churn, or backup churn
+prism gives agents working together the same skills, rules, and tools, whatever harness each one runs in. [quasar](https://github.com/skastr0/quasar) ships its tools as a prism plugin. More at [castro.engineer/projects/prism](https://castro.engineer/projects/prism).
 
 ## Packages
 
 | Package | What it is |
 |---|---|
-| [`@skastr0/prism`](https://www.npmjs.com/package/@skastr0/prism) | The CLI — public npm runner with per-platform binaries (`darwin-arm64/x64`, `linux-arm64/x64`) |
-| [`@skastr0/prism-sdk`](https://www.npmjs.com/package/@skastr0/prism-sdk) | Core contracts and codecs: `compile-manifest`, `refs`, `snapshot`, `stable-json` subpaths |
-| [`@skastr0/prism-packager`](https://www.npmjs.com/package/@skastr0/prism-packager) | Embeddable packager: compile a plugin into harness-native `DesiredFile[]` payloads without shipping the CLI |
+| [`@skastr0/prism`](https://www.npmjs.com/package/@skastr0/prism) | The CLI, with binaries for `darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64` |
+| [`@skastr0/prism-sdk`](https://www.npmjs.com/package/@skastr0/prism-sdk) | Core contracts and codecs |
+| [`@skastr0/prism-packager`](https://www.npmjs.com/package/@skastr0/prism-packager) | Compile a plugin into harness-native files without the CLI |
 
 ## Development
 
 ```bash
 bun install
-bun run verify
-bun run typecheck
 bun run build
-bun run check:refresh-idempotency
+bun test
 ```
 
-Release readiness for the npm CLI distribution:
-
-```bash
-bun run build:npm-cli
-bun run pack:npm-cli:dry-run
-bun scripts/smoke-npm-cli.ts --skip-build
-```
-
-The smoke script installs packed tarballs into a clean temporary project, compiles a canonical-tool fixture, and checks generated runtime output for build-machine paths. Public release actions still require maintainer approval for repository visibility, tag pushes, npm trusted publishing, protected environment approval, and the real registry publish.
-
-## Status
-
-Experimental, and honest about it: the package format, generated outputs, and harness adapters may change.
-
-- Ten harness targets are **live-proven** (real workers dispatched end-to-end); Cursor and Pi are **compile-verified** — generated output is pinned by golden tests, live dispatch intentionally deferred. See [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)
-- The workflow engine runs an Effect-based DAG with a durable SQLite ledger; it does not claim `@effect/workflow`-style durable execution
-- Workflow production hardening is tracked in the open: [`docs/workflow-production-readiness-audit-2026-07-21.md`](docs/workflow-production-readiness-audit-2026-07-21.md)
+More in [CONTRIBUTING.md](CONTRIBUTING.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 
-Please report suspected vulnerabilities privately. See [SECURITY.md](SECURITY.md).
-
-## Contributing
-
-Focused issues and small pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Report suspected vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 
 ## License
 

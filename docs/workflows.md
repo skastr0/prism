@@ -2,7 +2,7 @@
 
 The complete authoring surface for Prism workflows: every field of `defineTask` / `defineWorkflow` / `phase`, worker and permission semantics, model resolution precedence, finish criteria, the durable ledger, and the run CLI. The engine lives in `src/workflows.ts` and `src/workflow-*.ts`; everything below is the public contract you write against.
 
-For the product tour, start at the [root README](../README.md#workflows-typed-task-graphs-over-real-harnesses).
+For a first run, start at the [root README quick start](../README.md#quick-start).
 
 - [The mental model](#the-mental-model)
 - [The generated environment](#the-generated-environment)

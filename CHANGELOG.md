@@ -11,6 +11,25 @@ line. `0.4.0` was committed but never tagged or published.
 
 ## Unreleased
 
+## 0.8.1 - 2026-09-24
+
+### Changed
+
+- **Docs match the code.** The README is rebuilt: one harness table that
+  matches `prism harnesses`, Cursor and Pi marked compile-checked only, the
+  removed `TraitSource` / `OrbitSource` / `ToolspaceSource` contracts gone,
+  and real output for every command shown. `docs/tools-architecture.md` now
+  describes the CLI tool runtime; pinned third-party skills moved to
+  `docs/third-party-skills.md`; the capability matrix lists `amp-runner`.
+
+### Removed
+
+- The `mcp-council` example workflow, which tested retired MCP server naming.
+
+### Fixed
+
+- `bun.lock` pinned the 0.7.1 platform packages after the 0.8.0 release.
+
 ## 0.8.0 - 2026-09-23
 
 ### Added

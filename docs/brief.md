@@ -1,6 +1,6 @@
 # Prism — brief
 
-updated: 2026-09-24 · version: 0.8.0 · maturity: usable-with-gaps
+updated: 2026-09-24 · version: 0.8.1 · maturity: usable-with-gaps
 
 Maturity: 22 npm releases, green CI, and my own setup runs on it (85 plugins, 21 generated Claude Code plugins); but I'm the only user I can show, and Cursor and Pi are compile-checked only.
 

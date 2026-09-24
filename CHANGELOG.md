@@ -11,6 +11,19 @@ line. `0.4.0` was committed but never tagged or published.
 
 ## Unreleased
 
+## 0.8.2 - 2026-09-24
+
+### Changed
+
+- **Workflows lead.** The README, the npm README, package descriptions and
+  keywords, the docs index, and `AGENTS.md` now present Prism as a framework
+  for running coding agents from typed Effect workflows, with installing one
+  agent setup into every harness as the supporting feature. The README quick
+  start goes from install to a live two-agent review run, a cached rerun,
+  and a run trace.
+- `prism --help` lists `workflow` first and describes Prism by its
+  workflows; `refresh` describes what it installs.
+
 ## 0.8.1 - 2026-09-24
 
 ### Changed

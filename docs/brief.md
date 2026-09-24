@@ -1,6 +1,6 @@
 # Prism — brief
 
-updated: 2026-09-24 · version: 0.8.1 · maturity: usable-with-gaps
+updated: 2026-09-24 · version: 0.8.2 · maturity: usable-with-gaps
 
 Maturity: 23 npm releases, green CI, and I run my own multi-agent work through it; but I'm the only user I can show, the run ledger is local SQLite, and live runs have no cost cap.
 

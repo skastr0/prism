@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-packager",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Embeddable Prism packager: compile a plugin's agents, skills, tools, and hooks into harness-native files (DesiredFile[]) without the Prism CLI.",
   "license": "MIT",
@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.15.13",
-    "@skastr0/prism-sdk": "0.8.1",
+    "@skastr0/prism-sdk": "0.8.2",
     "effect": "4.0.0-rc.115",
     "gray-matter": "^4.0.3",
     "jsonc-parser": "^3.3.1",

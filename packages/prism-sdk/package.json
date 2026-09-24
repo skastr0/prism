@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-sdk",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Core Prism contracts, refs, stable JSON, and manifest codecs shared by Prism workflows and the Prism CLI.",
   "license": "MIT",

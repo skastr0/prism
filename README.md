@@ -15,7 +15,7 @@
   ·
   <a href="https://www.npmjs.com/package/@skastr0/prism">npm</a>
   ·
-  v0.8.1 · macOS and Linux
+  v0.8.2 · macOS and Linux
 </p>
 
 ---

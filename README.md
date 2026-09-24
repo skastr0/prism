@@ -4,7 +4,7 @@
 
 <h1 align="center">Prism</h1>
 
-<p align="center"><strong>Prism compiles one agent source into every coding harness's native config.</strong></p>
+<p align="center"><strong>Prism installs your agents, skills, and hooks into every coding agent.</strong></p>
 
 <p align="center">
   Agents, skills, tools, and hooks written once, installed native in Claude Code, Codex, OpenCode, Grok, Kimi, Amp, Cursor, Pi, and more.
@@ -40,7 +40,7 @@ Prism can also send typed tasks to the harness CLIs you have installed, and reje
 |---|---|
 | A compiler from one typed source to each harness's native format | A lowest-common-denominator wrapper |
 | A workflow runner that drives the harness CLIs you already use, with their logins | An SDK that calls model APIs |
-| Tools as a stateless CLI, loaded in-process | A daemon or an MCP server |
+| Tools you call with one CLI command; nothing stays running | A daemon or an MCP server |
 | Idempotent: refresh twice, the second run writes nothing | A dotfile templater that overwrites your config |
 
 ## Quick start
@@ -117,20 +117,19 @@ Set `PRISM_HOME` to move all of it. Shared files such as `AGENTS.md`, `CLAUDE.md
 ```mermaid
 flowchart LR
   manifest["plugin.json<br/>targets"] --> sources["agents/ skills/ tools/<br/>hooks/ rules/ commands/"]
-  sources --> compile["compile<br/>load → resolve → compose"]
-  compile --> lowerers["one lowerer per harness"]
-  sources --> router["file router"]
-  lowerers --> plan["planSync"]
+  sources --> compile["compile for each harness"]
+  sources --> router["copy markdown files"]
+  compile --> plan["plan: diff against what Prism wrote"]
   router --> plan
-  ledger[("~/.prism/state/roots")] --> plan
-  plan --> apply["applySync"]
+  ledger[("what Prism owns<br/>~/.prism/state/roots")] --> plan
+  plan --> apply["write"]
   apply --> roots["~/.claude · ~/.codex ·<br/>~/.config/opencode · …"]
-  apply --> backups[("~/.prism/backups")]
+  apply --> backups[("backups<br/>~/.prism/backups")]
   apply --> ledger
-  lowerers --> tools["~/.prism/runtime/tools/#lt;plugin#gt;/runtime.mjs"]
+  compile --> tools["tool CLI<br/>~/.prism/runtime/tools"]
 ```
 
-`plugin.json` says which harnesses get each kind of artifact. TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`, `*.sop.ts`) go through a lowerer per harness; markdown rules, commands, and skills are routed as files. Every write goes through one planner and one writer. What each harness supports is declared in [`src/lowerer-capabilities.ts`](src/lowerer-capabilities.ts), and a target that can't carry an artifact fails validation instead of being skipped.
+`plugin.json` says which harnesses get each kind of artifact. TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`, `*.sop.ts`) are compiled for each harness; markdown rules, commands, and skills are copied as files. Every change is planned first, then written in one place. What each harness supports is declared in [`src/lowerer-capabilities.ts`](src/lowerer-capabilities.ts), and a target that can't carry an artifact fails validation instead of being skipped.
 
 ## Harnesses
 
@@ -153,7 +152,7 @@ flowchart LR
 | Amp Orb | `amp-orb` | `~/.prism/amp-orb/` | — | skills into a hosted checkout (`--root`), plus workflow tasks |
 | Amp Runner | `amp-runner` | `~/.prism/amp-runner/` | — | workflow tasks only |
 
-`--all` covers the first twelve. "Compile-checked only" means the generated output is pinned by golden tests but hasn't been loaded by the live harness. Per-harness surfaces (plugin bundle, TypeScript plugin API, config patch, or plain files) are in [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
+`--all` covers the first twelve. "Compile-checked only" means the generated output is checked against saved expected output but hasn't been loaded by the live harness. Per-harness surfaces (plugin bundle, TypeScript plugin API, config patch, or plain files) are in [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
 
 ## Authoring
 
@@ -245,6 +244,8 @@ $ prism workflow run count.workflow.ts
     "status": "completed",
     ...
 ```
+
+The 14 includes `amp-orb` and `amp-runner`, which take only hosted skills or workflow tasks; `--all` covers the other twelve.
 
 Runs, tasks, and events are stored in SQLite; `prism workflow runs list` reads them back. A live run uses your harness login and spends its tokens, with no timeout or cost cap; `--mock-output` rehearses a workflow for free. Fan-out across harnesses, finish criteria, repair loops, caching, phases, and named task configurations: [`docs/workflows.md`](docs/workflows.md).
 

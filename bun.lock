@@ -31,10 +31,10 @@
         "prism": "bin/prism.js",
       },
       "optionalDependencies": {
-        "@skastr0/prism-darwin-arm64": "0.7.1",
-        "@skastr0/prism-darwin-x64": "0.7.1",
-        "@skastr0/prism-linux-arm64": "0.7.1",
-        "@skastr0/prism-linux-x64": "0.7.1",
+        "@skastr0/prism-darwin-arm64": "0.8.0",
+        "@skastr0/prism-darwin-x64": "0.8.0",
+        "@skastr0/prism-linux-arm64": "0.8.0",
+        "@skastr0/prism-linux-x64": "0.8.0",
       },
     },
     "packages/npm/prism-darwin-arm64": {
@@ -43,7 +43,7 @@
       "dependencies": {
         "@opencode-ai/plugin": "^1.15.13",
         "@opentui/core-darwin-arm64": "0.4.1",
-        "@skastr0/prism-sdk": "0.7.1",
+        "@skastr0/prism-sdk": "0.8.0",
         "effect": "4.0.0-rc.115",
         "typescript": "^5.8.3",
         "zod": "4.4.3",
@@ -55,7 +55,7 @@
       "dependencies": {
         "@opencode-ai/plugin": "^1.15.13",
         "@opentui/core-darwin-x64": "0.4.1",
-        "@skastr0/prism-sdk": "0.7.1",
+        "@skastr0/prism-sdk": "0.8.0",
         "effect": "4.0.0-rc.115",
         "typescript": "^5.8.3",
         "zod": "4.4.3",
@@ -66,7 +66,7 @@
       "version": "0.8.0",
       "dependencies": {
         "@opencode-ai/plugin": "^1.15.13",
-        "@skastr0/prism-sdk": "0.7.1",
+        "@skastr0/prism-sdk": "0.8.0",
         "effect": "4.0.0-rc.115",
         "typescript": "^5.8.3",
         "zod": "4.4.3",
@@ -81,7 +81,7 @@
       "version": "0.8.0",
       "dependencies": {
         "@opencode-ai/plugin": "^1.15.13",
-        "@skastr0/prism-sdk": "0.7.1",
+        "@skastr0/prism-sdk": "0.8.0",
         "effect": "4.0.0-rc.115",
         "typescript": "^5.8.3",
         "zod": "4.4.3",
@@ -96,7 +96,7 @@
       "version": "0.8.0",
       "dependencies": {
         "@opencode-ai/plugin": "^1.15.13",
-        "@skastr0/prism-sdk": "0.7.1",
+        "@skastr0/prism-sdk": "0.8.0",
         "effect": "4.0.0-rc.115",
         "gray-matter": "^4.0.3",
         "jsonc-parser": "^3.3.1",

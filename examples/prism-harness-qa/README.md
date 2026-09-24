@@ -1,16 +1,25 @@
 # prism-harness-qa
 
-Reference QA plugin for Prism harness E2E checks.
+The reference plugin Prism's own tests use to check compile output and workflow runs across harnesses. It has one of each artifact kind:
 
-This plugin exercises every Prism compile surface that Kimi Code supports:
+| directory | contents |
+|---|---|
+| `agents/`, `identities/` | `qa-tester` agent |
+| `tools/` | `challenge_echo`, a tool that returns a proof string for its input |
+| `hooks/` | a `session.start` hook |
+| `sops/` | `qa-sop`, lowered to a skill |
+| `skills/`, `commands/`, `rules/global/` | a skill, a command, a rule |
+| `modelspaces/` | model profiles per harness |
+| `harness/<id>/` | per-harness overrides for `codex-cli`, `cursor`, `hermes`, `opencode` |
+| `workflows/` | smoke workflows for several harnesses, plus model-selection and jev examples |
 
-- **Rules** → `prism-context` session-start skill
-- **Commands** → `prism-command-*` flow skills
-- **Skills** → bundled as-is under `skills/`
-- **Agents** → `prism-agent-*` role skills
-- **Orbits** → orbit skills with phase references
-- **Tools** → generated MCP server exposing the `challenge_echo` proof tool (keyed HMAC proof when the E2E matrix injects a per-run secret; unkeyed fallback for standalone runs)
-- **Traits** → compile-time capability conformance for agents
-- **Hooks** → `config.toml` hook entries
+Try it in a scratch home:
 
-It is used by lowerer tests, by the smoke workflow tasks once live execution is safe, and by acceptance scripts as the cross-harness fixture.
+```bash
+export HOME=$(mktemp -d)
+export PRISM_HOME=$HOME/.prism
+prism refresh examples/prism-harness-qa --harness claude-code,codex-cli
+prism tools invoke prism-harness-qa challenge_echo --input '{"challenge":"hello"}'
+```
+
+The smoke workflows dispatch live harness CLIs and spend tokens; run them with `--mock-output` first.

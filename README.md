@@ -114,22 +114,7 @@ Set `PRISM_HOME` to move all of it. Shared files such as `AGENTS.md`, `CLAUDE.md
 
 ## How it works
 
-```mermaid
-flowchart LR
-  manifest["plugin.json<br/>targets"] --> sources["agents/ skills/ tools/<br/>hooks/ rules/ commands/"]
-  sources --> compile["compile for each harness"]
-  sources --> router["copy markdown files"]
-  compile --> plan["plan: diff against what Prism wrote"]
-  router --> plan
-  ledger[("what Prism owns<br/>~/.prism/state/roots")] --> plan
-  plan --> apply["write"]
-  apply --> roots["~/.claude · ~/.codex ·<br/>~/.config/opencode · …"]
-  apply --> backups[("backups<br/>~/.prism/backups")]
-  apply --> ledger
-  compile --> tools["tool CLI<br/>~/.prism/runtime/tools"]
-```
-
-`plugin.json` says which harnesses get each kind of artifact. TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`, `*.sop.ts`) are compiled for each harness; markdown rules, commands, and skills are copied as files. Every change is planned first, then written in one place. What each harness supports is declared in [`src/lowerer-capabilities.ts`](src/lowerer-capabilities.ts), and a target that can't carry an artifact fails validation instead of being skipped.
+`plugin.json` says which harnesses get each kind of artifact. TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`) are compiled for each harness, and markdown rules, commands, and skills are copied as files. Every change is planned against the list of files Prism owns, then written, with a backup first when a file is repaired. A target that can't carry an artifact fails validation instead of being skipped.
 
 ## Harnesses
 

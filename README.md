@@ -2,9 +2,9 @@
   <img src="assets/brand/prism-icon.png" alt="Prism" width="160" height="160" />
 </p>
 
-<h1 align="center">prism</h1>
+<h1 align="center">Prism</h1>
 
-<p align="center"><strong>prism compiles one agent source into every coding harness's native config.</strong></p>
+<p align="center"><strong>Prism compiles one agent source into every coding harness's native config.</strong></p>
 
 <p align="center">
   Agents, skills, tools, and hooks written once, installed native in Claude Code, Codex, OpenCode, Grok, Kimi, Amp, Cursor, Pi, and more.
@@ -26,17 +26,17 @@
 - **Your agent setup lives in dotfiles.** Agents, skills, and hooks spread across `~/.claude`, `~/.codex`, `~/.config/opencode`: unversioned, unreviewed, drifting apart.
 - **Several harnesses on one task means glue.** Shell scripts, copy-paste, and no typed contract on what comes back.
 
-## What prism does
+## What Prism does
 
 <p align="center">
   <img src="assets/brand/prism-hero.png" alt="One amber source thread passing through an aperture plane and refracting into many distinct channels" width="720" />
 </p>
 
-You keep one plugin directory in Git. `prism refresh` writes each harness's own format into its own config directory, and running it again writes nothing. A managed file you edited is repaired, with a backup taken first. A file prism never wrote is refused.
+You keep one plugin directory in Git. `prism refresh` writes each harness's own format into its own config directory, and running it again writes nothing. A managed file you edited is repaired, with a backup taken first. A file Prism never wrote is refused.
 
-prism can also send typed tasks to the harness CLIs you have installed, and rejects any answer that doesn't decode into the task's schema.
+Prism can also send typed tasks to the harness CLIs you have installed, and rejects any answer that doesn't decode into the task's schema.
 
-| prism **is** | prism **is not** |
+| Prism **is** | Prism **is not** |
 |---|---|
 | A compiler from one typed source to each harness's native format | A lowest-common-denominator wrapper |
 | A workflow runner that drives the harness CLIs you already use, with their logins | An SDK that calls model APIs |
@@ -89,7 +89,7 @@ Run it again:
 
 ## Drift and ownership
 
-prism tracks what it wrote. It repairs its own files and leaves yours alone.
+Prism tracks what it wrote. It repairs its own files and leaves yours alone.
 
 ```text
 $ echo "hand edit" >> ~/.codex/prompts/test.md
@@ -106,11 +106,11 @@ $ prism refresh my-standards --harness codex-cli
 
 | state | where |
 |---|---|
-| what prism owns, per harness root | `~/.prism/state/roots/*.json` |
+| what Prism owns, per harness root | `~/.prism/state/roots/*.json` |
 | backups (never `.bak` files next to your config) | `~/.prism/backups/` |
 | settings, including backup retention | `~/.prism/config.json` |
 
-Set `PRISM_HOME` to move all of it. Shared files such as `AGENTS.md`, `CLAUDE.md`, and `config.toml` get a fenced region; prism never takes over the whole file.
+Set `PRISM_HOME` to move all of it. Shared files such as `AGENTS.md`, `CLAUDE.md`, and `config.toml` get a fenced region; Prism never takes over the whole file.
 
 ## How it works
 
@@ -254,7 +254,7 @@ Runs, tasks, and events are stored in SQLite; `prism workflow runs list` reads t
 
 ## Where it fits
 
-prism gives agents working together the same skills, rules, and tools, whatever harness each one runs in. [quasar](https://github.com/skastr0/quasar) ships its tools as a prism plugin. More at [castro.engineer/projects/prism](https://castro.engineer/projects/prism).
+Prism gives agents working together the same skills, rules, and tools, whatever harness each one runs in. [Quasar](https://github.com/skastr0/quasar) ships its tools as a Prism plugin. More at [castro.engineer/projects/prism](https://castro.engineer/projects/prism).
 
 ## Packages
 

@@ -24,6 +24,6 @@ The plugin's `targets.skills` decides which harnesses get it. `prism.lock` recor
 | `prism skills import-npx --into <plugin> --dry-run` | preview pointers from `~/.agents/.skill-lock.json`; drop `--dry-run` to write them and their lock hashes |
 | `prism skills update [name] --plugin <plugin>` | review upstream commits and pin the new content |
 | `prism refresh <plugin>` | fetch a missing pinned commit into `PRISM_HOME/cache/third-party-skills`, check its hash, and install it; works offline once cached |
-| `prism doctor --prune-untracked` | list skill directories prism doesn't track; add `--fix` to remove them |
+| `prism doctor --prune-untracked` | list skill directories Prism doesn't track; add `--fix` to remove them |
 
 A plugin can't have the same skill in both `skills/<name>/` and `skill-refs/<name>.skill-ref.json`; refresh fails and names both.

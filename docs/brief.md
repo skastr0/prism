@@ -144,9 +144,7 @@ Binaries for darwin-arm64, darwin-x64, linux-arm64, linux-x64 (`packages/npm/pri
 - short description: Prism runs Claude Code, Codex, and other agent CLIs from typed Effect workflows: schema-checked answers, repair loops, and a ledger you can replay.
 - page lede: Prism runs the coding agents you already use, Claude Code, Codex, and eleven more, from workflows you write in TypeScript with Effect. Every answer is checked against a schema before your code sees it, and every run is recorded, so a rerun replays finished work instead of paying for it again.
 - X post: I stopped running agents from scripts. In Prism a task is a harness, a prompt, and a schema its answer must decode into. Codex and Claude review a commit in parallel, a bad answer gets a repair prompt, and a rerun replays both from the ledger in 2 seconds.
-- status gaps (page):
-  - No Windows build. Binaries for macOS and Linux, arm64 and x64.
-  - Codex workflow tasks fail outside a Git repository.
-  - Live workflow runs have no token or time cap.
-  - The run ledger is a local SQLite store.
-  - Output formats and adapters may still change.
+- limits a user needs (page, stated once where they hit them; no maturity labels in public copy, SPINE §3b):
+  - macOS and Linux only (no Windows build).
+  - Run Codex tasks from inside a Git repository.
+  - A live run spends the harness's tokens and has no built-in cost cap.

@@ -1,4 +1,4 @@
-# prism — brief
+# Prism — brief
 
 updated: 2026-09-24 · version: 0.8.0 · maturity: usable-with-gaps
 
@@ -6,7 +6,7 @@ Maturity: 22 npm releases, green CI, and my own setup runs on it (85 plugins, 21
 
 ## One line
 
-prism compiles one agent source into every coding harness's native config.
+Prism compiles one agent source into every coding harness's native config.
 
 ## The pain
 
@@ -18,7 +18,7 @@ You fix a skill once. Days later a Codex session trips on the old copy in `~/.co
 
 One plugin directory, one command: `prism refresh`. Each harness gets its own native shape:
 
-| harness | what prism writes |
+| harness | what Prism writes |
 |---|---|
 | Claude Code | a plugin under `~/.claude/skills/prism-generated-<plugin>/` |
 | Codex | `agents/<name>.toml` plus a fenced region in `AGENTS.md` |
@@ -29,11 +29,11 @@ One plugin directory, one command: `prism refresh`. Each harness gets its own na
 
 (Receipt: See it run, runs 1 and 3.)
 
-Run it again and nothing is written. A managed file you edited is repaired, with a backup. A file prism never wrote is refused. A tool you write once runs from any harness through `prism tools invoke`, and `prism workflow run` sends typed tasks to installed harness CLIs, rejecting any answer that fails its schema.
+Run it again and nothing is written. A managed file you edited is repaired, with a backup. A file Prism never wrote is refused. A tool you write once runs from any harness through `prism tools invoke`, and `prism workflow run` sends typed tasks to installed harness CLIs, rejecting any answer that fails its schema.
 
 ## Where it fits
 
-prism is the shared capability source for agents working together: agents in different harnesses load the same skills, rules, and tools from one plugin. quasar's 17 tools reach every agent this way (`prism tools invoke quasar <tool>`).
+Prism is the shared capability source for agents working together: agents in different harnesses load the same skills, rules, and tools from one plugin. Quasar's 17 tools reach every agent this way (`prism tools invoke quasar <tool>`).
 
 ## See it run
 
@@ -62,7 +62,7 @@ $ prism refresh ./my-standards --all
 ✅ Already converged — nothing written.
 ```
 
-**2. Drift is repaired; foreign files are refused.** What happens to a file I edited by hand, or one prism never wrote?
+**2. Drift is repaired; foreign files are refused.** What happens to a file I edited by hand, or one Prism never wrote?
 
 ```text
 $ echo "hand edit" >> ~/.codex/prompts/test.md
@@ -117,7 +117,7 @@ The answer is correct: `src/lowerer-capabilities.ts` enumerates those 14 ids, ma
 
 ## How it works
 
-`plugin.json` says which harnesses get each artifact kind. `prism refresh` compiles TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`, `*.sop.ts`) through one lowerer per harness (`src/compile/pipeline.ts`, `src/compile/lowerers/`) and routes markdown rules, commands, and skills as files. Every write goes through `planSync` (`src/sync/plan.ts:577`), which diffs against the ledger in `~/.prism/state/roots/`, and `applySync` (`src/sync/apply.ts:120`), which writes, backs up to `~/.prism/backups/`, and prunes what prism no longer emits. What each harness supports is declared once in `src/lowerer-capabilities.ts`; an unsupported target fails validation. Workflows are Effect programs (`defineTask`, `defineWorkflow`): `src/workflow-runtime.ts` spawns the harness CLI, decodes its answer against the task's `Schema` (`src/workflow-errors.ts:8` on failure), and stores runs and events in SQLite.
+`plugin.json` says which harnesses get each artifact kind. `prism refresh` compiles TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`, `*.sop.ts`) through one lowerer per harness (`src/compile/pipeline.ts`, `src/compile/lowerers/`) and routes markdown rules, commands, and skills as files. Every write goes through `planSync` (`src/sync/plan.ts:577`), which diffs against the ledger in `~/.prism/state/roots/`, and `applySync` (`src/sync/apply.ts:120`), which writes, backs up to `~/.prism/backups/`, and prunes what Prism no longer emits. What each harness supports is declared once in `src/lowerer-capabilities.ts`; an unsupported target fails validation. Workflows are Effect programs (`defineTask`, `defineWorkflow`): `src/workflow-runtime.ts` spawns the harness CLI, decodes its answer against the task's `Schema` (`src/workflow-errors.ts:8` on failure), and stores runs and events in SQLite.
 
 Diagram spec:
 
@@ -133,7 +133,7 @@ For:
 
 Not for:
 - a single-harness user; that harness's own config is simpler
-- anyone who wants a hosted service or a model API SDK: prism drives CLIs you have installed and authenticated
+- anyone who wants a hosted service or a model API SDK: Prism drives CLIs you have installed and authenticated
 - Windows users (no Windows binary)
 - a team that needs a stable format today; the README says outputs and adapters may still change
 
@@ -158,23 +158,22 @@ Prebuilt binaries for darwin-arm64, darwin-x64, linux-arm64, linux-x64 (`package
 ## Gaps
 
 - **Codex tasks fail outside a Git repo.** Running run 4 from a plain directory: `❌ Workflow run failed: codex exited with 1: Reading additional input from stdin... Not inside a trusted directory and --skip-git-repo-check was not specified.` It passed after `git init`.
-- **Example README is stale.** `examples/prism-harness-qa/README.md` still says tools ship as a generated MCP server and lists orbits and traits; tools are CLI-only and those contracts are gone. (The main README was rebuilt from this brief on 2026-09-24.)
-- **Two targets are compile-checked only.** Cursor and Pi output is pinned by golden tests, never dispatched live. Antigravity and OMP are live-dispatched but their smoke fixtures are pending. The matrix predates `amp-runner` (added in 0.8.0).
+- **Two targets are compile-checked only.** Cursor and Pi output is pinned by golden tests, never dispatched live. Antigravity and OMP are live-dispatched but their smoke fixtures are pending.
 - **Per-harness holes, by design:** Kimi has no project scope; Amp has no `session.end` hook; Hermes gets skills and tools but no agents or hooks; Devin gets no tools yet (`docs/lowerer-capability-matrix.md`).
 - **First refresh churns a little.** On an empty `HOME`, one refresh backed up `CLAUDE.md` and `AGENTS.md` it had created moments earlier, and rewrote `generated/models.ts` once per harness (`repair … (source-changed)`). The second run was clean.
 - **Workflow durability is local.** Runs live in a local SQLite store; the README says this is not `@effect/workflow`-style durable execution. `docs/workflow-production-readiness-audit-2026-07-21.md` still lists open rows (e.g. row 46, store data governance).
-- **Live runs cost tokens with no ceiling.** prism sets no timeout or cost cap by design (`README.md`, "No runtime limits"); a trivial task used 23,506 tokens.
+- **Live runs cost tokens with no ceiling.** Prism sets no timeout or cost cap by design (`docs/workflows.md`, "Running and operating"); a trivial task used 23,506 tokens.
 - **One user.** No evidence of anyone else running it.
 
 ## Demo moments
 
 1. **One source into twelve harnesses** (terminal cast, ~20 s). `prism init`, `prism refresh --all` on an empty `HOME`, `tree -L 3 ~` showing `.claude`, `.codex`, `.config/opencode`, `.grok`, `.kimi-code`, `.pi` filled; run refresh again and hold on `✅ Already converged — nothing written.` Proves reach and idempotency.
-2. **Drift and ownership** (terminal cast, ~15 s). Append to a managed Codex prompt, refresh, show `repair … (drifted)` and the backup path; then a pre-existing user file and the `⛔ Refusing to overwrite` line with the file still intact. Proves prism never clobbers what it does not own.
+2. **Drift and ownership** (terminal cast, ~15 s). Append to a managed Codex prompt, refresh, show `repair … (drifted)` and the backup path; then a pre-existing user file and the `⛔ Refusing to overwrite` line with the file still intact. Proves Prism never clobbers what it does not own.
 3. **Typed answer from Codex** (terminal cast, ~30 s, sped up). Mock run with a wrong type fails schema decode; live run on Codex returns `count: 14`; `grep` the source to show 14 ids. Proves the output is checked before use.
 
 ## Copy bank
 
 - tagline: One agent source, native in every harness.
-- short description: prism compiles one source of agents, skills, tools, and hooks into native config for 12 AI agent harnesses, and runs typed tasks across them.
-- page lede: prism compiles one plugin of agents, skills, tools, and hooks into the native config of every coding harness I use: Claude Code, Codex, OpenCode, Grok, Kimi, Amp, Cursor, Pi, and more. It also sends tasks to those harnesses and checks every answer against a schema before anything downstream reads it.
-- X post: Twelve agent CLIs are installed on my machine. Each kept its own copy of my skills, and a fix in one rotted in the rest. prism compiles one plugin into each harness's native format, repairs drift, refuses files it never wrote, and a second run writes nothing.
+- short description: Prism compiles one source of agents, skills, tools, and hooks into native config for 12 AI agent harnesses, and runs typed tasks across them.
+- page lede: Prism compiles one plugin of agents, skills, tools, and hooks into the native config of every coding harness I use: Claude Code, Codex, OpenCode, Grok, Kimi, Amp, Cursor, Pi, and more. It also sends tasks to those harnesses and checks every answer against a schema before anything downstream reads it.
+- X post: Twelve agent CLIs are installed on my machine. Each kept its own copy of my skills, and a fix in one rotted in the rest. Prism compiles one plugin into each harness's native format, repairs drift, refuses files it never wrote, and a second run writes nothing.

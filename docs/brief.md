@@ -6,7 +6,9 @@ Maturity: 22 npm releases, green CI, and my own setup runs on it (85 plugins, 21
 
 ## One line
 
-Prism compiles one agent source into every coding harness's native config.
+Prism installs your agents, skills, and hooks into every coding agent.
+
+(Receipt: `prism refresh --all` writes to 12 targets, See it run 1; hooks lower for every compile target except Hermes, `docs/lowerer-capability-matrix.md`.)
 
 ## The pain
 
@@ -33,7 +35,7 @@ Run it again and nothing is written. A managed file you edited is repaired, with
 
 ## Where it fits
 
-Prism is the shared capability source for agents working together: agents in different harnesses load the same skills, rules, and tools from one plugin. Quasar's 17 tools reach every agent this way (`prism tools invoke quasar <tool>`).
+When agents in Claude Code, Codex, and other CLIs work together, they load the same skills, rules, and tools from one Prism plugin. Quasar's 17 tools reach every agent this way (`prism tools invoke quasar <tool>`).
 
 ## See it run
 
@@ -173,7 +175,13 @@ Prebuilt binaries for darwin-arm64, darwin-x64, linux-arm64, linux-x64 (`package
 
 ## Copy bank
 
-- tagline: One agent source, native in every harness.
-- short description: Prism compiles one source of agents, skills, tools, and hooks into native config for 12 AI agent harnesses, and runs typed tasks across them.
-- page lede: Prism compiles one plugin of agents, skills, tools, and hooks into the native config of every coding harness I use: Claude Code, Codex, OpenCode, Grok, Kimi, Amp, Cursor, Pi, and more. It also sends tasks to those harnesses and checks every answer against a schema before anything downstream reads it.
-- X post: Twelve agent CLIs are installed on my machine. Each kept its own copy of my skills, and a fix in one rotted in the rest. Prism compiles one plugin into each harness's native format, repairs drift, refuses files it never wrote, and a second run writes nothing.
+- tagline: One agent setup, in every coding agent.
+- short description: Prism installs your agents, skills, tools, and hooks into 12 coding agents, each in its own format, and runs typed tasks across them.
+- page lede: Claude Code, Codex, OpenCode, Cursor, and eight more each keep their own copy of your agents, skills, and hooks. Prism keeps one copy in Git and installs it in each tool's own format. Run it twice and the second run writes nothing.
+- X post: Each of my twelve agent CLIs kept its own copy of my skills, and a fix in one rotted in the rest. Prism keeps one copy in Git and installs it in each tool's own format. It repairs files I edited by hand, refuses files it never wrote, and a second run writes nothing.
+- status gaps (page):
+  - No Windows build. Binaries for macOS and Linux, arm64 and x64.
+  - Cursor and Pi output is compile-checked but not yet run live.
+  - Codex workflow tasks fail outside a Git repository.
+  - Output formats and adapters may still change.
+  - Live workflow runs have no token or time cap.

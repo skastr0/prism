@@ -2,142 +2,109 @@
 
 updated: 2026-09-24 · version: 0.8.1 · maturity: usable-with-gaps
 
-Maturity: 22 npm releases, green CI, and my own setup runs on it (85 plugins, 21 generated Claude Code plugins); but I'm the only user I can show, and Cursor and Pi are compile-checked only.
+Maturity: 23 npm releases, green CI, and I run my own multi-agent work through it; but I'm the only user I can show, the run ledger is local SQLite, and live runs have no cost cap.
 
 ## One line
 
-Prism installs your agents, skills, and hooks into every coding agent.
-
-(Receipt: `prism refresh --all` writes to 12 targets, See it run 1; hooks lower for every compile target except Hermes, `docs/lowerer-capability-matrix.md`.)
+Prism runs your coding agents from typed, checked Effect workflows.
 
 ## The pain
 
-You fix a skill once. Days later a Codex session trips on the old copy in `~/.codex/skills`, and the agent burns its turn diffing source against installed files before it can start your task. Every harness keeps its own copy of your rules, skills, agents, and hooks, in its own format, so a fix lands in one and rots in the rest.
-
-(Receipt: Codex session `codex:0108d5e9…`, 2026-05-15, "installed `.codex/skills` copy is stale and still invalid".)
+- **No types.** You ask two agents to review a commit, from a script or a chat. Each answers in its own prose, and you read it or scrape it.
+- **No checks, no retries.** A "revise" with no findings flows straight into your next step. A malformed reply or a flaky exit, and you start over by hand.
+- **No resume, no record.** The script dies halfway and every finished task runs again at full token cost. Afterwards nothing says which agent answered what, on which model, in how long.
 
 ## What changes
 
-One plugin directory, one command: `prism refresh`. Each harness gets its own native shape:
+A task is a harness CLI, a prompt, an Effect `Schema` the answer must decode into, and checks the decoded answer must pass. A workflow is an Effect program over tasks, so fan-out is `Effect.all`. A reply that fails the schema or a check gets a repair prompt; one that still fails ends the task with a typed error, never bad data downstream. Every run lands in a SQLite ledger: rerun it and finished tasks replay from the cache, and `prism workflow runs trace` shows who did what.
 
-| harness | what Prism writes |
-|---|---|
-| Claude Code | a plugin under `~/.claude/skills/prism-generated-<plugin>/` |
-| Codex | `agents/<name>.toml` plus a fenced region in `AGENTS.md` |
-| OpenCode | `agents/<name>.md` plus keys in `opencode.json` |
-| Antigravity, Kimi, Pi | a generated plugin or package (Kimi and Pi also get a config entry) |
-| Grok, Cursor, Amp, Devin | skills plus a fenced region in their rules file |
-| Hermes, OMP | skills |
-
-(Receipt: See it run, runs 1 and 3.)
-
-Run it again and nothing is written. A managed file you edited is repaired, with a backup. A file Prism never wrote is refused. A tool you write once runs from any harness through `prism tools invoke`, and `prism workflow run` sends typed tasks to installed harness CLIs, rejecting any answer that fails its schema.
+(Receipts: See it run 1–4. Repair budgets: `docs/workflows.md`, "Output schemas and decode repairs" and "Finish criteria".)
 
 ## Where it fits
 
-When agents in Claude Code, Codex, and other CLIs work together, they load the same skills, rules, and tools from one Prism plugin. Quasar's 17 tools reach every agent this way (`prism tools invoke quasar <tool>`).
+Several agents on one piece of work, each in its own harness, answering the same typed contract: Codex and Claude reviewing one commit in parallel is one `Effect.all`. The same tool also installs one set of skills, rules, and tools into every harness, so those agents share a toolbox; Quasar's 17 tools reach them this way (`prism tools invoke quasar <tool>`).
 
 ## See it run
 
-All runs below: published `prism` 0.8.0, 2026-09-24. Runs 1–3 used a scratch `HOME` and `PRISM_HOME`, so nothing touched my own config; run 4 used my Codex login with its run store in a scratch directory. Paths trimmed to `~`.
+All runs: published `prism` 0.8.1, 2026-09-24, from the Prism repo (a Git repo; Codex needs one), with my own Codex and Claude Code logins. The workflow is `review.workflow.ts`, shown in the README.
 
-**1. One source, every harness, then nothing to do.** Does one refresh reach every harness, and is it safe to run again?
+**1. Mistakes fail before any tokens are spent.** Claude Code can't enforce a Codex sandbox mode, and the types know it:
 
 ```text
-$ prism init my-standards --with-agent --with-skill
-$ prism refresh ./my-standards --all
-   Matching requested harnesses: claude-code, opencode, hermes, codex-cli, antigravity-cli, kimi-code, amp-code, cursor, pi, omp, grok, devin
-create    ~/.claude/skills/prism-generated-my-standards/agents/reviewer.md (new)
-create    ~/.config/opencode/agents/reviewer.md (new)
-patch     ~/.config/opencode/opencode.json [agent.reviewer.mode, agent.reviewer.model, agent.reviewer.temperature, agent.reviewer.tools]
-create    ~/.kimi-code/plugins/managed/prism-generated-my-standards/kimi.plugin.json (new)
-patch     ~/.pi/agent/settings.json [packages.prism-generated-my-standards]
-   codex-cli ~/.codex: create=2, patch-regions=1
-   cursor ~/.cursor: create=3, patch-regions=1
-   grok ~/.grok: create=1, patch-regions=1
-   ...
-✅ Done.
-
-$ prism refresh ./my-standards --all
-   codex-cli ~/.codex: skip=2, skip-regions=1
-   ...
-✅ Already converged — nothing written.
+$ prism workflow typecheck bad-perm.workflow.ts
+❌ Workflow typecheck failed: workflow type error in bad-perm.workflow.ts:
+bad-perm.workflow.ts:35:37: Argument of type '{ worker: "claude-code"; model: "sonnet"; permission: "sandbox-read-only"; }' is not assignable to parameter of type 'WorkflowTaskWorkerOptions'.
+  Types of property 'permission' are incompatible.
+    Type '"sandbox-read-only"' is not assignable to type 'ClaudeWorkflowPermissionMode | undefined'.
 ```
 
-**2. Drift is repaired; foreign files are refused.** What happens to a file I edited by hand, or one Prism never wrote?
+**2. Answers are checked.** A mocked "revise" with no findings fails the finish check (no tokens spent):
 
 ```text
-$ echo "hand edit" >> ~/.codex/prompts/test.md
-$ prism refresh ./my-standards --harness codex-cli
-   codex-cli ~/.codex: repair=1, skip=1, skip-regions=1
-     repair        ~/.codex/prompts/test.md (drifted)
-💾 Backups created:
-   ~/.prism/backups/20260924T072528-90hq2s/6b735ac615030cb6/prompts/test.md
-
-# fresh HOME where ~/.codex/prompts/test.md already holds "my own prompt"
-$ prism refresh ./my-standards --harness codex-cli
-⛔ Refusing to overwrite a file Prism does not manage: ~/.codex/prompts/test.md
-  hint: a file Prism has never managed already exists here with different content — delete or move it, then refresh
-❌ Refresh finished with unapplied targets.          (exit 1; file unchanged)
+$ prism workflow run review.workflow.ts --mock-output mock.json
+❌ Workflow run failed: workflow task codex failed finish criterion 'a non-ship verdict names its findings': verdict without findings
 ```
 
-**3. One tool, one implementation, callable from any harness.** Does a tool written once run without a daemon?
+**3. Two agents, one contract, live.** Codex and Claude review HEAD (`327d206`) in parallel; 34.5 s wall clock:
 
 ```text
-$ prism refresh ./prism-harness-qa --harness claude-code,codex-cli
-$ prism tools invoke prism-harness-qa challenge_echo --input '{"challenge":"brief-2026-09-24"}'
+$ prism workflow run review.workflow.ts
 {
-  "challenge": "brief-2026-09-24",
-  "proof": "prism-tool-proof:brief-2026-09-24",
-  "source": "prism-generated-tool"
-}
-$ prism tools invoke prism-harness-qa challenge_echo --input '{"nope":1}'
-{ "error": "Expected no excess property\n  at [\"nope\"]" }      (exit 1)
-```
-
-**4. A typed task on an installed harness.** Is what comes back checked before I use it?
-
-```text
-$ prism workflow run review.workflow.ts --mock-output bad.json     # count: "one"
-❌ Workflow run failed: workflow task count-harnesses returned output that failed schema decode
-
-$ prism workflow run review.workflow.ts                            # live, codex-cli
-{
-  "runId": "e4d99d3a-ba34-48fc-b8ed-01a9e2a30526",
-  "tasks": [{
-    "id": "count-harnesses",
-    "output": { "harnessIds": ["claude-code", "opencode", "hermes", "codex-cli", "antigravity-cli",
-                "kimi-code", "amp-orb", "amp-runner", "amp-code", "cursor", "pi", "omp", "grok", "devin"],
-                "count": 14 },
-    "status": "completed",
-    "metadata": { "adapter": "codex-cli", "durationMs": 22057, "codexNativeOutputSchema": true, ... }
-  }]
+  "runId": "ee259bf3-204f-4b02-8614-9fa56868bc5b",
+  "tasks": [
+    { "id": "codex", "status": "completed", "cached": false,
+      "output": { "verdict": "revise", "findings": [
+        "README.md:117 [MEDIUM] The new prose promises a backup whenever a file is repaired. Source changes also produce a `repair`, but `src/sync/plan.ts:279-280` sets `backup: false` for them; ...",
+        "README.md:117 [LOW] The TypeScript source list drops `*.sop.ts`, ..." ] } },
+    { "id": "claude", "status": "completed", "cached": false,
+      "output": { "verdict": "ship", "findings": [ "327d206 is docs-only: ...", ... ] } }
+  ]
 }
 ```
 
-The answer is correct: `src/lowerer-capabilities.ts` enumerates those 14 ids, matching `HarnessId` at `src/types.ts:6-20`. The run cost 23,506 Codex tokens.
+Codex's finding was correct; the README was fixed from it.
+
+**4. The ledger.** A rerun replays both tasks from the cache (1.8 s), and the trace shows the parallel run:
+
+```text
+$ prism workflow run review.workflow.ts          # again
+    { "id": "codex", "status": "completed", "cached": true, ... }
+    { "id": "claude", "status": "completed", "cached": true, ... }
+
+$ prism workflow runs trace ee259bf3-204f-4b02-8614-9fa56868bc5b
+✓ workflow.run · review-commit · 32.9s
+└─ ✓ workflow.program · 32.9s
+   ├─ ✓ workflow.task · codex · 32.9s
+   │  └─ ✓ task.executor · attempt 0 · codex-cli · 32.8s
+   └─ ✓ workflow.task · claude · 24.3s
+      └─ ✓ task.executor · attempt 0 · claude-code sonnet · 24.3s
+
+$ prism workflow runs summary d1ab489c-c6ae-4d40-964b-f13e5a6e257e
+Tasks: total 2, fresh executions 0, cache hits 2, repairs 0
+```
 
 ## How it works
 
-`plugin.json` says which harnesses get each artifact kind. `prism refresh` compiles TypeScript sources (`*.agent.ts`, `*.tool.ts`, `*.hook.ts`, `*.sop.ts`) through one lowerer per harness (`src/compile/pipeline.ts`, `src/compile/lowerers/`) and routes markdown rules, commands, and skills as files. Every write goes through `planSync` (`src/sync/plan.ts:577`), which diffs against the ledger in `~/.prism/state/roots/`, and `applySync` (`src/sync/apply.ts:120`), which writes, backs up to `~/.prism/backups/`, and prunes what Prism no longer emits. What each harness supports is declared once in `src/lowerer-capabilities.ts`; an unsupported target fails validation. Workflows are Effect programs (`defineTask`, `defineWorkflow`): `src/workflow-runtime.ts` spawns the harness CLI, decodes its answer against the task's `Schema` (`src/workflow-errors.ts:8` on failure), and stores runs and events in SQLite.
+`defineTask` binds a harness (`worker`), prompt, output `Schema`, optional `cacheKey`, and `finish` criteria; `defineWorkflow` takes a task list or an Effect `run(wf)` program that calls `wf.runTask` (`docs/workflows.md`). `src/workflow-runtime.ts` spawns the harness CLI through that harness's adapter, with its own login, model, and permission mode. The final message must decode into the schema (`src/workflow-errors.ts:8` on failure; 2 decode repairs by default), then pass the finish criteria (deterministic code, or a judge verdict of pass / continue / fail / escalate). Runs, tasks, events, and spans go to a per-project SQLite store under `PRISM_HOME`; completed results are cached by task id, `cacheKey`, and a hash of what ran, so a rerun replays them. 13 harnesses can run tasks (every `HarnessId` except `pi`, `src/lowerer-capabilities.ts`).
 
-Diagram spec:
+The second half, the compiler: `prism refresh` turns one plugin (`plugin.json` plus `agents/`, `skills/`, `tools/`, `hooks/`, `rules/`) into each harness's own files, records what it wrote in `~/.prism/state/roots/`, backs up a hand-edited file before repairing it, and refuses files it never wrote.
 
-- nodes: `plugin.json` · sources (`agents/`, `skills/`, `tools/`, `hooks/`, `rules/`, `commands/`) · compile pipeline (load → resolve → compose) · lowerer × harness (claude-code, codex-cli, opencode, … 12 on `--all`) · file router · `planSync` · ledger (`~/.prism/state/roots`) · `applySync` · harness roots (`~/.claude`, `~/.codex`, `~/.config/opencode`, …) · backups (`~/.prism/backups`) · tool runtime (`~/.prism/runtime/tools/<plugin>/runtime.mjs`) · workflow runtime · harness adapter · harness CLI · `Schema` decode · SQLite store
-- edges: `plugin.json` → sources; sources → compile pipeline → lowerer (one per harness); sources → file router; lowerer + file router → `planSync`; ledger → `planSync`; `planSync` → `applySync` → harness roots; `applySync` → backups; `applySync` → ledger; lowerer → tool runtime; workflow runtime → harness adapter → harness CLI → `Schema` decode → SQLite store
+Diagram spec (text only; no visual approved):
+
+- nodes: `review.workflow.ts` · `prism workflow typecheck` · `wf.runTask` × N · harness adapter · harness CLI (codex, claude, …) · `Schema` decode · finish criteria · repair prompt · SQLite ledger · task cache · `runs trace` / `runs summary`
+- edges: workflow file → typecheck → `wf.runTask` (parallel) → adapter → harness CLI → decode → finish criteria → ledger; decode or criteria failure → repair prompt → harness CLI; ledger → cache → `wf.runTask` (replay); ledger → trace / summary
 
 ## Who it is for / not for
 
 For:
-- someone who runs two or more coding harnesses and keeps the same rules, skills, agents, or hooks in each
-- someone who wants that setup in Git, reviewed, and reproducible on a second machine
-- someone who wants to dispatch tasks to several harness CLIs and get typed JSON back
+- someone who already runs Claude Code, Codex, or another agent CLI and wants several of them on one task with typed answers
+- someone who writes TypeScript and is happy to write Effect
+- someone who wants a record of every agent run they can read back and replay
 
 Not for:
-- a single-harness user; that harness's own config is simpler
-- anyone who wants a hosted service or a model API SDK: Prism drives CLIs you have installed and authenticated
-- Windows users (no Windows binary)
-- a team that needs a stable format today; the README says outputs and adapters may still change
+- anyone who wants a hosted service or a model API SDK: Prism drives CLIs you have installed and logged into
+- anyone who needs a hard cost cap per run (there is none)
+- Windows users (no Windows build)
 
 ## Install
 
@@ -145,43 +112,41 @@ Not for:
 npm install -g @skastr0/prism
 ```
 
-Prebuilt binaries for darwin-arm64, darwin-x64, linux-arm64, linux-x64 (`packages/npm/prism-*/package.json`). No Windows build. Workflows need the target harness CLIs installed and logged in; live runs spend that harness's tokens.
+Binaries for darwin-arm64, darwin-x64, linux-arm64, linux-x64 (`packages/npm/prism-*/package.json`). Workflows need the harness CLIs you name installed and logged in; live runs spend their tokens.
 
 ## Proof
 
-- Released: `0.8.0` on 2026-09-23 (`CHANGELOG.md:16`); 22 versions on npm (`npm view @skastr0/prism versions`: 0.1.0 … 0.8.0). `@skastr0/prism-sdk` and `@skastr0/prism-packager` also at 0.8.0.
-- CI: latest `main` run succeeded (`gh run list`: run 35966566681, 2026-09-24); the v0.8.0 publish workflow succeeded (run 35906498676).
-- Tests: `bun test --timeout 30000` on `main` at `ebd785b`, 2026-09-24: 1,623 pass, 2 skip, 0 fail, 1,625 tests across 157 files, 545 s.
-- Idempotency: second `prism refresh --all` in run 1 wrote nothing; `bun run check:refresh-idempotency` exists as a script gate (`package.json`). I did not run that script today.
-- Harness reach: 14 harness ids (`src/types.ts:6-20`); `--all` targets 12 of them (run 1). The capability matrix marks 10 targets `live-proven`, Cursor and Pi `compile-verified` (`docs/lowerer-capability-matrix.md`, checked 2026-07-22).
-- Daily use: on my machine, 85 plugin sources in `~/Projects/prism-plugins`, 44 ledger files in `~/.prism/state/roots`, 21 `prism-generated-*` plugins in `~/.claude/skills`.
-- GitHub: `skastr0/prism`, public, 2 stars (`gh repo view`).
+- Released: `0.8.1` on 2026-09-24; 23 versions on npm (`npm view @skastr0/prism versions`). Publish run: https://github.com/skastr0/prism/actions/runs/35974633094.
+- Tests: `bun run test:ci` in the 0.8.1 release gate: 1,623 pass, 0 fail across 157 files.
+- Today's runs: `ee259bf3…` (live, 2 fresh tasks), `d1ab489c…` (2 cache hits, 1.8 s).
+- Harness reach: 13 workflow harnesses (`src/lowerer-capabilities.ts`, `workflowWorker: true`); the capability matrix marks 10 targets live-proven (`docs/lowerer-capability-matrix.md`).
+- Daily use: my own multi-agent work runs through Prism workflows and plugins (85 plugin sources in `~/Projects/prism-plugins`; 21 generated Claude Code plugins).
+- GitHub: `skastr0/prism`, public, 2 stars.
 
 ## Gaps
 
-- **Codex tasks fail outside a Git repo.** Running run 4 from a plain directory: `❌ Workflow run failed: codex exited with 1: Reading additional input from stdin... Not inside a trusted directory and --skip-git-repo-check was not specified.` It passed after `git init`.
-- **Two targets are compile-checked only.** Cursor and Pi output is pinned by golden tests, never dispatched live. Antigravity and OMP are live-dispatched but their smoke fixtures are pending.
-- **Per-harness holes, by design:** Kimi has no project scope; Amp has no `session.end` hook; Hermes gets skills and tools but no agents or hooks; Devin gets no tools yet (`docs/lowerer-capability-matrix.md`).
-- **First refresh churns a little.** On an empty `HOME`, one refresh backed up `CLAUDE.md` and `AGENTS.md` it had created moments earlier, and rewrote `generated/models.ts` once per harness (`repair … (source-changed)`). The second run was clean.
-- **Workflow durability is local.** Runs live in a local SQLite store; the README says this is not `@effect/workflow`-style durable execution. `docs/workflow-production-readiness-audit-2026-07-21.md` still lists open rows (e.g. row 46, store data governance).
-- **Live runs cost tokens with no ceiling.** Prism sets no timeout or cost cap by design (`docs/workflows.md`, "Running and operating"); a trivial task used 23,506 tokens.
+- **Codex tasks fail outside a Git repo:** `codex exited with 1: ... Not inside a trusted directory and --skip-git-repo-check was not specified.`
+- **No cost cap.** No timeout, token, or cost ceiling by design (`docs/workflows.md`, "Running and operating"); scope is set by the prompt, model, and graph.
+- **The ledger is local.** A per-project SQLite store, not distributed durable execution. `docs/workflow-production-readiness-audit-2026-07-21.md` still lists open rows.
+- **`runs resume` output unclear.** Resuming a completed run today printed a new run id with an empty task list (unverified whether that is the intended no-op).
+- **No Pi workflow adapter**; Cursor and Pi compile output is checked against saved expected output, not loaded live.
 - **One user.** No evidence of anyone else running it.
 
 ## Demo moments
 
-1. **One source into twelve harnesses** (terminal cast, ~20 s). `prism init`, `prism refresh --all` on an empty `HOME`, `tree -L 3 ~` showing `.claude`, `.codex`, `.config/opencode`, `.grok`, `.kimi-code`, `.pi` filled; run refresh again and hold on `✅ Already converged — nothing written.` Proves reach and idempotency.
-2. **Drift and ownership** (terminal cast, ~15 s). Append to a managed Codex prompt, refresh, show `repair … (drifted)` and the backup path; then a pre-existing user file and the `⛔ Refusing to overwrite` line with the file still intact. Proves Prism never clobbers what it does not own.
-3. **Typed answer from Codex** (terminal cast, ~30 s, sped up). Mock run with a wrong type fails schema decode; live run on Codex returns `count: 14`; `grep` the source to show 14 ids. Proves the output is checked before use.
+1. **Typed before it runs** (terminal, ~10 s): `typecheck` rejects a Codex sandbox mode on a Claude task. Proves mistakes fail before tokens are spent.
+2. **Two agents, one contract** (terminal, ~40 s, sped up): the live review run, then the `runs trace` tree. Proves parallel harnesses returning the same typed shape.
+3. **Rerun is free** (terminal, ~5 s): the same command again, both tasks `"cached": true` in 1.8 s. Proves the ledger.
 
 ## Copy bank
 
-- tagline: One agent setup, in every coding agent.
-- short description: Prism installs your agents, skills, tools, and hooks into 12 coding agents, each in its own format, and runs typed tasks across them.
-- page lede: Claude Code, Codex, OpenCode, Cursor, and eight more each keep their own copy of your agents, skills, and hooks. Prism keeps one copy in Git and installs it in each tool's own format. Run it twice and the second run writes nothing.
-- X post: Each of my twelve agent CLIs kept its own copy of my skills, and a fix in one rotted in the rest. Prism keeps one copy in Git and installs it in each tool's own format. It repairs files I edited by hand, refuses files it never wrote, and a second run writes nothing.
+- tagline: Typed workflows for your coding agents.
+- short description: Prism runs Claude Code, Codex, and other agent CLIs from typed Effect workflows: schema-checked answers, repair loops, and a ledger you can replay.
+- page lede: Prism runs the coding agents you already use, Claude Code, Codex, and eleven more, from workflows you write in TypeScript with Effect. Every answer is checked against a schema before your code sees it, and every run is recorded, so a rerun replays finished work instead of paying for it again.
+- X post: I stopped running agents from scripts. In Prism a task is a harness, a prompt, and a schema its answer must decode into. Codex and Claude review a commit in parallel, a bad answer gets a repair prompt, and a rerun replays both from the ledger in 2 seconds.
 - status gaps (page):
   - No Windows build. Binaries for macOS and Linux, arm64 and x64.
-  - Cursor and Pi output is compile-checked but not yet run live.
   - Codex workflow tasks fail outside a Git repository.
-  - Output formats and adapters may still change.
   - Live workflow runs have no token or time cap.
+  - The run ledger is a local SQLite store.
+  - Output formats and adapters may still change.

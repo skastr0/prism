@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * prism CLI - Unified plugin distribution for AI coding harnesses
+ * prism CLI - run coding agents from typed Effect workflows; install one agent setup into every harness
  */
 
 import { Command, CommanderError, InvalidArgumentError, Option as CommanderOption } from "commander";
@@ -180,7 +180,7 @@ const prismVersion =
 
 program
   .name("prism")
-  .description("Unified plugin distribution for AI coding harnesses")
+  .description("Run your coding agents from typed, checked Effect workflows")
   .version(prismVersion);
 
 program
@@ -208,10 +208,15 @@ function withoutOrdinal<T extends { readonly ordinal?: number | undefined }>(rec
   return rest;
 }
 
+// Workflow command group (listed first: workflows are Prism's main surface)
+const workflow = program
+  .command("workflow")
+  .description("Run coding agents from typed Effect workflows: typecheck, run, and read back runs");
+
 // Refresh command
 program
   .command("refresh [plugin-path]")
-  .description("Converge a plugin's targeted harness outputs")
+  .description("Install a plugin's agents, skills, tools, and hooks into each targeted harness")
   .option("--plugin <path>", "Plugin path to refresh")
   .option("--plugins <directory>", "Directory of child plugins to refresh (shallow scan)")
   .option("--harness <harnesses>", "Comma-separated list of harness IDs")
@@ -281,10 +286,6 @@ program
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
-
-const workflow = program
-  .command("workflow")
-  .description("Author and run harness workflows (plugins optional)");
 
 const parseIntegerAtLeast = (value: string, minimum: number, message: string): number => {
   const parsed = Number(value);

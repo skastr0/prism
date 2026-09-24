@@ -70,6 +70,7 @@ The `mcpConfig` surface is `unsupported` on every harness.
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | CLI runtime + skill inject | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
 | Amp Orb | unsupported | unsupported | flat text skills in an explicit checkout | unsupported | unsupported | none | `unsupported` (install-only; no compile lowerer) |
+| Amp Runner | unsupported | unsupported | unsupported | unsupported | unsupported | none | `unsupported` for install and compile; workflow tasks only, on an `amp --no-tui --runner-id <id>` runner |
 | Cursor | `native-plugin-bundle` for commands, agents, hooks | plugin subagents | direct skills + plugin sop skills | CLI runtime | plugin command hooks | none for tools | `compile-verified` (workflow worker live-dispatchable) |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |
 | Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none | `live-proven` (live dispatch verified, smoke fixture pending) |

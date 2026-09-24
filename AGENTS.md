@@ -1,12 +1,16 @@
 # prism
 
-A unified plugin distribution system for AI coding harnesses.
+An agent framework for workflows: Prism runs coding agents from typed, checked Effect workflows. Installing one agent setup into every harness is its supporting feature.
 
 ## What is this?
 
-`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Kimi Code, Amp Code, Grok Build, Pi, and Oh My Pi, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+Prism's main surface is `prism workflow`. A task (`defineTask`) binds a harness CLI (Claude Code, Codex, Grok, Kimi, Amp, OpenCode, and more), a prompt, an Effect `Schema` the answer must decode into, and finish criteria the decoded answer must pass. A workflow (`defineWorkflow`) is a task list or an Effect program over `wf.runTask`. Bad answers get bounded repair prompts; every run, task, event, and span lands in a local SQLite ledger; completed tasks are cached and replay on rerun. The engine lives in `src/workflows.ts` and `src/workflow-*.ts`; the public contract is `docs/workflows.md`.
 
-## What it does
+The supporting feature is the compiler: `prism refresh` installs one plugin's agents, skills, rules, commands, tools, and hooks into each harness in its native format, so every agent a workflow dispatches shares the same toolbox.
+
+When writing about Prism (README, docs, package metadata, help text), lead with workflows; the compiler comes second.
+
+## What the compiler does
 
 1. **Formalizes harness configurations** - Knows where each supported harness stores its config files, rules, commands, custom agents, and skills
 2. **Unified artifact format** - Write commands, rules, agents, and skills once using a common markdown format with frontmatter

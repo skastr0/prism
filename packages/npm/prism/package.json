@@ -2,7 +2,7 @@
   "name": "@skastr0/prism",
   "version": "0.8.1",
   "type": "module",
-  "description": "Unified plugin distribution CLI for AI coding harnesses.",
+  "description": "Run Claude Code, Codex, and other coding agents from typed Effect workflows: schema-checked answers, repair loops, and a run ledger you can replay.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,10 +15,14 @@
   },
   "keywords": [
     "prism",
-    "cli",
-    "ai-coding",
     "agents",
-    "plugins"
+    "ai-agents",
+    "workflows",
+    "effect",
+    "claude-code",
+    "codex",
+    "coding-agents",
+    "cli"
   ],
   "publishConfig": {
     "access": "public"

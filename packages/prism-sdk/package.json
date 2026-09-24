@@ -2,7 +2,7 @@
   "name": "@skastr0/prism-sdk",
   "version": "0.8.1",
   "type": "module",
-  "description": "Core Prism contracts, refs, stable JSON, and manifest codecs for Prism runtimes and workflow tooling.",
+  "description": "Core Prism contracts, refs, stable JSON, and manifest codecs shared by Prism workflows and the Prism CLI.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,9 +15,9 @@
   },
   "keywords": [
     "prism",
-    "ai-coding",
     "agents",
     "workflows",
+    "effect",
     "manifest"
   ],
   "publishConfig": {

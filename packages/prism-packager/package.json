@@ -2,7 +2,7 @@
   "name": "@skastr0/prism-packager",
   "version": "0.8.1",
   "type": "module",
-  "description": "Embeddable Prism packager: compile a plugin into harness-native package payloads (DesiredFile[]) without shipping the Prism CLI.",
+  "description": "Embeddable Prism packager: compile a plugin's agents, skills, tools, and hooks into harness-native files (DesiredFile[]) without the Prism CLI.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,7 +15,6 @@
   },
   "keywords": [
     "prism",
-    "ai-coding",
     "agents",
     "packager",
     "harness",

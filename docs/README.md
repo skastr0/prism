@@ -22,6 +22,5 @@ Start with the [root README](../README.md#quick-start). These documents go deepe
 ## Operations & release
 
 - [`release-train.md`](release-train.md) — how releases cut and publish
-- [`workflow-production-readiness-audit-2026-07-21.md`](workflow-production-readiness-audit-2026-07-21.md) — workflow hardening audit and release rules
 - [`hooks-harness-audit.md`](hooks-harness-audit.md) — hook behavior audited per harness
 - [`agent-skill-integration-tests.md`](agent-skill-integration-tests.md) — integration-test coverage for agent/skill surfaces

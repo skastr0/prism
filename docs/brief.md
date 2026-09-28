@@ -127,7 +127,7 @@ Binaries for darwin-arm64, darwin-x64, linux-arm64, linux-x64 (`packages/npm/pri
 
 - **Codex tasks fail outside a Git repo:** `codex exited with 1: ... Not inside a trusted directory and --skip-git-repo-check was not specified.`
 - **No cost cap.** No timeout, token, or cost ceiling by design (`docs/workflows.md`, "Running and operating"); scope is set by the prompt, model, and graph.
-- **The ledger is local.** A per-project SQLite store, not distributed durable execution. `docs/workflow-production-readiness-audit-2026-07-21.md` still lists open rows.
+- **The ledger is local.** A per-project SQLite store, not distributed durable execution.
 - **`runs resume` output unclear.** Resuming a completed run today printed a new run id with an empty task list (unverified whether that is the intended no-op).
 - **No Pi workflow adapter**; Cursor and Pi compile output is checked against saved expected output, not loaded live.
 - **One user.** No evidence of anyone else running it.

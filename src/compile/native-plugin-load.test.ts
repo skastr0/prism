@@ -7,6 +7,9 @@ import { Effect } from "effect";
 import { exists } from "../fs.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { effectImportPath } from "../testing/prism-sandbox.js";
+import { createOpenCodeV2TestHost } from "./opencode-v2-test-host.js";
+import { commitSnapshot, readSnapshot } from "../state/store.js";
+import { serializeRegionRef } from "../sync/plan.js";
 
 const tempRoots: string[] = [];
 
@@ -82,9 +85,11 @@ import type { ToolSource } from ${JSON.stringify(prismImportPath)};
 export default {
   name: "greet",
   description: "Greet someone",
-  input: Schema.Struct({ name: Schema.String }),
-  output: Schema.Struct({ message: Schema.String }),
-  async handle(input) {
+  input: Schema.Struct({ name: Schema.String, nested: Schema.optional(Schema.Struct({ label: Schema.String })) }),
+  output: Schema.Struct({ message: Schema.String, context: Schema.optional(Schema.Unknown) }),
+  async handle(input, context) {
+    if (input.name === "fail") throw new Error("handler failed");
+    if (input.name === "context") return { message: "context", context: { ...context, signal: context.signal?.aborted } };
     return { message: "Hello, " + input.name };
   },
 } satisfies ToolSource;
@@ -150,8 +155,8 @@ test("OpenCode native plugin is registered and loads", async () => {
     join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "dist", "server.mjs"),
   ).href;
 
-  expect(config.plugin).toContain(expectedEntry);
-  expect(config.plugin.filter((entry: string) => entry === expectedEntry)).toHaveLength(1);
+  expect(config.plugins).toContain(expectedEntry);
+  expect(config.plugins.filter((entry: string) => entry === expectedEntry)).toHaveLength(1);
 
   const serverPath = join(
     projectRoot,
@@ -164,21 +169,28 @@ test("OpenCode native plugin is registered and loads", async () => {
   const imported = (await import(
     `${pathToFileURL(serverPath).href}?test=${Date.now()}`
   )) as {
-    readonly default?: { readonly id?: string; readonly server?: unknown };
+    readonly default?: { readonly id?: string; readonly setup?: unknown; readonly server?: unknown };
   };
   expect(imported.default).toBeDefined();
   expect(imported.default!.id).toBe(GENERATED_PLUGIN_ID);
-  expect(typeof imported.default!.server).toBe("function");
-
-  const serverResult = await (imported.default!.server as (ctx: unknown) => Promise<unknown>)({
-    directory: projectRoot,
-    worktree: projectRoot,
-  });
-  expect(serverResult).toMatchObject({
-    tool: {
-      native_plugin_load_fixture_greet: expect.any(Object),
-    },
-  });
+  expect(imported.default!.server).toBeUndefined();
+  expect(typeof imported.default!.setup).toBe("function");
+  const host = createOpenCodeV2TestHost();
+  await (imported.default!.setup as (ctx: unknown) => Promise<unknown>)(host.context);
+  expect([...host.tools.keys()]).toEqual(["native_plugin_load_fixture_greet"]);
+  host.replay();
+  const tool = host.tools.get("native_plugin_load_fixture_greet")!;
+  expect(tool.input).toMatchObject({ type: "object", additionalProperties: false, required: ["name"] });
+  const execution = { sessionID: "session", agent: "active-agent", signal: new AbortController().signal };
+  expect(await tool.execute({ name: "Ada" }, execution)).toEqual({ content: JSON.stringify({ message: "Hello, Ada" }, null, 2) });
+  await expect(tool.execute({ name: 3 }, execution)).rejects.toThrow();
+  await expect(tool.execute({ name: "Ada", typo: true }, execution)).rejects.toThrow();
+  await expect(tool.execute({ name: "Ada", nested: { label: "x", lable: "typo" } }, execution)).rejects.toThrow();
+  await expect(tool.execute({ name: "fail" }, execution)).rejects.toThrow("handler failed");
+  const resultContext = JSON.parse((await tool.execute({ name: "context" }, execution)).content).context;
+  expect(resultContext).toMatchObject({ sessionID: "session", agent: "active-agent", sessionTitle: "Live session", workingDirectory: "/worktree/src", repoRoot: "/worktree", signal: false, cost: { inputTokens: 10, outputTokens: 5, estimatedCost: 0.02, currency: "USD" } });
+  expect(Number.isFinite(Date.parse(resultContext.timestamp))).toBe(true);
+  await expect(tool.execute({ name: "Ada" }, { ...execution, sessionID: "missing" })).rejects.toThrow("missing session");
 }, 60000);
 
 test("Amp Code native plugin is emitted and loads", async () => {
@@ -322,7 +334,7 @@ test("OpenCode plugin registration is idempotent and removable", async () => {
   ).href;
 
   const configAfterFirst = JSON.parse(await readFile(opencodeJsonPath, "utf8"));
-  expect(configAfterFirst.plugin).toContain(expectedEntry);
+  expect(configAfterFirst.plugins).toContain(expectedEntry);
 
   const second = await Effect.runPromise(
     compilePluginForTarget({
@@ -358,5 +370,114 @@ test("OpenCode plugin registration is idempotent and removable", async () => {
   expect(third.failures).toHaveLength(0);
 
   const configAfterRemoval = JSON.parse(await readFile(opencodeJsonPath, "utf8"));
-  expect(configAfterRemoval.plugin ?? []).not.toContain(expectedEntry);
+  expect(configAfterRemoval.plugins ?? []).not.toContain(expectedEntry);
+}, 60000);
+
+test("OpenCode migrates previous owned plugin membership without adopting neighbors", async () => {
+  const { pluginRoot, projectRoot } = await createNativePluginFixture();
+  const prismHome = join(dirname(pluginRoot), "prism-home");
+  const root = join(projectRoot, ".opencode");
+  const options = { prismHome, pluginPath: pluginRoot, target: "opencode" as const, scope: "project" as const, projectPath: projectRoot, dryRun: false };
+  const first = await Effect.runPromise(compilePluginForTarget(options));
+  expect(first.failures).toHaveLength(0);
+  const configPath = join(root, "opencode.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  const entry = config.plugins[0];
+  config.plugin = ["old-hand-authored", entry];
+  config.plugins = ["new-hand-authored"];
+  await writeJson(configPath, config);
+  const previous = await readSnapshot({ prismHome, harness: "opencode", root });
+  const oldRef = serializeRegionRef({ kind: "json-array-member", targetPath: configPath, regionKey: `plugin.${GENERATED_PLUGIN_ID}`, jsonPath: ["plugin"], value: entry, plugin: PLUGIN_NAME });
+  await commitSnapshot({ prismHome, manifest: { ...previous.manifest, entries: previous.manifest.entries.map((owned) => owned.targetPath === configPath && owned.regionKey?.startsWith("json-array plugins.") ? { ...owned, regionKey: oldRef } : owned) } });
+  const migrated = await Effect.runPromise(compilePluginForTarget(options));
+  expect(migrated.failures).toHaveLength(0);
+  expect(migrated.blocked).toHaveLength(0);
+  const after = JSON.parse(await readFile(configPath, "utf8"));
+  expect(after.plugin).toEqual(["old-hand-authored"]);
+  expect(after.plugins).toEqual(["new-hand-authored", entry]);
+  const second = await Effect.runPromise(compilePluginForTarget(options));
+  expect(second.failures).toHaveLength(0);
+  expect(second.blocked).toHaveLength(0);
+  expect(second.converged).toBe(true);
+  expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(after);
+}, 60000);
+
+test("OpenCode v2 hooks execute, block, propagate errors, and clean up subscriptions", async () => {
+  const { pluginRoot, projectRoot } = await createNativePluginFixture();
+  const prismHome = join(dirname(pluginRoot), "prism-home");
+  const manifest = JSON.parse(await readFile(join(pluginRoot, "plugin.json"), "utf8"));
+  manifest.targets.hooks.push("opencode");
+  await writeJson(join(pluginRoot, "plugin.json"), manifest);
+  const sinkKey = `prism-v2-${pluginRoot}`;
+  const observed: any[] = [];
+  (globalThis as any)[sinkKey] = observed;
+  const imports = `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};`;
+  for (const [name, event, match, body] of [
+    ["on-start", "sessionStart", "", `return Effect.sync(() => { globalThis[${JSON.stringify(sinkKey)}].push(event); return { decision: "continue" }; });`],
+    ["on-end", "sessionEnd", "", `globalThis[${JSON.stringify(sinkKey)}].push(event); return { decision: "continue" };`],
+    ["before", "toolBefore", 'match: { tool: hookTool.native("bash") },', `if (event.tool.input?.fail) throw new Error("hook failed"); if (event.tool.input?.invalid) return { decision: "garbage" }; return event.tool.input?.block ? { decision: "block", message: "blocked by hook" } : { decision: "continue" };`],
+    ["canonical", "toolBefore", 'match: { tool: hookTool.canonical("greet") },', `throw new Error("canonical matcher fired");`],
+    ["after", "toolAfter", 'match: { tool: hookTool.native("bash") },', `globalThis[${JSON.stringify(sinkKey)}].push(event); if (event.tool.input?.fail) throw new Error("after failed"); return { decision: "continue" };`],
+    ["prompt", "promptSubmit", "", 'return { decision: "continue", systemMessage: "policy", additionalContext: "context:" + event.prompt };'],
+    ["permission", "permissionRequest", 'match: { tool: hookTool.any() },', 'if (event.tool.input.metadata?.fail) throw new Error("permission failed"); return event.tool.input.metadata?.block ? { decision: "block", message: "denied by policy" } : { decision: "continue" };'],
+  ]) {
+    await writeText(join(pluginRoot, "hooks", `${name}.hook.ts`), `${imports}\nexport default { name: ${JSON.stringify(name)}, event: hookEvent.${event}, ${match} handle(event) { ${body} } };\n`);
+  }
+  try {
+    const compiled = await Effect.runPromise(compilePluginForTarget({ prismHome, pluginPath: pluginRoot, target: "opencode", scope: "project", projectPath: projectRoot, dryRun: false }));
+    expect(compiled.failures).toHaveLength(0);
+    const bundlePath = join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "dist", "server.mjs");
+    const plugin = (await import(pathToFileURL(bundlePath).href)).default;
+    const host = createOpenCodeV2TestHost();
+    const cleanup = await plugin.setup(host.context);
+    expect([...host.hooks.keys()].sort()).toEqual(["permission.evaluate", "session.prompt", "tool.execute.after", "tool.execute.before"]);
+    const before = host.hooks.get("tool.execute.before")!;
+    const event = { sessionID: "session", agent: "active", tool: "bash", input: { block: true } };
+    await expect(before(event)).rejects.toThrow("blocked by hook");
+    await expect(before({ ...event, input: { fail: true } })).rejects.toThrow("hook failed");
+    await expect(before({ ...event, input: { invalid: true } })).rejects.toThrow("validation failed");
+    await before({ ...event, tool: "read" });
+    await expect(before({ ...event, tool: "native_plugin_load_fixture_greet" })).rejects.toThrow("canonical matcher fired");
+    const after = host.hooks.get("tool.execute.after")!;
+    const failed = { ...event, input: {}, status: "error", error: { message: "original failure" } };
+    await after(failed);
+    expect(failed).toMatchObject({ status: "error", error: { message: "original failure" } });
+    expect(observed.at(-1)).toMatchObject({ cwd: "/worktree/src", tool: { success: false, output: { message: "original failure" } }, native: failed });
+    await after({ ...event, input: {}, status: "completed", result: { content: "ok" } });
+    expect(observed.at(-1).tool.success).toBe(true);
+    await expect(after({ ...failed, input: { fail: true } })).rejects.toThrow("after failed");
+    const prompt = { sessionID: "session", messageID: "message", prompt: { text: "original", files: [{ uri: "file:///keep" }] }, metadata: { user: true }, delivery: "steer" };
+    await host.hooks.get("session.prompt")!(prompt);
+    expect(prompt.prompt.text).toBe("original\n\npolicy\n\ncontext:original");
+    expect(prompt.prompt.files).toEqual([{ uri: "file:///keep" }]);
+    expect(prompt.metadata).toEqual({ user: true });
+    const permission = { sessionID: "session", action: "bash", resources: ["*"], effect: "ask", metadata: { block: true } };
+    await host.hooks.get("permission.evaluate")!(permission);
+    expect(permission).toMatchObject({ effect: "deny", message: "denied by policy" });
+    await expect(host.hooks.get("permission.evaluate")!({ ...permission, metadata: { fail: true } })).rejects.toThrow("permission failed");
+    host.emit({ type: "session.status", location: { directory: "/event-location" }, data: { sessionID: "session", status: { type: "busy" } } });
+    host.emit({ type: "session.status", data: { sessionID: "session", status: { type: "idle" } } });
+    host.emit({ type: "session.idle", data: { sessionID: "session" } });
+    for (let i = 0; i < 100 && !observed.some((receipt) => receipt.event === "session.end"); i++) await Bun.sleep(1);
+    expect(observed.filter((receipt) => receipt.event === "session.start")).toHaveLength(1);
+    expect(observed.find((receipt) => receipt.event === "session.start").cwd).toBe("/event-location");
+    expect(observed.filter((receipt) => receipt.event === "session.end")).toHaveLength(1);
+    expect(host.subscriptionSignal?.aborted).toBe(false);
+    await cleanup();
+    expect(host.subscriptionSignal?.aborted).toBe(true);
+    expect(host.closed).toBe(true);
+    const count = observed.length;
+    host.emit({ type: "session.idle", data: { sessionID: "session" } });
+    await Bun.sleep(1);
+    expect(observed).toHaveLength(count);
+
+    // Observer hook failures are not converted to successful strings or swallowed.
+    const child = Bun.spawn([process.execPath, "--eval", `const plugin = (await import(${JSON.stringify(pathToFileURL(bundlePath).href)})).default; globalThis[${JSON.stringify(sinkKey)}] = { push() { throw new Error("observer failed"); } }; await plugin.setup({ tool: { transform: async () => {}, hook: async () => {} }, permission: { hook: async () => {} }, session: { hook: async () => {}, get: async () => ({ location: { directory: "/event" } }) }, event: { async *subscribe() { yield { type: "session.idle", data: { sessionID: "session" } }; } } }); await Bun.sleep(20);`], { cwd: projectRoot, stdout: "pipe", stderr: "pipe" });
+    const stderr = await new Response(child.stderr).text();
+    expect(await child.exited).not.toBe(0);
+    expect(stderr).toContain("observer failed");
+  } finally {
+    delete (globalThis as any)[sinkKey];
+  }
 }, 60000);

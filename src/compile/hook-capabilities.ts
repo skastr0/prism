@@ -157,20 +157,20 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
     notification: { kind: "unsupported", note: "no native codex event" },
   },
   opencode: {
-    "tool.before": { kind: "native", nativeEvent: "tool.execute.before", controls: ["block"] },
+    "tool.before": { kind: "native", nativeEvent: "execute.before", controls: ["block"] },
     "tool.after": {
       kind: "native",
-      nativeEvent: "tool.execute.after",
+      nativeEvent: "execute.after",
       controls: ["systemMessage", "additionalContext"],
     },
     "prompt.submit": {
       kind: "native",
-      nativeEvent: "chat.message",
+      nativeEvent: "prompt",
       controls: ["systemMessage", "additionalContext"],
     },
     "permission.request": {
       kind: "native",
-      nativeEvent: "permission.ask",
+      nativeEvent: "evaluate",
       controls: ["block", "systemMessage"],
     },
     "session.start": {
@@ -181,13 +181,13 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
     },
     "session.end": {
       kind: "degraded",
-      nativeEvent: "session.status/session.idle",
+      nativeEvent: "session.idle",
       controls: ["systemMessage", "additionalContext"],
       note: "idle transition proxy",
     },
     "tool.failure": {
       kind: "unsupported",
-      note: "no distinct opencode failure event (tool.execute.after carries only a success flag)",
+      note: "failures are observed through tool.after (execute.after status:error), not a separate Prism event",
     },
     stop: { kind: "unsupported", note: "opencode has no turn-stop plugin hook" },
     "subagent.start": {

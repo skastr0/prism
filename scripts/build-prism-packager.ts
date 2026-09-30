@@ -87,7 +87,12 @@ const main = async (): Promise<void> => {
     throw new Error(`Missing packager entry: ${ENTRY}`);
   }
 
-  const files = collectSourceGraph(ENTRY);
+  // OpenCode mirrors this runtime source through readFile, not a static import.
+  // Include its dependency graph so packed installs can build standalone tools.
+  const files = [...new Set([
+    ...collectSourceGraph(ENTRY),
+    ...collectSourceGraph(join(SRC_ROOT, "compile/runtime/schema-bridge.ts")),
+  ])].sort();
   if (files.length === 0) {
     throw new Error("Packager source graph is empty");
   }

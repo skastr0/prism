@@ -157,7 +157,7 @@ export const LOWERER_CAPABILITIES = {
       pluginBundle: {
         kind: "native-plugin-api",
         path: "<opencode-root>/plugins/prism-generated-<plugin>/",
-        summary: "Compile emits an OpenCode plugin using @opencode-ai/plugin APIs.",
+        summary: "Compile emits an OpenCode v2 setup plugin with native tools and hooks.",
       },
       rules: {
         kind: "direct-file",

@@ -48,11 +48,11 @@ describe("hook-capabilities", () => {
       expect(claudePromptSubmit.nativeEvent).toBe("UserPromptSubmit");
     }
 
-    // opencode permission.request is native "permission.ask"
+    // OpenCode v2 permission.request is native evaluate.
     const opencodePermRequest = HOOK_CAPABILITIES["opencode"]["permission.request"];
     expect(opencodePermRequest.kind).toBe("native");
     if (opencodePermRequest.kind === "native") {
-      expect(opencodePermRequest.nativeEvent).toBe("permission.ask");
+      expect(opencodePermRequest.nativeEvent).toBe("evaluate");
     }
 
     // codex-cli session.end is degraded "Stop"

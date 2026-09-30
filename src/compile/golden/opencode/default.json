@@ -13,7 +13,7 @@
       "path": "<HARNESS_ROOT>/agents/security-reviewer.md"
     },
     {
-      "content": "<BUNDLE_HASH:6809d1d84c1e31e20d52522d79f2cbcd8ddaa6548a905931cf2a746a7a1ea1ba>",
+      "content": "<BUNDLE_HASH:97a079f9536fd18e3398f951e156ae6a82bdcb44aec3bf1b5519336536f4da4b>",
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/dist/server.mjs"
     }
   ],
@@ -163,10 +163,10 @@
     },
     {
       "jsonPath": [
-        "plugin"
+        "plugins"
       ],
       "kind": "json-array-member",
-      "regionKey": "plugin.prism-generated-canonical-compile-fixture",
+      "regionKey": "plugins.prism-generated-canonical-compile-fixture",
       "targetPath": "<HARNESS_ROOT>/opencode.json",
       "value": "file://<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/dist/server.mjs"
     }

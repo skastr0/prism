@@ -12,6 +12,7 @@ import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent } from "./resolve.js";
 import { effectImportPath } from "../testing/prism-sandbox.js";
+import { createOpenCodeV2TestHost } from "./opencode-v2-test-host.js";
 import {
   Agent,
   Identity,
@@ -1838,14 +1839,13 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
   );
   const serverSource = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
 
-  expect(serverSource).toContain('"tool.execute.before"');
-  expect(serverSource).toContain('"tool.execute.after"');
+  expect(serverSource).toContain('"execute.before"');
+  expect(serverSource).toContain('"execute.after"');
   expect(serverSource).toContain('"opencode_hook_demo_submit_work"');
   expect(serverSource).not.toContain("/Projects/prism/src/compile/sources.ts");
   expect(serverSource).toContain('"session.status"');
   expect(serverSource).toContain('"busy"');
   expect(serverSource).toContain('"session.start"');
-  expect(serverSource).toContain('"idle"');
   expect(serverSource).toContain('"session.idle"');
   expect(serverSource).toContain('"session.end"');
   expect(serverSource).toContain("decodeNativeHookPayloadForEvent");
@@ -1880,14 +1880,14 @@ test("compilePluginForTarget lowers OpenCode prompt and permission hooks through
   );
   const serverSource = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
 
-  expect(serverSource).toContain('"chat.message"');
+  expect(serverSource).toContain('"prompt"');
   expect(serverSource).toContain('"prompt.submit"');
-  expect(serverSource).toContain("promptText(output)");
+  expect(serverSource).toContain("event.prompt.text");
   expect(serverSource).toContain("appendPromptContext");
-  expect(serverSource).toContain('"permission.ask"');
+  expect(serverSource).toContain('"evaluate"');
   expect(serverSource).toContain('"permission.request"');
-  expect(serverSource).toContain('output.status = "deny"');
-  expect(serverSource).toContain('output.status = "allow"');
+  expect(serverSource).toContain('event.effect = "deny"');
+  expect(serverSource).toContain('event.effect = "allow"');
   expect(serverSource).toContain("additionalContext");
   expect(serverSource).toContain("systemMessage");
   expect(serverSource).toContain("permission-guard");
@@ -1963,11 +1963,9 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   const protocolBundlePath = join(protocolGeneratedRoot, "dist", "server.mjs");
   const generatedServer = await import(pathToFileURL(generatedBundlePath).href);
   expect(generatedServer.default.id).toBe("prism-generated-canonical-compile-fixture");
-  const generatedPlugin = await generatedServer.default.server({
-    directory: projectRoot,
-    worktree: projectRoot,
-  });
-  const generatedToolNames = Object.keys(generatedPlugin.tool ?? {});
+  const generatedHost = createOpenCodeV2TestHost();
+  await generatedServer.default.setup(generatedHost.context);
+  const generatedToolNames = [...generatedHost.tools.keys()];
   expect(generatedToolNames).toContain("canonical_compile_fixture_submit_work");
   expect(generatedToolNames).toContain("canonical_compile_fixture_commit_work");
   expect(generatedToolNames).toContain("canonical_compile_fixture_submit_review");
@@ -1990,11 +1988,9 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(generatedServerSource).not.toContain("prism-generated-protocol-core/src/plugins");
 
   const protocolServer = await import(pathToFileURL(protocolBundlePath).href);
-  const protocolPlugin = await protocolServer.default.server({
-    directory: projectRoot,
-    worktree: projectRoot,
-  });
-  const protocolToolNames = Object.keys(protocolPlugin.tool ?? {});
+  const protocolHost = createOpenCodeV2TestHost();
+  await protocolServer.default.setup(protocolHost.context);
+  const protocolToolNames = [...protocolHost.tools.keys()];
   expect(protocolToolNames).toContain("protocol_core_external_submit");
   expect(protocolToolNames).toContain("protocol_core_create_glyph");
   const protocolGeneratedServerSource = await readFile(protocolBundlePath, "utf8");
@@ -2007,17 +2003,17 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
   ) as {
     agent: Record<string, Record<string, unknown>>;
-    plugin: string[];
+    plugins: string[];
     permission?: Record<string, string>;
   };
   expect(opencodeConfig.permission).toBeUndefined();
-  expect(opencodeConfig.plugin).toContain(
+  expect(opencodeConfig.plugins).toContain(
     generatedPluginEntry(
       projectRoot,
       "prism-generated-canonical-compile-fixture",
     ),
   );
-  expect(opencodeConfig.plugin).toContain(
+  expect(opencodeConfig.plugins).toContain(
     generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
   );
   expect(opencodeConfig.agent.builder?.model).toBe("openai/gpt-5.4");
@@ -3173,12 +3169,12 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
-  ) as { permission?: Record<string, string>; plugin?: string[] };
+  ) as { permission?: Record<string, string>; plugins?: string[] };
   expect(opencodeConfig.permission).toBeUndefined();
-  expect(opencodeConfig.plugin).toContain(
+  expect(opencodeConfig.plugins).toContain(
     generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
   );
-  expect(opencodeConfig.plugin).not.toContain("prism-generated-protocol-core");
+  expect(opencodeConfig.plugins).not.toContain("prism-generated-protocol-core");
 });
 
 test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin bundle", async () => {

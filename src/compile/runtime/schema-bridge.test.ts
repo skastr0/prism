@@ -1,144 +1,48 @@
 import { expect, test } from "bun:test";
 import { Schema } from "effect";
-import { decodeInput, toolArgsFromSchema } from "./schema-bridge.js";
+import { jsonSchemaFromEffectSchema, MCP_AST_TO_JSON_SCHEMA_OPTIONS } from "../../ast-to-json-schema.js";
+import { decodeInput, toolInputFromSchema } from "./schema-bridge.js";
 
-type TestSchemaNode = {
-  readonly description?: string;
-  readonly shape?: Record<string, unknown>;
-  parse(input: unknown): unknown;
-  safeParse(input: unknown): { readonly success: boolean };
-};
-
-const schemaNode = (nodes: Record<string, unknown>, name: string): TestSchemaNode => {
-  const node = nodes[name];
-  expect(node).toBeDefined();
-  return node as TestSchemaNode;
-};
-
-test("toolArgsFromSchema maps supported Effect schema shapes", () => {
-  const args = toolArgsFromSchema(
-    Schema.Struct({
-      name: Schema.String.annotate({ description: "User-visible name" }),
-      count: Schema.Number,
-      enabled: Schema.Boolean,
-      payload: Schema.Unknown,
-      payloadTitle: Schema.Unknown.annotate({ title: "Payload title" }),
-      mode: Schema.Literals(["fast", "slow"]),
-      tags: Schema.Array(Schema.String),
-      maybeCount: Schema.optional(Schema.Number),
-      nested: Schema.Struct({
-        label: Schema.String.annotate({ description: "Nested label" }),
-        optionalScore: Schema.optional(Schema.Number),
-      }),
-    }),
-  );
-
-  const name = schemaNode(args, "name");
-  const count = schemaNode(args, "count");
-  const enabled = schemaNode(args, "enabled");
-  const payload = schemaNode(args, "payload");
-  const payloadTitle = schemaNode(args, "payloadTitle");
-  const mode = schemaNode(args, "mode");
-  const tags = schemaNode(args, "tags");
-  const maybeCount = schemaNode(args, "maybeCount");
-  const nested = schemaNode(args, "nested");
-  const nestedShape = nested.shape;
-
-  expect(name.description).toBe("User-visible name");
-  expect(name.parse("Ada")).toBe("Ada");
-  expect(count.parse(3)).toBe(3);
-  expect(enabled.parse(true)).toBe(true);
-  expect(payload.parse({ arbitrary: ["json"] })).toEqual({ arbitrary: ["json"] });
-  expect(payloadTitle.description).toBe("Payload title");
-  expect(mode.safeParse("fast").success).toBe(true);
-  expect(mode.safeParse("medium").success).toBe(false);
-  expect(tags.parse(["compile", "runtime"])).toEqual(["compile", "runtime"]);
-  expect(maybeCount.parse(undefined)).toBeUndefined();
-  expect(nested.parse({ label: "child" })).toEqual({ label: "child" });
-  expect(nestedShape).toBeDefined();
-  expect(schemaNode(nestedShape!, "label").description).toBe("Nested label");
-  expect(schemaNode(nestedShape!, "optionalScore").parse(undefined)).toBeUndefined();
-});
-
-test("toolArgsFromSchema renders general unions as z.union", () => {
-  const args = toolArgsFromSchema(
-    Schema.Struct({
-      value: Schema.Union([Schema.String, Schema.Number]),
-      variant: Schema.Union([
-        Schema.Struct({ type: Schema.Literal("a"), label: Schema.String }),
-        Schema.Struct({ type: Schema.Literal("b"), count: Schema.Number }),
-      ]),
-      maybe: Schema.NullOr(Schema.String),
-    }),
-  );
-
-  const value = schemaNode(args, "value");
-  expect(value.safeParse("x").success).toBe(true);
-  expect(value.safeParse(3).success).toBe(true);
-  const variant = schemaNode(args, "variant");
-  expect(variant.safeParse({ type: "a", label: "x" }).success).toBe(true);
-  expect(variant.safeParse({ type: "b", count: 1 }).success).toBe(true);
-  expect(variant.safeParse({ type: "c" }).success).toBe(false);
-  const maybe = schemaNode(args, "maybe");
-  expect(maybe.safeParse(null).success).toBe(true);
-  expect(maybe.safeParse("x").success).toBe(true);
-});
-
-test("toolArgsFromSchema renders records and honest unknown/null", () => {
-  const args = toolArgsFromSchema(
-    Schema.Struct({
-      payloads: Schema.Record(Schema.String, Schema.Unknown),
-      stringMap: Schema.Record(Schema.String, Schema.String),
-      unknown: Schema.Unknown,
-      nothing: Schema.Null,
-    }),
-  );
-
-  const payloads = schemaNode(args, "payloads");
-  expect(payloads.safeParse({ a: "scalar", b: [1], c: null }).success).toBe(true);
-  const stringMap = schemaNode(args, "stringMap");
-  expect(stringMap.safeParse({ a: "x" }).success).toBe(true);
-  expect(stringMap.safeParse({ a: 2 }).success).toBe(false);
-  // Unknown is any JSON value, not only objects (the decoder stays authority).
-  const unknown = schemaNode(args, "unknown");
-  expect(unknown.safeParse("scalar").success).toBe(true);
-  expect(unknown.safeParse([1, 2]).success).toBe(true);
-  expect(unknown.safeParse(null).success).toBe(true);
-  expect(schemaNode(args, "nothing").safeParse(null).success).toBe(true);
-});
-
-test("decodeInput decodes with the contract schema", () => {
-  const inputSchema = Schema.Struct({
-    count: Schema.Number,
+test("native tool input reuses canonical JSON Schema conversion", () => {
+  const schema = Schema.Struct({
+    name: Schema.String.annotate({ description: "User-visible name" }),
+    mode: Schema.Literals(["fast", "slow"]),
+    maybeCount: Schema.optional(Schema.Number),
+    tags: Schema.Array(Schema.String),
+    nested: Schema.Struct({ label: Schema.String }),
+    payloads: Schema.Record(Schema.String, Schema.Unknown),
+    unknown: Schema.Unknown,
+    nothing: Schema.Null,
+    variant: Schema.Union([
+      Schema.Struct({ type: Schema.Literal("a"), label: Schema.String }),
+      Schema.Struct({ type: Schema.Literal("b"), count: Schema.Number }),
+    ]),
   });
-
-  expect(decodeInput(inputSchema, { count: 2 })).toEqual({ count: 2 });
-  expect(() => decodeInput(inputSchema, { count: "2" })).toThrow();
+  const input = toolInputFromSchema(schema);
+  expect(input).toEqual(jsonSchemaFromEffectSchema(schema, MCP_AST_TO_JSON_SCHEMA_OPTIONS));
+  expect(input.additionalProperties).toBe(false);
+  expect(input.required).not.toContain("maybeCount");
+  expect(input.properties).toMatchObject({
+    name: { type: "string", description: "User-visible name" },
+    mode: { enum: ["fast", "slow"] },
+    nested: { additionalProperties: false },
+    payloads: { type: "object", additionalProperties: true },
+    unknown: {},
+    nothing: { type: "null" },
+    variant: { anyOf: expect.any(Array) },
+  });
 });
 
-test("decodeInput rejects excess properties instead of stripping them", () => {
-  const inputSchema = Schema.Struct({
-    count: Schema.Number,
+test("decodeInput preserves semantic validation and strict excess properties", () => {
+  const schema = Schema.Struct({
+    count: Schema.Number.check(Schema.isGreaterThan(0)),
     nested: Schema.Struct({ label: Schema.String }),
   });
-
-  expect(() => decodeInput(inputSchema, { count: 2, nested: { label: "x" }, cuont: 3 })).toThrow();
-  expect(() =>
-    decodeInput(inputSchema, { count: 2, nested: { label: "x", lable: "typo" } }),
-  ).toThrow();
-});
-
-test("toolArgsFromSchema renders structs strict and records open", () => {
-  const args = toolArgsFromSchema(
-    Schema.Struct({
-      nested: Schema.Struct({ label: Schema.String }),
-      payloads: Schema.Record(Schema.String, Schema.Unknown),
-    }),
-  );
-
-  const nested = schemaNode(args, "nested");
-  expect(nested.safeParse({ label: "x" }).success).toBe(true);
-  expect(nested.safeParse({ label: "x", lable: "typo" }).success).toBe(false);
-  const payloads = schemaNode(args, "payloads");
-  expect(payloads.safeParse({ any: "key" }).success).toBe(true);
+  expect(decodeInput(schema, { count: 2, nested: { label: "x" } })).toEqual({ count: 2, nested: { label: "x" } });
+  for (const raw of [
+    { count: "2", nested: { label: "x" } },
+    { count: -1, nested: { label: "x" } },
+    { count: 2, nested: { label: "x" }, cuont: 3 },
+    { count: 2, nested: { label: "x", lable: "typo" } },
+  ]) expect(() => decodeInput(schema, raw)).toThrow();
 });

@@ -239,11 +239,11 @@ test("opencode generated plugin registration is a plugin-array membership region
   expect(bundle).toBeDefined();
 
   const pluginRegion = lowered.regions.find(
-    (region) => region.kind === "json-array-member" && region.regionKey.startsWith("plugin."),
+    (region) => region.kind === "json-array-member" && region.regionKey.startsWith("plugins."),
   );
   expect(pluginRegion).toBeDefined();
   if (pluginRegion?.kind !== "json-array-member") throw new Error("unreachable");
-  expect(pluginRegion.jsonPath).toEqual(["plugin"]);
+  expect(pluginRegion.jsonPath).toEqual(["plugins"]);
   expect(pluginRegion.value).toBe(
     pathToFileURL(
       join(

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   effectBundleImportPath,
-  opencodePluginBundleImportPath,
   typescriptBundleImportPath,
   zodV4BundleImportPath,
 } from "./runtime-deps.js";
@@ -68,11 +67,6 @@ test("runtime dependency entrypoints resolve from the installed package root bef
   );
   await writeText(join(root, "node_modules", "effect", "dist", "esm", "index.js"), "\n");
   await writeText(
-    join(root, "node_modules", "@opencode-ai", "plugin", "package.json"),
-    `{"name":"@opencode-ai/plugin","type":"module","main":"dist/index.js"}\n`,
-  );
-  await writeText(join(root, "node_modules", "@opencode-ai", "plugin", "dist", "index.js"), "\n");
-  await writeText(
     join(root, "node_modules", "typescript", "package.json"),
     `{"name":"typescript","type":"commonjs","main":"lib/typescript.js"}\n`,
   );
@@ -88,9 +82,6 @@ test("runtime dependency entrypoints resolve from the installed package root bef
 
     expect(effectBundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "effect", "dist", "esm", "index.js").replace(/\\/g, "/"),
-    );
-    expect(opencodePluginBundleImportPath()).toBe(
-      join(resolvedRoot, "node_modules", "@opencode-ai", "plugin", "dist", "index.js").replace(/\\/g, "/"),
     );
     expect(typescriptBundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "typescript", "lib", "typescript.js").replace(/\\/g, "/"),

@@ -301,11 +301,6 @@ const resolveBundleImportPath = (specifier: string): string => {
 
 export const effectBundleImportPath = (): string => resolveBundleImportPath("effect");
 
-
-export const opencodePluginBundleImportPath = (): string =>
-  resolveBundleImportPath("@opencode-ai/plugin");
-
 export const typescriptBundleImportPath = (): string => resolveBundleImportPath("typescript");
 
 export const zodV4BundleImportPath = (): string => resolveBundleImportPath("zod/v4");
-

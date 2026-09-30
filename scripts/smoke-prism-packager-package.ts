@@ -51,12 +51,11 @@ const packWorkspacePackage = async (
     ["npm", "pack", "--json", "--ignore-scripts", "--pack-destination", tarballDir],
     { cwd: dir, capture: true },
   );
-  const start = stdout.indexOf("[");
-  if (start < 0) {
-    throw new Error(`${label} returned no JSON array: ${stdout.slice(0, 500)}`);
-  }
-  const parsed = JSON.parse(stdout.slice(start)) as Array<{ readonly filename: string }>;
-  const filename = parsed[0]?.filename;
+  // npm 12 keys results by package name; earlier npm releases return an array.
+  const parsed = JSON.parse(stdout) as
+    | Array<{ readonly filename: string }>
+    | Record<string, { readonly filename: string }>;
+  const filename = Object.values(parsed)[0]?.filename;
   if (!filename) {
     throw new Error(`${label} did not return a tarball filename`);
   }
@@ -144,11 +143,12 @@ import {
   type DesiredFile,
   type PackageResult,
 } from "@skastr0/prism-packager";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const out = await mkdtemp(join(tmpdir(), "packager-out-"));
+const out = join(process.cwd(), "packager-out");
+await mkdir(out, { recursive: true });
 const result: PackageResult = await packagePluginForTarget({
   pluginPath: "./fixture-plugin",
   target: "claude-code",
@@ -172,6 +172,28 @@ const resolved = await import.meta.resolve("@skastr0/prism-packager");
 if (!resolved.includes("node_modules/@skastr0/prism-packager")) {
   throw new Error(\`packager resolved outside packed install: \${resolved}\`);
 }
+
+// Exercise OpenCode's dynamically mirrored bridge from the packed install.
+const nativePlugin = join(process.cwd(), "native-plugin");
+await mkdir(join(nativePlugin, "tools"), { recursive: true });
+await writeFile(join(nativePlugin, "plugin.json"), JSON.stringify({ name: "native-smoke", version: "0.1.0", targets: { tools: ["opencode"] } }));
+await writeFile(join(nativePlugin, "tools", "greet.tool.ts"), 'import { Schema } from "effect"; export default { name: "greet", description: "Greet", input: Schema.Struct({ name: Schema.String }), output: Schema.Struct({ message: Schema.String }), async handle(input) { return { message: "Hello, " + input.name }; } };');
+const nativeResult = await packagePluginForTarget({ pluginPath: nativePlugin, target: "opencode", dryRun: true, out, generatorVersion: "0.0.0-smoke" });
+const bundle = nativeResult.compileFiles.find((file) => file.targetPath.endsWith("server.mjs"));
+if (!bundle) throw new Error("packed OpenCode generator emitted no bundle");
+const modulePath = join(out, "native.mjs");
+await writeFile(modulePath, bundle.content);
+const definition = (await import(pathToFileURL(modulePath).href)).default;
+if (definition.server || typeof definition.setup !== "function") throw new Error("packed generator must emit v2 only");
+const tools = [];
+await definition.setup({
+  location: { project: { id: "project", directory: out, canonical: out } },
+  session: { async get() { return { projectID: "project", location: { directory: out }, tokens: { input: 0, output: 0, reasoning: 0 }, cost: 0 }; } },
+  worktree: { async list() { return [{ directory: out }]; } },
+  tool: { async transform(edit) { if (edit({ add: (tool) => tools.push(tool) }) !== undefined) throw new Error("async transform"); } },
+});
+const answer = await tools[0].execute({ name: "Ada" }, { sessionID: "session", agent: "build", signal: new AbortController().signal });
+if (JSON.parse(answer.content).message !== "Hello, Ada") throw new Error("packed v2 tool did not execute");
 
 console.log(JSON.stringify({
   packageId: result.packageId,

@@ -8,9 +8,9 @@
  *
  *   2. Idempotent patches to <opencode-root>/opencode.json:
  *        - agent.<name> block (compiler-owned keys only; hand-authored keys preserved)
- *        - plugin array entry for the source-plugin-owned generated plugin
- *          module (for example
- *          `plugins/prism-generated-review-core/dist/server.mjs`) when the
+ *        - plugins array entry for the source-plugin-owned generated plugin
+ *          directory (for example
+ *          `plugins/prism-generated-review-core`) when the
  *          plugin owns canonical tools or hooks
  *
  *   3. Per-sop skills at <opencode-root>/skills/<name>/SKILL.md.
@@ -19,7 +19,7 @@
  *
  *   4. A generated OpenCode plugin directory at
  *      <opencode-root>/plugins/prism-generated-<source-plugin>/ containing:
- *        - dist/server.mjs
+ *        - server.mjs
  *
  * The generated plugin directory is compiler-owned. Re-running compile prunes
  * stale stale raw-TypeScript generated output such as src/**, package.json,
@@ -127,9 +127,7 @@ const generatedPluginEntryForName = (
   target: OpenCodeLowerTarget,
   pluginName: string,
 ): string =>
-  pathToFileURL(
-    join(generatedPluginRootForName(target, pluginName), "dist", "server.mjs")
-  ).href;
+  pathToFileURL(generatedPluginRootForName(target, pluginName)).href;
 
 const generatedToolDenyPatternForName = (pluginName: string): string =>
   `${generatedToolNamespace(pluginName)}_*`;
@@ -194,7 +192,7 @@ const composeAgentOwnedBlock = (agent: ComposedAgent): Record<string, unknown> =
 //
 // Layout:
 //   prism-generated-<source-plugin>/
-//   └── dist/server.mjs                        (bundled native plugin)
+//   └── server.mjs                             (bundled native plugin)
 // ---------------------------------------------------------------------------
 
 interface PluginMirror {
@@ -1044,7 +1042,7 @@ const planGeneratedPluginFiles = async (options: {
   readonly plugin: string;
 }): Promise<DesiredFile[]> => [
   {
-    targetPath: join(options.root, "dist", "server.mjs"),
+    targetPath: join(options.root, "server.mjs"),
     content: await buildGeneratedOpenCodePluginBundle(options),
     plugin: options.plugin,
   },

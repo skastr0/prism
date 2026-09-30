@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { exists } from "../fs.js";
 import { compilePluginForTarget } from "./pipeline.js";
@@ -152,20 +152,17 @@ test("OpenCode native plugin is registered and loads", async () => {
   const opencodeJsonPath = join(projectRoot, ".opencode", "opencode.json");
   const config = JSON.parse(await readFile(opencodeJsonPath, "utf8"));
   const expectedEntry = pathToFileURL(
-    join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "dist", "server.mjs"),
+    join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID),
   ).href;
 
   expect(config.plugins).toContain(expectedEntry);
   expect(config.plugins.filter((entry: string) => entry === expectedEntry)).toHaveLength(1);
 
-  const serverPath = join(
+  const serverPath = Bun.resolveSync(
+    join(fileURLToPath(config.plugins[0]), "server"),
     projectRoot,
-    ".opencode",
-    "plugins",
-    GENERATED_PLUGIN_ID,
-    "dist",
-    "server.mjs",
   );
+  expect(serverPath).toBe(join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "server.mjs"));
   const imported = (await import(
     `${pathToFileURL(serverPath).href}?test=${Date.now()}`
   )) as {
@@ -330,7 +327,7 @@ test("OpenCode plugin registration is idempotent and removable", async () => {
 
   const opencodeJsonPath = join(projectRoot, ".opencode", "opencode.json");
   const expectedEntry = pathToFileURL(
-    join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "dist", "server.mjs"),
+    join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID),
   ).href;
 
   const configAfterFirst = JSON.parse(await readFile(opencodeJsonPath, "utf8"));
@@ -371,9 +368,10 @@ test("OpenCode plugin registration is idempotent and removable", async () => {
 
   const configAfterRemoval = JSON.parse(await readFile(opencodeJsonPath, "utf8"));
   expect(configAfterRemoval.plugins ?? []).not.toContain(expectedEntry);
+  expect(await exists(join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "server.mjs"))).toBe(false);
 }, 60000);
 
-test("OpenCode migrates previous owned plugin membership without adopting neighbors", async () => {
+test.each(["plugin", "plugins"] as const)("OpenCode migrates previous owned %s membership without adopting neighbors", async (legacyKey) => {
   const { pluginRoot, projectRoot } = await createNativePluginFixture();
   const prismHome = join(dirname(pluginRoot), "prism-home");
   const root = join(projectRoot, ".opencode");
@@ -383,18 +381,25 @@ test("OpenCode migrates previous owned plugin membership without adopting neighb
   const configPath = join(root, "opencode.json");
   const config = JSON.parse(await readFile(configPath, "utf8"));
   const entry = config.plugins[0];
-  config.plugin = ["old-hand-authored", entry];
-  config.plugins = ["new-hand-authored"];
+  const legacyBundlePath = join(root, "plugins", GENERATED_PLUGIN_ID, "dist", "server.mjs");
+  const legacyEntry = pathToFileURL(legacyBundlePath).href;
+  const bundlePath = join(root, "plugins", GENERATED_PLUGIN_ID, "server.mjs");
+  await writeText(legacyBundlePath, await readFile(bundlePath, "utf8"));
+  await rm(bundlePath);
+  config.plugin = ["old-hand-authored", ...(legacyKey === "plugin" ? [legacyEntry] : [])];
+  config.plugins = ["new-hand-authored", ...(legacyKey === "plugins" ? [legacyEntry] : [])];
   await writeJson(configPath, config);
   const previous = await readSnapshot({ prismHome, harness: "opencode", root });
-  const oldRef = serializeRegionRef({ kind: "json-array-member", targetPath: configPath, regionKey: `plugin.${GENERATED_PLUGIN_ID}`, jsonPath: ["plugin"], value: entry, plugin: PLUGIN_NAME });
-  await commitSnapshot({ prismHome, manifest: { ...previous.manifest, entries: previous.manifest.entries.map((owned) => owned.targetPath === configPath && owned.regionKey?.startsWith("json-array plugins.") ? { ...owned, regionKey: oldRef } : owned) } });
+  const oldRef = serializeRegionRef({ kind: "json-array-member", targetPath: configPath, regionKey: `${legacyKey}.${GENERATED_PLUGIN_ID}`, jsonPath: [legacyKey], value: legacyEntry, plugin: PLUGIN_NAME });
+  await commitSnapshot({ prismHome, manifest: { ...previous.manifest, entries: previous.manifest.entries.map((owned) => owned.targetPath === configPath && owned.regionKey?.startsWith("json-array plugins.") ? { ...owned, regionKey: oldRef } : owned.targetPath === bundlePath ? { ...owned, targetPath: legacyBundlePath } : owned) } });
   const migrated = await Effect.runPromise(compilePluginForTarget(options));
   expect(migrated.failures).toHaveLength(0);
   expect(migrated.blocked).toHaveLength(0);
   const after = JSON.parse(await readFile(configPath, "utf8"));
   expect(after.plugin).toEqual(["old-hand-authored"]);
   expect(after.plugins).toEqual(["new-hand-authored", entry]);
+  expect(await exists(legacyBundlePath)).toBe(false);
+  expect(await exists(bundlePath)).toBe(true);
   const second = await Effect.runPromise(compilePluginForTarget(options));
   expect(second.failures).toHaveLength(0);
   expect(second.blocked).toHaveLength(0);
@@ -427,7 +432,7 @@ import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};`;
   try {
     const compiled = await Effect.runPromise(compilePluginForTarget({ prismHome, pluginPath: pluginRoot, target: "opencode", scope: "project", projectPath: projectRoot, dryRun: false }));
     expect(compiled.failures).toHaveLength(0);
-    const bundlePath = join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "dist", "server.mjs");
+    const bundlePath = join(projectRoot, ".opencode", "plugins", GENERATED_PLUGIN_ID, "server.mjs");
     const plugin = (await import(pathToFileURL(bundlePath).href)).default;
     const host = createOpenCodeV2TestHost();
     const cleanup = await plugin.setup(host.context);

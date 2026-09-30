@@ -234,7 +234,7 @@ test("opencode generated plugin registration is a plugin-array membership region
   });
 
   const bundle = lowered.files.find((file) =>
-    file.targetPath.endsWith(join("dist", "server.mjs")),
+    file.targetPath.endsWith(join("prism-generated-opencode-lowerer-test", "server.mjs")),
   );
   expect(bundle).toBeDefined();
 
@@ -250,8 +250,6 @@ test("opencode generated plugin registration is a plugin-array membership region
         outputRoot,
         "plugins",
         "prism-generated-opencode-lowerer-test",
-        "dist",
-        "server.mjs",
       ),
     ).href,
   );

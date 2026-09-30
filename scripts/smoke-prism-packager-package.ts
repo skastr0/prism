@@ -144,7 +144,7 @@ import {
   type PackageResult,
 } from "@skastr0/prism-packager";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const out = join(process.cwd(), "packager-out");
@@ -181,9 +181,14 @@ await writeFile(join(nativePlugin, "tools", "greet.tool.ts"), 'import { Schema }
 const nativeResult = await packagePluginForTarget({ pluginPath: nativePlugin, target: "opencode", dryRun: true, out, generatorVersion: "0.0.0-smoke" });
 const bundle = nativeResult.compileFiles.find((file) => file.targetPath.endsWith("server.mjs"));
 if (!bundle) throw new Error("packed OpenCode generator emitted no bundle");
-const modulePath = join(out, "native.mjs");
+const registration = nativeResult.compileRegions.find((region) => region.kind === "json-array-member" && region.regionKey.startsWith("plugins."));
+if (!registration || registration.kind !== "json-array-member" || registration.value !== pathToFileURL(dirname(bundle.targetPath)).href) throw new Error("packed OpenCode generator must register the plugin directory");
+const generatedRoot = join(out, nativeResult.packageId);
+await mkdir(generatedRoot, { recursive: true });
+const modulePath = join(generatedRoot, "server.mjs");
 await writeFile(modulePath, bundle.content);
-const definition = (await import(pathToFileURL(modulePath).href)).default;
+const resolvedBundle = Bun.resolveSync(join(generatedRoot, "server"), generatedRoot);
+const definition = (await import(pathToFileURL(resolvedBundle).href)).default;
 if (definition.server || typeof definition.setup !== "function") throw new Error("packed generator must emit v2 only");
 const tools = [];
 await definition.setup({

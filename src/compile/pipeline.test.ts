@@ -69,8 +69,6 @@ const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
       ".opencode",
       "plugins",
       pluginId,
-      "dist",
-      "server.mjs",
     ),
   ).href;
 
@@ -1837,7 +1835,7 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
     "plugins",
     "prism-generated-opencode-hook-demo",
   );
-  const serverSource = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
+  const serverSource = await readFile(join(generatedRoot, "server.mjs"), "utf8");
 
   expect(serverSource).toContain('"execute.before"');
   expect(serverSource).toContain('"execute.after"');
@@ -1878,7 +1876,7 @@ test("compilePluginForTarget lowers OpenCode prompt and permission hooks through
     "plugins",
     "prism-generated-opencode-hook-demo",
   );
-  const serverSource = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
+  const serverSource = await readFile(join(generatedRoot, "server.mjs"), "utf8");
 
   expect(serverSource).toContain('"prompt"');
   expect(serverSource).toContain('"prompt.submit"');
@@ -1959,8 +1957,8 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     "plugins",
     "prism-generated-protocol-core",
   );
-  const generatedBundlePath = join(generatedRoot, "dist", "server.mjs");
-  const protocolBundlePath = join(protocolGeneratedRoot, "dist", "server.mjs");
+  const generatedBundlePath = join(generatedRoot, "server.mjs");
+  const protocolBundlePath = join(protocolGeneratedRoot, "server.mjs");
   const generatedServer = await import(pathToFileURL(generatedBundlePath).href);
   expect(generatedServer.default.id).toBe("prism-generated-canonical-compile-fixture");
   const generatedHost = createOpenCodeV2TestHost();
@@ -3107,7 +3105,7 @@ test("opencode tools-only plugins bundle runtime helper imports from declared de
     "plugins",
     "prism-generated-signal-core",
   );
-  const server = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
+  const server = await readFile(join(generatedRoot, "server.mjs"), "utf8");
 
   expect(server).toContain("signal_core_record_signal");
   expect(server).toContain("normalizeOrbitMessage");
@@ -3156,12 +3154,12 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
     "prism-generated-protocol-core",
   );
 
-  expect(await pathExists(join(protocolGeneratedRoot, "dist", "server.mjs"))).toBe(true);
+  expect(await pathExists(join(protocolGeneratedRoot, "server.mjs"))).toBe(true);
   expect(await pathExists(join(protocolGeneratedRoot, "src", "server.ts"))).toBe(false);
   expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(false);
 
   const server = await readFile(
-    join(protocolGeneratedRoot, "dist", "server.mjs"),
+    join(protocolGeneratedRoot, "server.mjs"),
     "utf8",
   );
   expect(server).toContain("protocol_core_external_submit");

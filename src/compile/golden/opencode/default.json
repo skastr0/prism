@@ -14,7 +14,7 @@
     },
     {
       "content": "<BUNDLE_HASH:97a079f9536fd18e3398f951e156ae6a82bdcb44aec3bf1b5519336536f4da4b>",
-      "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/dist/server.mjs"
+      "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/server.mjs"
     }
   ],
   "regions": [
@@ -168,7 +168,7 @@
       "kind": "json-array-member",
       "regionKey": "plugins.prism-generated-canonical-compile-fixture",
       "targetPath": "<HARNESS_ROOT>/opencode.json",
-      "value": "file://<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/dist/server.mjs"
+      "value": "file://<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture"
     }
   ]
 }

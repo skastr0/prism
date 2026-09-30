@@ -36,14 +36,7 @@ const allowedNestedEffectCopies: ReadonlyArray<{
   readonly packageKey: string;
   readonly version: string;
   readonly reason: string;
-}> = [
-  {
-    packageKey: "@opencode-ai/plugin/effect",
-    version: "4.0.0-beta.66",
-    reason:
-      "@opencode-ai/plugin carries a private Effect 4 beta dependency; Prism code must not import it.",
-  },
-];
+}> = [];
 
 /**
  * Manifests that declare Prism's own Effect dependency. Checked in addition to
@@ -221,12 +214,11 @@ const pinnedLock = (declared: string): BunLockLike => ({
   workspaces: { "": { name: "prism", dependencies: { effect: declared } } },
   packages: {
     effect: [`effect@${EXPECTED_PRISM_EFFECT_VERSION}`],
-    "@opencode-ai/plugin/effect": ["effect@4.0.0-beta.66"],
   },
 });
 
 const runSelfTest = (): void => {
-  expectPass("exact pin plus allowed private beta", pinnedLock(EXPECTED_PRISM_EFFECT_VERSION));
+  expectPass("exact pin without private copies", pinnedLock(EXPECTED_PRISM_EFFECT_VERSION));
 
   expectFail(
     "Prism workspace still declaring Effect 3",
@@ -289,7 +281,7 @@ const runSelfTest = (): void => {
   );
 
   expectFail(
-    "allowlisted nested copy moved off its pinned version",
+    "removed OpenCode v1 private copy must not return",
     {
       workspaces: { "": { name: "prism", dependencies: { effect: EXPECTED_PRISM_EFFECT_VERSION } } },
       packages: {
@@ -297,7 +289,7 @@ const runSelfTest = (): void => {
         "@opencode-ai/plugin/effect": ["effect@4.0.0-beta.90"],
       },
     },
-    "allowed nested @opencode-ai/plugin/effect resolved to effect@4.0.0-beta.90",
+    "unexpected nested Effect package",
   );
 
   const manifestPass = checkManifests(() => JSON.stringify({ dependencies: { effect: EXPECTED_PRISM_EFFECT_VERSION } }));
